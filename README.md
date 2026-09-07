@@ -1,14 +1,14 @@
 # IA Offline — Android
 
-App Android local-first para importar GGUF, validar o modelo com inferência real e conversar através de uma API local.
+App Android local-first para importar GGUF, validar por inferência real e conversar via API localhost.
 
 - Android 13+; arm64-v8a/x86_64.
 - llama.cpp v0.4.0.
-- API localhost autenticada com health/models/chat/SSE.
+- API autenticada com health/models/chat/SSE.
 - Somente modelos VERIFIED são ativados.
-- Servidor limitado a 8 conexões simultâneas.
-- Teste de integração end-to-end no app.
+- Servidor limitado a 8 conexões.
+- Teste end-to-end dentro do app.
 
-Limitações: temperature 0.3 fixa no binding; PDF escaneado sem OCR; áudio depende de reconhecimento on-device.
+Limitações atuais: temperature fixa em 0.3, PDF escaneado sem OCR e áudio dependente de reconhecimento on-device.
 
 Pronto = CI verde + teste físico com GGUF real.
