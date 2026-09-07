@@ -28,7 +28,7 @@ Aplicativo Android local-first para importar modelos GGUF, validá-los com infer
 
 O projeto **não promete que qualquer arquivo de IA funcionará**. A primeira versão suporta GGUF e depende da compatibilidade do modelo com o runtime `llama.cpp`, além de memória e armazenamento suficientes no aparelho.
 
-O binding Android `llama.cpp v0.4.0` usado neste projeto possui temperatura de sampling fixa em `0.3`. A API e o próprio runtime agora validam isso explicitamente: `temperature` diferente de `0.3` gera erro em vez de ser silenciosamente ignorada.
+O binding Android `llama.cpp v0.4.0` usado neste projeto possui temperatura de sampling fixa em `0.3`. A API e o próprio runtime validam isso explicitamente: `temperature` diferente de `0.3` gera erro em vez de ser silenciosamente ignorada.
 
 PDFs digitalizados sem camada de texto ainda exigem OCR. A transcrição de áudio depende de `SpeechRecognizer.isOnDeviceRecognitionAvailable()`; Whisper local ainda não é o fallback desta versão.
 
@@ -73,7 +73,9 @@ O teste só pode ser aprovado depois que um GGUF real tiver sido importado e ver
 
 ## GitHub Actions
 
-O workflow `.github/workflows/android.yml`:
+O workflow `.github/workflows/android.yml` é parte do critério de qualidade do projeto. Ele precisa terminar verde antes de qualquer APK ser tratado como utilizável.
+
+O workflow:
 
 1. configura Java 17;
 2. instala Android SDK 36, NDK `29.0.13113456` e CMake `3.31.6`;
@@ -81,7 +83,8 @@ O workflow `.github/workflows/android.yml`:
 4. compila o AAR Android oficial;
 5. executa testes unitários;
 6. compila `app-debug.apk`;
-7. publica o APK como artifact `IA-Local-debug`.
+7. verifica se o APK realmente existe;
+8. publica o APK como artifact `IA-Local-debug`.
 
 O workflow usa SDK 36 porque tanto o app quanto o binding Android pinado compilam contra essa API.
 
@@ -143,4 +146,4 @@ instalar APK
 → carregar e conversar novamente
 ```
 
-Até essa prova física, uma compilação verde no GitHub Actions significa que o projeto **compila e passa nos testes automatizados**, não que todo GGUF funcionará em qualquer telefone.
+Uma compilação verde no GitHub Actions prova que o projeto compila e passa nos testes automatizados. A prova final de execução da IA continua sendo o teste físico com um GGUF real no telefone.
