@@ -26,8 +26,10 @@ jobs:
 
           cat bootstrap/source.part00 bootstrap/source.part01 bootstrap/source.part02 bootstrap/source.part03 bootstrap/source.part04 bootstrap/source.part05 bootstrap/source.part06 bootstrap/source.part07 bootstrap/source.part08 | base64 -d > /tmp/iaoffline-source.tar.gz
           tar -xzf /tmp/iaoffline-source.tar.gz -C .
+
+          # Workflows precisam ser gravados pelo conector com permissão de workflows.
+          rm -f .github/workflows/android.yml
           rm -rf bootstrap
-          rm -f .github/workflows/bootstrap.yml
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
