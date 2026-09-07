@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="file" path="attachments/" />
+    <exclude domain="file" path="audio/" />
+    <exclude domain="file" path="models/" />
+    <exclude domain="sharedpref" path="local_api.xml" />
+</full-backup-content>

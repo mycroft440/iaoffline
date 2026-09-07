@@ -1,0 +1,92 @@
+package com.example.ialocal
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.ialocal.data.ThemeMode
+import com.example.ialocal.ui.chat.ChatScreen
+import com.example.ialocal.ui.chat.ChatViewModel
+import com.example.ialocal.ui.home.HomeScreen
+import com.example.ialocal.ui.home.HomeViewModel
+import com.example.ialocal.ui.models.ModelsScreen
+import com.example.ialocal.ui.models.ModelsViewModel
+import com.example.ialocal.ui.settings.SettingsScreen
+import com.example.ialocal.ui.settings.SettingsViewModel
+import com.example.ialocal.ui.theme.LocalAiTheme
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val container = (application as LocalAiApplication).container
+
+        setContent {
+            val themeMode by container.themeRepository.themeMode.collectAsStateWithLifecycle(
+                initialValue = ThemeMode.SYSTEM,
+            )
+            LocalAiTheme(themeMode = themeMode) { LocalAiApp(container) }
+        }
+    }
+}
+
+@Composable
+private fun LocalAiApp(container: AppContainer) {
+    val navController = rememberNavController()
+
+    NavHost(navController = navController, startDestination = "home") {
+        composable("home") {
+            val vm: HomeViewModel = viewModel(factory = HomeViewModel.Factory(container.chatRepository))
+            HomeScreen(
+                viewModel = vm,
+                onOpenConversation = { id -> navController.navigate("chat/$id") },
+                onOpenSettings = { navController.navigate("settings") },
+                onOpenModels = { navController.navigate("models") },
+            )
+        }
+
+        composable(
+            route = "chat/{conversationId}",
+            arguments = listOf(navArgument("conversationId") { type = NavType.StringType }),
+        ) { entry ->
+            val id = requireNotNull(entry.arguments?.getString("conversationId"))
+            val vm: ChatViewModel = viewModel(
+                key = "chat-$id",
+                factory = ChatViewModel.Factory(
+                    conversationId = id,
+                    repository = container.chatRepository,
+                    aiGateway = container.aiGateway,
+                    attachmentImporter = container.attachmentImporter,
+                    attachmentProcessor = container.attachmentProcessor,
+                    modelRepository = container.modelRepository,
+                ),
+            )
+            ChatScreen(viewModel = vm, onBack = { navController.popBackStack() })
+        }
+
+        composable("models") {
+            val vm: ModelsViewModel = viewModel(
+                factory = ModelsViewModel.Factory(
+                    container.modelRepository,
+                    container.modelManager,
+                    container.apiServer,
+                    container.apiSettings,
+                    container.integrationSelfTest,
+                )
+            )
+            ModelsScreen(viewModel = vm, onBack = { navController.popBackStack() })
+        }
+
+        composable("settings") {
+            val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory(container.themeRepository))
+            SettingsScreen(viewModel = vm, onBack = { navController.popBackStack() })
+        }
+    }
+}
