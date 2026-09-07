@@ -28,7 +28,7 @@ Aplicativo Android local-first para importar modelos GGUF, validá-los com infer
 
 O projeto **não promete que qualquer arquivo de IA funcionará**. A primeira versão suporta GGUF e depende da compatibilidade do modelo com o runtime `llama.cpp`, além de memória e armazenamento suficientes no aparelho.
 
-O binding Android `llama.cpp v0.4.0` usado neste projeto possui temperatura de sampling fixa em `0.3`. Por isso, a API rejeita explicitamente `temperature` diferente de `0.3` em vez de aceitar um valor que seria ignorado.
+O binding Android `llama.cpp v0.4.0` usado neste projeto possui temperatura de sampling fixa em `0.3`. A API e o próprio runtime agora validam isso explicitamente: `temperature` diferente de `0.3` gera erro em vez de ser silenciosamente ignorada.
 
 PDFs digitalizados sem camada de texto ainda exigem OCR. A transcrição de áudio depende de `SpeechRecognizer.isOnDeviceRecognitionAvailable()`; Whisper local ainda não é o fallback desta versão.
 
