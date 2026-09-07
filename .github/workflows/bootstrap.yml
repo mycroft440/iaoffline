@@ -17,14 +17,14 @@ jobs:
       - name: Expand source when all parts exist
         run: |
           set -euo pipefail
-          for part in 00 01 02 03; do
+          for part in 00 01 02 03 04 05 06 07 08; do
             if [ ! -f "bootstrap/source.part${part}" ]; then
               echo "Bootstrap incompleto; aguardando todas as partes."
               exit 0
             fi
           done
 
-          cat bootstrap/source.part00 bootstrap/source.part01 bootstrap/source.part02 bootstrap/source.part03 | base64 -d > /tmp/iaoffline-source.tar.gz
+          cat bootstrap/source.part00 bootstrap/source.part01 bootstrap/source.part02 bootstrap/source.part03 bootstrap/source.part04 bootstrap/source.part05 bootstrap/source.part06 bootstrap/source.part07 bootstrap/source.part08 | base64 -d > /tmp/iaoffline-source.tar.gz
           tar -xzf /tmp/iaoffline-source.tar.gz -C .
           rm -rf bootstrap
           rm -f .github/workflows/bootstrap.yml
