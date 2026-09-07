@@ -269,7 +269,12 @@ class LocalApiServer(
             logger?.error("API_RESPONSE", "Falha durante SSE", t)
             runCatching {
                 if (!headersSent) writeSseHeaders(out)
-                writeSse(out, errorJson("local_ai_error", t.message ?: "Falha durante streaming."))
+                val errorEvent = JSONObject()
+                    .put("error", JSONObject()
+                        .put("code", "local_ai_error")
+                        .put("message", t.message ?: "Falha durante streaming."))
+                    .toString()
+                writeSse(out, errorEvent)
                 writeSse(out, "[DONE]")
             }
         }
