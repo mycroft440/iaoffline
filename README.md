@@ -12,7 +12,8 @@ Aplicativo Android local-first para importar modelos GGUF, validá-los com infer
 - Smoke test nativo antes de marcar um modelo como `VERIFIED`.
 - Apenas modelos `VERIFIED` podem ser ativados.
 - API local em `127.0.0.1:11435` protegida por Bearer token.
-- Servidor limitado a 8 conexões simultâneas para evitar exaustão de recursos.
+- Loop de `accept()` bloqueante e despacho de cada cliente em coroutine separada.
+- Limite de 8 conexões simultâneas para evitar exaustão de recursos.
 - `GET /v1/health`.
 - `GET /v1/models`.
 - `POST /v1/chat/completions`.
