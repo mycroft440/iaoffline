@@ -53,15 +53,19 @@ class LocalApiServer(
 
     @Synchronized
     fun start() {
-        if (serverSocket != null || _state.value.status == ApiServerStatus.STARTING) return
+        if (acceptJob?.isActive == true || serverSocket != null || _state.value.status == ApiServerStatus.STARTING) return
         _state.value = ApiServerState(ApiServerStatus.STARTING, settings.port)
         acceptJob = scope.launch {
+            var ownedSocket: ServerSocket? = null
             try {
                 val socket = ServerSocket().apply {
                     reuseAddress = true
                     bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), settings.port))
                 }
-                serverSocket = socket
+                ownedSocket = socket
+                synchronized(this@LocalApiServer) {
+                    serverSocket = socket
+                }
                 _state.value = ApiServerState(ApiServerStatus.RUNNING, settings.port)
                 logger?.info("API_RESPONSE", "API local ativa em ${settings.baseUrl}")
 
@@ -85,8 +89,8 @@ class LocalApiServer(
                 }
             } finally {
                 synchronized(this@LocalApiServer) {
-                    runCatching { serverSocket?.close() }
-                    serverSocket = null
+                    runCatching { ownedSocket?.close() }
+                    if (serverSocket === ownedSocket) serverSocket = null
                     acceptJob = null
                     if (_state.value.status != ApiServerStatus.ERROR) {
                         _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
@@ -99,8 +103,9 @@ class LocalApiServer(
     @Synchronized
     fun stop() {
         _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
-        runCatching { serverSocket?.close() }
+        val socket = serverSocket
         serverSocket = null
+        runCatching { socket?.close() }
         acceptJob?.cancel()
         acceptJob = null
     }
@@ -247,9 +252,7 @@ class LocalApiServer(
         } catch (t: Throwable) {
             logger?.error("API_RESPONSE", "Falha durante SSE", t)
             runCatching {
-                if (!headersSent) {
-                    writeSseHeaders(out)
-                }
+                if (!headersSent) writeSseHeaders(out)
                 writeSse(out, errorJson("local_ai_error", t.message ?: "Falha durante streaming."))
                 writeSse(out, "[DONE]")
             }
@@ -394,8 +397,7 @@ class LocalApiServer(
         val requestLine = lines.firstOrNull()?.split(' ') ?: emptyList()
         require(requestLine.size >= 2) { "Linha de requisição HTTP inválida." }
         val method = requestLine[0].uppercase()
-        val rawPath = requestLine[1]
-        val path = rawPath.substringBefore('?')
+        val path = requestLine[1].substringBefore('?')
         val headers = lines.drop(1)
             .filter { it.contains(':') }
             .associate { line ->
