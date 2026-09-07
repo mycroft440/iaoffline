@@ -13,6 +13,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -55,7 +56,7 @@ class LocalApiServer(
         if (serverSocket != null || _state.value.status == ApiServerStatus.STARTING) return
         _state.value = ApiServerState(ApiServerStatus.STARTING, settings.port)
         acceptJob = scope.launch {
-            runCatching {
+            try {
                 val socket = ServerSocket().apply {
                     reuseAddress = true
                     bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), settings.port))
@@ -63,10 +64,33 @@ class LocalApiServer(
                 serverSocket = socket
                 _state.value = ApiServerState(ApiServerStatus.RUNNING, settings.port)
                 logger?.info("API_RESPONSE", "API local ativa em ${settings.baseUrl}")
-                while (!socket.isClosed) scope.launch { handleClient(socket.accept()) }
-            }.onFailure { error ->
+
+                while (!socket.isClosed) {
+                    val client = try {
+                        socket.accept()
+                    } catch (closed: SocketException) {
+                        if (socket.isClosed) break
+                        throw closed
+                    }
+                    scope.launch { handleClient(client) }
+                }
+            } catch (error: Throwable) {
                 if (_state.value.status != ApiServerStatus.STOPPED) {
-                    _state.value = ApiServerState(ApiServerStatus.ERROR, settings.port, error.message ?: "Falha ao iniciar a API local.")
+                    _state.value = ApiServerState(
+                        ApiServerStatus.ERROR,
+                        settings.port,
+                        error.message ?: "Falha ao iniciar a API local.",
+                    )
+                    logger?.error("API_RESPONSE", "Falha no servidor localhost", error)
+                }
+            } finally {
+                synchronized(this@LocalApiServer) {
+                    runCatching { serverSocket?.close() }
+                    serverSocket = null
+                    acceptJob = null
+                    if (_state.value.status != ApiServerStatus.ERROR) {
+                        _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
+                    }
                 }
             }
         }
@@ -74,26 +98,35 @@ class LocalApiServer(
 
     @Synchronized
     fun stop() {
+        _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
         runCatching { serverSocket?.close() }
         serverSocket = null
         acceptJob?.cancel()
         acceptJob = null
-        _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
     }
 
-    fun ensureStarted() { if (_state.value.status != ApiServerStatus.RUNNING) start() }
+    fun ensureStarted() {
+        if (_state.value.status != ApiServerStatus.RUNNING && _state.value.status != ApiServerStatus.STARTING) {
+            start()
+        }
+    }
 
-    override fun close() { stop(); scope.cancel() }
+    override fun close() {
+        stop()
+        scope.cancel()
+    }
 
     private suspend fun handleClient(socket: Socket) {
         socket.use { client ->
             client.soTimeout = 15 * 60 * 1000
             client.tcpNoDelay = true
             val request = runCatching { readRequest(client.getInputStream()) }.getOrElse {
-                writeResponse(client, 400, errorJson("invalid_request", it.message ?: "Requisição inválida.")); return
+                writeResponse(client, 400, errorJson("invalid_request", it.message ?: "Requisição inválida."))
+                return
             }
             if (!isPublicHealth(request.path) && request.headers["authorization"] != "Bearer ${settings.apiKey}") {
-                writeResponse(client, 401, errorJson("unauthorized", "Chave da API local inválida.")); return
+                writeResponse(client, 401, errorJson("unauthorized", "Chave da API local inválida."))
+                return
             }
 
             logger?.info("API_REQUEST", "${request.method} ${request.path}")
@@ -145,9 +178,12 @@ class LocalApiServer(
         val data = JSONArray()
         modelRepository.getModels().forEach { model ->
             data.put(JSONObject()
-                .put("id", model.apiModelId).put("object", "model")
-                .put("created", model.importedAt / 1000).put("owned_by", "local")
-                .put("active", model.isActive).put("format", model.format)
+                .put("id", model.apiModelId)
+                .put("object", "model")
+                .put("created", model.importedAt / 1000)
+                .put("owned_by", "local")
+                .put("active", model.isActive)
+                .put("format", model.format)
                 .put("architecture", model.architecture ?: JSONObject.NULL)
                 .put("verification_status", model.verificationStatus)
                 .put("last_error", model.lastError ?: JSONObject.NULL)
@@ -160,10 +196,17 @@ class LocalApiServer(
         val data = JSONArray()
         val modelMap = modelRepository.getModels().associateBy { it.id }
         modelRepository.getAgents().forEach { agent ->
-            data.put(JSONObject().put("id", agent.id).put("name", agent.name)
+            data.put(JSONObject()
+                .put("id", agent.id)
+                .put("name", agent.name)
                 .put("model", modelMap[agent.modelId]?.apiModelId ?: agent.modelId)
-                .put("default", agent.isDefault).put("max_tokens", agent.maxTokens)
-                .put("tools", JSONArray().put("list_recent_conversations").put("search_conversations").put("read_conversation").put("current_time")))
+                .put("default", agent.isDefault)
+                .put("max_tokens", agent.maxTokens)
+                .put("tools", JSONArray()
+                    .put("list_recent_conversations")
+                    .put("search_conversations")
+                    .put("read_conversation")
+                    .put("current_time")))
         }
         return HttpResponse(200, JSONObject().put("object", "list").put("data", data).toString())
     }
@@ -173,7 +216,9 @@ class LocalApiServer(
         val (model, output) = if (p.agentId != null) {
             val result = orchestrator.runAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
             result.model to result.output
-        } else orchestrator.chatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
+        } else {
+            orchestrator.chatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
+        }
         return HttpResponse(200, fullCompletionJson(model.apiModelId, output).toString())
     }
 
@@ -204,7 +249,6 @@ class LocalApiServer(
             runCatching {
                 if (!headersSent) {
                     writeSseHeaders(out)
-                    headersSent = true
                 }
                 writeSse(out, errorJson("local_ai_error", t.message ?: "Falha durante streaming."))
                 writeSse(out, "[DONE]")
@@ -219,22 +263,34 @@ class LocalApiServer(
             json.has("input") -> listOf(AiChatMessage("user", json.getString("input")))
             else -> throw IllegalArgumentException("Informe 'messages' ou 'input'.")
         }
-        val result = orchestrator.runAgent(json.optString("agent_id").takeIf { it.isNotBlank() }, messages)
+        val result = orchestrator.runAgent(
+            json.optString("agent_id").takeIf { it.isNotBlank() },
+            messages,
+        )
         return HttpResponse(200, JSONObject()
-            .put("id", "agent-${UUID.randomUUID()}").put("object", "agent.run")
-            .put("created", System.currentTimeMillis() / 1000).put("agent_id", result.agent.id)
-            .put("agent_name", result.agent.name).put("model", result.model.apiModelId)
-            .put("tools_used", JSONArray(result.toolsUsed)).put("output", result.output).toString())
+            .put("id", "agent-${UUID.randomUUID()}")
+            .put("object", "agent.run")
+            .put("created", System.currentTimeMillis() / 1000)
+            .put("agent_id", result.agent.id)
+            .put("agent_name", result.agent.name)
+            .put("model", result.model.apiModelId)
+            .put("tools_used", JSONArray(result.toolsUsed))
+            .put("output", result.output)
+            .toString())
     }
 
     private fun parseChat(body: String): ChatParams {
         val json = JSONObject(body)
+        val requestedTemperature = json.optDouble("temperature", 0.3).toFloat().coerceIn(0f, 2f)
+        require(kotlin.math.abs(requestedTemperature - 0.3f) < 0.0001f) {
+            "O runtime llama.cpp Android v0.4.0 usa temperature fixa em 0.3. Remova o parâmetro ou use 0.3."
+        }
         return ChatParams(
             model = json.optString("model").takeIf { it.isNotBlank() },
             agentId = json.optString("agent_id").takeIf { it.isNotBlank() },
             messages = parseMessages(json.getJSONArray("messages")),
             maxTokens = json.optInt("max_tokens", 1024).coerceIn(16, 4096),
-            temperature = json.optDouble("temperature", 0.3).toFloat().coerceIn(0f, 2f),
+            temperature = requestedTemperature,
         )
     }
 
@@ -251,82 +307,138 @@ class LocalApiServer(
     }
 
     private fun fullCompletionJson(model: String, output: String) = JSONObject()
-        .put("id", "chatcmpl-${UUID.randomUUID()}").put("object", "chat.completion")
-        .put("created", System.currentTimeMillis() / 1000).put("model", model)
-        .put("choices", JSONArray().put(JSONObject().put("index", 0)
-            .put("message", JSONObject().put("role", "assistant").put("content", output)).put("finish_reason", "stop")))
+        .put("id", "chatcmpl-${UUID.randomUUID()}")
+        .put("object", "chat.completion")
+        .put("created", System.currentTimeMillis() / 1000)
+        .put("model", model)
+        .put("choices", JSONArray().put(JSONObject()
+            .put("index", 0)
+            .put("message", JSONObject().put("role", "assistant").put("content", output))
+            .put("finish_reason", "stop")))
 
-    private fun chunkJson(id: String, created: Long, model: String, delta: JSONObject, finishReason: Any): String =
-        JSONObject().put("id", id).put("object", "chat.completion.chunk").put("created", created).put("model", model)
-            .put("choices", JSONArray().put(JSONObject().put("index", 0).put("delta", delta).put("finish_reason", finishReason))).toString()
+    private fun chunkJson(
+        id: String,
+        created: Long,
+        model: String,
+        delta: JSONObject,
+        finishReason: Any,
+    ): String = JSONObject()
+        .put("id", id)
+        .put("object", "chat.completion.chunk")
+        .put("created", created)
+        .put("model", model)
+        .put("choices", JSONArray().put(JSONObject()
+            .put("index", 0)
+            .put("delta", delta)
+            .put("finish_reason", finishReason)))
+        .toString()
 
     private fun writeSseHeaders(out: BufferedOutputStream) {
-        out.write("HTTP/1.1 200 OK\r\n".toByteArray(StandardCharsets.US_ASCII))
-        out.write("Content-Type: text/event-stream; charset=utf-8\r\n".toByteArray(StandardCharsets.US_ASCII))
-        out.write("Cache-Control: no-cache\r\n".toByteArray(StandardCharsets.US_ASCII))
-        out.write("Connection: close\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+        out.write(
+            ("HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/event-stream; charset=utf-8\r\n" +
+                "Cache-Control: no-cache\r\n" +
+                "Connection: close\r\n\r\n").toByteArray(StandardCharsets.UTF_8)
+        )
         out.flush()
     }
 
     private fun writeSse(out: BufferedOutputStream, data: String) {
-        out.write("data: $data\n\n".toByteArray(StandardCharsets.UTF_8)); out.flush()
+        out.write("data: $data\n\n".toByteArray(StandardCharsets.UTF_8))
+        out.flush()
     }
 
-    private fun isPublicHealth(path: String) = path == "/health" || path == "/v1/health"
+    private fun writeResponse(socket: Socket, status: Int, body: String) {
+        val bytes = body.toByteArray(StandardCharsets.UTF_8)
+        val statusText = when (status) {
+            200 -> "OK"
+            400 -> "Bad Request"
+            401 -> "Unauthorized"
+            404 -> "Not Found"
+            409 -> "Conflict"
+            else -> "Internal Server Error"
+        }
+        BufferedOutputStream(socket.getOutputStream()).use { out ->
+            out.write(
+                ("HTTP/1.1 $status $statusText\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    "Content-Length: ${bytes.size}\r\n" +
+                    "Connection: close\r\n\r\n").toByteArray(StandardCharsets.UTF_8)
+            )
+            out.write(bytes)
+            out.flush()
+        }
+    }
 
     private fun readRequest(input: InputStream): HttpRequest {
-        val requestLine = readAsciiLine(input) ?: throw IllegalArgumentException("Requisição vazia.")
-        val parts = requestLine.split(' '); require(parts.size >= 2) { "Linha HTTP inválida." }
-        val method = parts[0].uppercase(); val path = parts[1].substringBefore('?')
-        val headers = linkedMapOf<String, String>()
-        while (true) {
-            val line = readAsciiLine(input) ?: break
-            if (line.isEmpty()) break
-            val colon = line.indexOf(':')
-            if (colon > 0) headers[line.substring(0, colon).trim().lowercase()] = line.substring(colon + 1).trim()
+        val headerBytes = ByteArrayOutputStream()
+        var match = 0
+        while (headerBytes.size() < MAX_HEADER_BYTES) {
+            val value = input.read()
+            if (value < 0) break
+            headerBytes.write(value)
+            match = when {
+                match == 0 && value == '\r'.code -> 1
+                match == 1 && value == '\n'.code -> 2
+                match == 2 && value == '\r'.code -> 3
+                match == 3 && value == '\n'.code -> 4
+                value == '\r'.code -> 1
+                else -> 0
+            }
+            if (match == 4) break
         }
-        val length = headers["content-length"]?.toIntOrNull() ?: 0
-        require(length in 0..MAX_BODY_BYTES) { "Corpo HTTP grande demais." }
-        val bodyBytes = ByteArray(length); var offset = 0
-        while (offset < length) {
-            val read = input.read(bodyBytes, offset, length - offset)
-            if (read < 0) throw IllegalArgumentException("Corpo HTTP incompleto.")
+        require(match == 4) { "Cabeçalho HTTP incompleto ou grande demais." }
+
+        val headerText = headerBytes.toString(StandardCharsets.UTF_8.name())
+        val lines = headerText.split("\r\n")
+        val requestLine = lines.firstOrNull()?.split(' ') ?: emptyList()
+        require(requestLine.size >= 2) { "Linha de requisição HTTP inválida." }
+        val method = requestLine[0].uppercase()
+        val rawPath = requestLine[1]
+        val path = rawPath.substringBefore('?')
+        val headers = lines.drop(1)
+            .filter { it.contains(':') }
+            .associate { line ->
+                val index = line.indexOf(':')
+                line.substring(0, index).trim().lowercase() to line.substring(index + 1).trim()
+            }
+        val contentLength = headers["content-length"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+        require(contentLength <= MAX_BODY_BYTES) { "Corpo HTTP grande demais." }
+        val bodyBytes = ByteArray(contentLength)
+        var offset = 0
+        while (offset < contentLength) {
+            val read = input.read(bodyBytes, offset, contentLength - offset)
+            require(read >= 0) { "Corpo HTTP incompleto." }
             offset += read
         }
         return HttpRequest(method, path, headers, bodyBytes.toString(StandardCharsets.UTF_8))
     }
 
-    private fun readAsciiLine(input: InputStream): String? {
-        val buffer = ByteArrayOutputStream()
-        while (buffer.size() <= MAX_HEADER_LINE_BYTES) {
-            val b = input.read()
-            if (b < 0) return if (buffer.size() == 0) null else buffer.toString(StandardCharsets.US_ASCII.name())
-            if (b == '\n'.code) break
-            if (b != '\r'.code) buffer.write(b)
-        }
-        require(buffer.size() <= MAX_HEADER_LINE_BYTES) { "Cabeçalho HTTP grande demais." }
-        return buffer.toString(StandardCharsets.US_ASCII.name())
-    }
+    private fun isPublicHealth(path: String): Boolean = path == "/health" || path == "/v1/health"
 
-    private fun writeResponse(socket: Socket, status: Int, body: String) {
-        val bytes = body.toByteArray(StandardCharsets.UTF_8)
-        val reason = when (status) { 200 -> "OK"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 404 -> "Not Found"; 409 -> "Conflict"; else -> "Internal Server Error" }
-        val out = BufferedOutputStream(socket.getOutputStream())
-        out.write("HTTP/1.1 $status $reason\r\n".toByteArray(StandardCharsets.US_ASCII))
-        out.write("Content-Type: application/json; charset=utf-8\r\n".toByteArray(StandardCharsets.US_ASCII))
-        out.write("Content-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
-        out.write(bytes); out.flush()
-    }
+    private fun errorJson(code: String, message: String): String = JSONObject()
+        .put("error", JSONObject().put("code", code).put("message", message))
+        .toString()
 
-    private fun errorJson(code: String, message: String): String =
-        JSONObject().put("error", JSONObject().put("code", code).put("message", message)).toString()
+    private data class HttpRequest(
+        val method: String,
+        val path: String,
+        val headers: Map<String, String>,
+        val body: String,
+    )
 
-    private data class HttpRequest(val method: String, val path: String, val headers: Map<String, String>, val body: String)
     private data class HttpResponse(val status: Int, val body: String)
-    private data class ChatParams(val model: String?, val agentId: String?, val messages: List<AiChatMessage>, val maxTokens: Int, val temperature: Float)
+
+    private data class ChatParams(
+        val model: String?,
+        val agentId: String?,
+        val messages: List<AiChatMessage>,
+        val maxTokens: Int,
+        val temperature: Float,
+    )
 
     companion object {
-        private const val MAX_BODY_BYTES = 2 * 1024 * 1024
-        private const val MAX_HEADER_LINE_BYTES = 16 * 1024
+        private const val MAX_HEADER_BYTES = 64 * 1024
+        private const val MAX_BODY_BYTES = 4 * 1024 * 1024
     }
 }
