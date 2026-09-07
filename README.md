@@ -35,18 +35,11 @@ GGUF → inspeção → compatibilidade → cópia privada → llama.cpp → smo
 
 ## Teste completo dentro do app
 
-`IntegrationSelfTest` valida:
-
-1. servidor localhost;
-2. `/v1/health`;
-3. autenticação Bearer;
-4. `/v1/models` + modelo ativo `VERIFIED`;
-5. inferência real em `/v1/chat/completions`;
-6. streaming SSE até `[DONE]`.
+`IntegrationSelfTest` valida servidor localhost, health, autenticação Bearer, modelo ativo `VERIFIED`, inferência HTTP e streaming SSE até `[DONE]`.
 
 ## GitHub Actions
 
-O workflow `.github/workflows/android.yml` configura Java 17, SDK 36, NDK `29.0.13113456`, CMake `3.31.6`, compila o AAR Android do `llama.cpp v0.4.0`, executa testes, gera `app-debug.apk` e publica o artifact `IA-Local-debug`.
+O workflow configura Java 17, SDK 36, NDK `29.0.13113456`, CMake `3.31.6`, compila o AAR Android do `llama.cpp v0.4.0`, executa testes, gera `app-debug.apk` e publica o artifact `IA-Local-debug`.
 
 ## Critério de pronto
 
