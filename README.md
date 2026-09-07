@@ -73,7 +73,7 @@ O teste só pode ser aprovado depois que um GGUF real tiver sido importado e ver
 
 ## GitHub Actions
 
-O workflow `.github/workflows/android.yml` é parte do critério de qualidade do projeto. Ele precisa terminar verde antes de qualquer APK ser tratado como utilizável.
+O workflow `.github/workflows/android.yml` é parte do critério de qualidade do projeto e precisa terminar verde antes de qualquer APK ser tratado como utilizável.
 
 O workflow:
 
@@ -85,8 +85,6 @@ O workflow:
 6. compila `app-debug.apk`;
 7. verifica se o APK realmente existe;
 8. publica o APK como artifact `IA-Local-debug`.
-
-O workflow usa SDK 36 porque tanto o app quanto o binding Android pinado compilam contra essa API.
 
 ## API local
 
