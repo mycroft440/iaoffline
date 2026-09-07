@@ -1,0 +1,40 @@
+name: Bootstrap source
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Expand source when all parts exist
+        run: |
+          set -euo pipefail
+          for part in 00 01 02 03; do
+            if [ ! -f "bootstrap/source.part${part}" ]; then
+              echo "Bootstrap incompleto; aguardando todas as partes."
+              exit 0
+            fi
+          done
+
+          cat bootstrap/source.part00 bootstrap/source.part01 bootstrap/source.part02 bootstrap/source.part03 | base64 -d > /tmp/iaoffline-source.tar.gz
+          tar -xzf /tmp/iaoffline-source.tar.gz -C .
+          rm -rf bootstrap
+          rm -f .github/workflows/bootstrap.yml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração para gravar."
+            exit 0
+          fi
+          git commit -m "Importa projeto Android IA Offline"
+          git push origin HEAD:main
