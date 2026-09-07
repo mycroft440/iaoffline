@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.ialocal"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.ialocal"
