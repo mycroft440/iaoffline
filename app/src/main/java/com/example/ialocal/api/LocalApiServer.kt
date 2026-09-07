@@ -16,6 +16,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +51,7 @@ class LocalApiServer(
 
     @Volatile private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
+    private val activeClients = AtomicInteger(0)
 
     @Synchronized
     fun start() {
@@ -76,7 +78,21 @@ class LocalApiServer(
                         if (socket.isClosed) break
                         throw closed
                     }
-                    scope.launch { handleClient(client) }
+
+                    if (activeClients.incrementAndGet() > MAX_ACTIVE_CLIENTS) {
+                        activeClients.decrementAndGet()
+                        runCatching { writeResponse(client, 503, errorJson("busy", "A API local já está processando muitas conexões.")) }
+                        runCatching { client.close() }
+                        continue
+                    }
+
+                    scope.launch {
+                        try {
+                            handleClient(client)
+                        } finally {
+                            activeClients.decrementAndGet()
+                        }
+                    }
                 }
             } catch (error: Throwable) {
                 if (_state.value.status != ApiServerStatus.STOPPED) {
@@ -359,6 +375,7 @@ class LocalApiServer(
             401 -> "Unauthorized"
             404 -> "Not Found"
             409 -> "Conflict"
+            503 -> "Service Unavailable"
             else -> "Internal Server Error"
         }
         BufferedOutputStream(socket.getOutputStream()).use { out ->
@@ -442,5 +459,6 @@ class LocalApiServer(
     companion object {
         private const val MAX_HEADER_BYTES = 64 * 1024
         private const val MAX_BODY_BYTES = 4 * 1024 * 1024
+        private const val MAX_ACTIVE_CLIENTS = 8
     }
 }
