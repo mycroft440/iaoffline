@@ -8,7 +8,6 @@ import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
@@ -37,7 +36,6 @@ class CatalogDownloadWorker(
             return@withContext Result.success()
         }
         if (manager.isUserPaused(modelId)) {
-            manager.markPaused(modelId, partial.length(), 0L, "Pausado por você")
             return@withContext Result.success()
         }
 
@@ -63,13 +61,14 @@ class CatalogDownloadWorker(
                 return@withContext if (responseCode >= 500) Result.retry() else Result.failure()
             }
 
-            val totalBytes = resolveTotalBytes(connection, offset)
+            val activeConnection = requireNotNull(connection)
+            val totalBytes = resolveTotalBytes(activeConnection, offset)
             manager.markRunning(modelId, offset, totalBytes)
             setForeground(createForegroundInfo(model, offset, totalBytes))
 
             RandomAccessFile(partial, "rw").use { output ->
                 output.seek(offset)
-                connection.inputStream.buffered(BUFFER_SIZE).use { input ->
+                activeConnection.inputStream.buffered(BUFFER_SIZE).use { input ->
                     val buffer = ByteArray(BUFFER_SIZE)
                     var downloaded = offset
                     var lastPublishedBytes = downloaded
@@ -120,14 +119,12 @@ class CatalogDownloadWorker(
             manager.markSuccessful(modelId, destination.length())
             Result.success()
         } catch (cancelled: CancellationException) {
-            val downloaded = partial.length()
-            if (manager.isUserPaused(modelId)) {
-                manager.markPaused(modelId, downloaded, 0L, "Pausado por você")
-            } else {
+            if (!manager.isUserPaused(modelId)) {
+                val downloaded = partial.length()
                 manager.markPaused(
                     modelId,
                     downloaded,
-                    0L,
+                    currentTotal(model),
                     "Download interrompido pelo Android; os dados já baixados foram preservados.",
                 )
             }
@@ -138,13 +135,20 @@ class CatalogDownloadWorker(
             manager.markPaused(
                 modelId,
                 downloaded,
-                0L,
+                currentTotal(model),
                 "$message O app tentará continuar do ponto salvo.",
             )
             Result.retry()
         } finally {
             connection?.disconnect()
         }
+    }
+
+    private fun currentTotal(model: CatalogModel): Long = when (val state = manager.state(model)) {
+        is CatalogDownloadState.Pending -> state.totalBytes
+        is CatalogDownloadState.Running -> state.totalBytes
+        is CatalogDownloadState.Paused -> state.totalBytes
+        else -> 0L
     }
 
     private fun openConnection(url: String, offset: Long): HttpURLConnection {
