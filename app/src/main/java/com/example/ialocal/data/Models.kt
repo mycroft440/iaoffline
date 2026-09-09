@@ -140,6 +140,19 @@ data class ConversationListItem(
     val lastMessage: String?,
 )
 
+/** Flat projection used by the "Arquivos dos chats" screen. */
+data class ChatAttachmentListItem(
+    val id: String,
+    val conversationId: String,
+    val conversationTitle: String,
+    val type: String,
+    val fileName: String,
+    val localPath: String,
+    val mimeType: String?,
+    val sizeBytes: Long,
+    val createdAt: Long,
+)
+
 enum class MessageRole { USER, ASSISTANT, SYSTEM }
 enum class MessageStatus { SENDING, COMPLETE, ERROR }
 enum class AttachmentType { FILE, AUDIO }
