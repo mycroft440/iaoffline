@@ -67,36 +67,76 @@ class ModelRepository(
                 )
             }
 
-            // Re-read the private copy. This catches truncation/provider issues before native loading.
-            val metadata = inspector.inspect(destination)
-            require(metadata.tensorCount > 0) { "O arquivo copiado não contém tensors válidos." }
-            val now = System.currentTimeMillis()
-            val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() } ?: preview.suggestedName
-            val apiId = buildApiId(cleanName, id)
-            val declaredContext = metadata.contextLength
-            val initialContext = (declaredContext ?: SAFE_INITIAL_CONTEXT)
-                .coerceIn(MIN_CONTEXT, SAFE_INITIAL_CONTEXT)
-            val model = AiModelEntity(
-                id = id,
-                name = cleanName,
-                apiModelId = apiId,
-                format = "GGUF",
-                architecture = metadata.architecture,
-                filePath = destination.absolutePath,
-                sizeBytes = destination.length(),
-                importedAt = now,
-                isActive = false,
-                contextLength = initialContext,
-                sizeLabel = metadata.sizeLabel,
-                ggufVersion = metadata.version,
-                tensorCount = metadata.tensorCount,
-                declaredContextLength = declaredContext,
-                verificationStatus = ModelVerificationStatus.IMPORTED.name,
-                contextCalibrationStatus = ContextCalibrationStatus.NOT_CALIBRATED.name,
-            )
-            dao.insertModel(model)
+            val model = persistGguf(destination, preview.suggestedName)
+            logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
+            model
+        } catch (t: Throwable) {
+            logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
+            runCatching { dao.deleteModel(id) }
+            modelDir.deleteRecursively()
+            throw t
+        }
+    }
 
-            val agent = AgentEntity(
+    /**
+     * Registers a GGUF already downloaded into app-scoped storage.
+     * No second copy is created: for 15-20GB catalog models this avoids temporarily requiring
+     * roughly twice the model size just to finish installation.
+     */
+    suspend fun adoptDownloadedGguf(file: File, suggestedName: String? = null): AiModelEntity = withContext(Dispatchers.IO) {
+        require(file.isFile && file.length() > 0L) { "O download do modelo não foi encontrado." }
+        require(file.extension.equals("gguf", ignoreCase = true)) { "O arquivo baixado não é um GGUF." }
+
+        val canonicalPath = file.canonicalPath
+        dao.getModels().firstOrNull {
+            runCatching { File(it.filePath).canonicalPath }.getOrNull() == canonicalPath
+        }?.let { return@withContext it }
+
+        val compatibility = compatibilityChecker.check(file.length())
+        require(compatibility.supportedAbi) {
+            "Este aparelho usa ${compatibility.primaryAbi}; o runtime atual exige arm64-v8a ou x86_64."
+        }
+
+        val model = persistGguf(file, suggestedName)
+        logger?.info("IMPORT", "Download interno adotado sem cópia: ${model.apiModelId}")
+        model
+    }
+
+    private suspend fun persistGguf(file: File, suggestedName: String?): AiModelEntity {
+        val metadata = inspector.inspect(file)
+        require(metadata.tensorCount > 0) { "O GGUF não contém tensors válidos." }
+
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() }
+            ?: suggestedName?.trim().takeUnless { it.isNullOrBlank() }
+            ?: file.nameWithoutExtension
+        val apiId = buildApiId(cleanName, id)
+        val declaredContext = metadata.contextLength
+        val initialContext = (declaredContext ?: SAFE_INITIAL_CONTEXT)
+            .coerceIn(MIN_CONTEXT, SAFE_INITIAL_CONTEXT)
+        val model = AiModelEntity(
+            id = id,
+            name = cleanName,
+            apiModelId = apiId,
+            format = "GGUF",
+            architecture = metadata.architecture,
+            filePath = file.absolutePath,
+            sizeBytes = file.length(),
+            importedAt = now,
+            isActive = false,
+            contextLength = initialContext,
+            sizeLabel = metadata.sizeLabel,
+            ggufVersion = metadata.version,
+            tensorCount = metadata.tensorCount,
+            declaredContextLength = declaredContext,
+            verificationStatus = ModelVerificationStatus.IMPORTED.name,
+            contextCalibrationStatus = ContextCalibrationStatus.NOT_CALIBRATED.name,
+        )
+        dao.insertModel(model)
+
+        dao.insertAgent(
+            AgentEntity(
                 id = UUID.randomUUID().toString(),
                 name = "$cleanName · Agente",
                 modelId = id,
@@ -107,15 +147,8 @@ class ModelRepository(
                 createdAt = now,
                 updatedAt = now,
             )
-            dao.insertAgent(agent)
-            logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
-            model
-        } catch (t: Throwable) {
-            logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
-            runCatching { dao.deleteModel(id) }
-            modelDir.deleteRecursively()
-            throw t
-        }
+        )
+        return model
     }
 
     suspend fun activateModel(id: String) {
@@ -214,6 +247,11 @@ class ModelRepository(
     suspend fun getAgentForModel(modelId: String): AgentEntity? = dao.getAgentForModel(modelId)
 
     private fun sourceInfo(uri: Uri): Pair<String, Long?> {
+        if (uri.scheme == "file") {
+            val file = uri.path?.let(::File)
+            if (file != null) return file.name to file.length().takeIf { it > 0L }
+        }
+
         var name: String? = null
         var size: Long? = null
         context.contentResolver.query(
