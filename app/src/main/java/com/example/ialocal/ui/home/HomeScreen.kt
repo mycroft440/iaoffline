@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
@@ -26,10 +27,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,6 +61,7 @@ fun HomeScreen(
     onOpenConversation: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenModels: () -> Unit,
+    onOpenCatalog: () -> Unit,
 ) {
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     var renameTarget by remember { mutableStateOf<ConversationListItem?>(null) }
@@ -70,6 +74,9 @@ fun HomeScreen(
                 actions = {
                     IconButton(onClick = { viewModel.createConversation(onOpenConversation) }) {
                         Icon(Icons.Default.Add, contentDescription = "Nova conversa")
+                    }
+                    IconButton(onClick = onOpenCatalog) {
+                        Icon(Icons.Default.Download, contentDescription = "Baixar IA")
                     }
                     IconButton(onClick = onOpenModels) {
                         Icon(Icons.Default.SmartToy, contentDescription = "Modelos e API")
@@ -85,6 +92,8 @@ fun HomeScreen(
             EmptyHome(
                 modifier = Modifier.padding(padding),
                 onNewChat = { viewModel.createConversation(onOpenConversation) },
+                onOpenCatalog = onOpenCatalog,
+                onOpenModels = onOpenModels,
             )
         } else {
             val pinned = conversations.filter { it.isPinned }
@@ -96,6 +105,10 @@ fun HomeScreen(
                     .padding(padding),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                item {
+                    HomeActions(onOpenCatalog = onOpenCatalog, onOpenModels = onOpenModels)
+                }
+
                 if (pinned.isNotEmpty()) {
                     item { SectionTitle("FIXADAS") }
                     items(pinned, key = { it.id }) { conversation ->
@@ -162,6 +175,8 @@ fun HomeScreen(
 private fun EmptyHome(
     modifier: Modifier = Modifier,
     onNewChat: () -> Unit,
+    onOpenCatalog: () -> Unit,
+    onOpenModels: () -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -170,11 +185,41 @@ private fun EmptyHome(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Nenhuma conversa ainda", style = MaterialTheme.typography.headlineSmall)
+        Text("IA Local", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        Text("Crie a primeira conversa para começar a testar o chat.")
-        Spacer(Modifier.height(12.dp))
+        Text("Baixe uma IA pronta ou importe seu próprio GGUF.")
+        Spacer(Modifier.height(18.dp))
+        HomeActions(onOpenCatalog = onOpenCatalog, onOpenModels = onOpenModels)
+        Spacer(Modifier.height(10.dp))
         TextButton(onClick = onNewChat) { Text("Nova conversa") }
+    }
+}
+
+@Composable
+private fun HomeActions(
+    onOpenCatalog: () -> Unit,
+    onOpenModels: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilledTonalButton(
+            onClick = onOpenCatalog,
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Default.Download, contentDescription = null)
+            Text("  Baixar IA")
+        }
+        OutlinedButton(
+            onClick = onOpenModels,
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Default.SmartToy, contentDescription = null)
+            Text("  Meus modelos")
+        }
     }
 }
 
