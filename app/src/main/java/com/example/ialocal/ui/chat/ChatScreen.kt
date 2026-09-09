@@ -23,20 +23,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,7 +74,11 @@ import com.example.ialocal.data.PendingAttachment
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    onBack: () -> Unit,
+    onOpenCatalog: () -> Unit,
+    onConfigureModel: (String) -> Unit,
+    onOpenFiles: () -> Unit,
+    onSearchChats: () -> Unit,
+    onAllConversations: () -> Unit,
 ) {
     val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
@@ -89,7 +94,12 @@ fun ChatScreen(
     val audioRecorder = remember { AudioRecorder(context) }
     var isRecording by remember { mutableStateOf(false) }
     var agentMenuOpen by remember { mutableStateOf(false) }
+    var navigationMenuOpen by remember { mutableStateOf(false) }
     var pendingAudioImport by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    val selectedAgent = agents.firstOrNull { it.id == conversation?.agentId }
+        ?: agents.firstOrNull { it.isDefault }
+        ?: agents.firstOrNull()
 
     val micPermission = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -156,8 +166,52 @@ fun ChatScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                    Box {
+                        IconButton(onClick = { navigationMenuOpen = true }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                        }
+                        DropdownMenu(
+                            expanded = navigationMenuOpen,
+                            onDismissRequest = { navigationMenuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Trocar de modelo de I.A") },
+                                onClick = {
+                                    navigationMenuOpen = false
+                                    onOpenCatalog()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Configurar modelo de I.A") },
+                                enabled = selectedAgent != null,
+                                onClick = {
+                                    navigationMenuOpen = false
+                                    selectedAgent?.modelId?.let(onConfigureModel)
+                                },
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Arquivos dos chats") },
+                                onClick = {
+                                    navigationMenuOpen = false
+                                    onOpenFiles()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Pesquisar nos chats") },
+                                onClick = {
+                                    navigationMenuOpen = false
+                                    onSearchChats()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Todas as conversas") },
+                                onClick = {
+                                    navigationMenuOpen = false
+                                    onAllConversations()
+                                },
+                            )
+                        }
                     }
                 },
                 actions = {
