@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.data.ContextCalibrationStatus
 import com.example.ialocal.data.ModelDao
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
@@ -73,6 +74,8 @@ class ModelRepository(
             val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() } ?: preview.suggestedName
             val apiId = buildApiId(cleanName, id)
             val declaredContext = metadata.contextLength
+            val initialContext = (declaredContext ?: SAFE_INITIAL_CONTEXT)
+                .coerceIn(MIN_CONTEXT, SAFE_INITIAL_CONTEXT)
             val model = AiModelEntity(
                 id = id,
                 name = cleanName,
@@ -83,12 +86,13 @@ class ModelRepository(
                 sizeBytes = destination.length(),
                 importedAt = now,
                 isActive = false,
-                contextLength = (declaredContext ?: ANDROID_RUNTIME_CONTEXT).coerceIn(1024, ANDROID_RUNTIME_CONTEXT),
+                contextLength = initialContext,
                 sizeLabel = metadata.sizeLabel,
                 ggufVersion = metadata.version,
                 tensorCount = metadata.tensorCount,
                 declaredContextLength = declaredContext,
                 verificationStatus = ModelVerificationStatus.IMPORTED.name,
+                contextCalibrationStatus = ContextCalibrationStatus.NOT_CALIBRATED.name,
             )
             dao.insertModel(model)
 
@@ -131,6 +135,42 @@ class ModelRepository(
 
     suspend fun markVerificationError(id: String, message: String) =
         dao.updateVerification(id, ModelVerificationStatus.ERROR.name, message, null)
+
+    suspend fun startContextCalibration(id: String, calibrationKey: String, safeContext: Int) {
+        dao.startContextCalibration(
+            id = id,
+            safeContext = safeContext.coerceAtLeast(MIN_CONTEXT),
+            status = ContextCalibrationStatus.RUNNING.name,
+            calibrationKey = calibrationKey,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    suspend fun recordContextProbeSuccess(id: String, contextLength: Int) {
+        dao.recordContextProbeSuccess(id, contextLength, System.currentTimeMillis())
+    }
+
+    suspend fun recordContextProbeFailure(id: String, contextLength: Int, reason: String?) {
+        dao.recordContextProbeFailure(id, contextLength, reason, System.currentTimeMillis())
+    }
+
+    suspend fun finishContextCalibration(id: String, contextLength: Int) {
+        dao.finishContextCalibration(
+            id = id,
+            contextLength = contextLength,
+            status = ContextCalibrationStatus.CALIBRATED.name,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    suspend fun failContextCalibration(id: String, error: String) {
+        dao.failContextCalibration(
+            id = id,
+            status = ContextCalibrationStatus.FAILED.name,
+            error = error,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
 
     suspend fun setDefaultAgent(id: String) {
         requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
@@ -203,8 +243,9 @@ class ModelRepository(
     }
 
     companion object {
-        /** v0.4.0 Android binding currently creates an 8192-token native context. */
-        const val ANDROID_RUNTIME_CONTEXT = 8192
+        const val MIN_CONTEXT = 1024
+        /** Safe first load. The runtime can use larger values after per-device calibration. */
+        const val SAFE_INITIAL_CONTEXT = 8192
         const val DEFAULT_SYSTEM_PROMPT =
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
                 "Quando não souber algo, diga que não sabe em vez de inventar."
