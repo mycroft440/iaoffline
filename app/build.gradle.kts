@@ -10,8 +10,9 @@ android {
 
     defaultConfig {
         applicationId = "com.example.ialocal"
-        // The official llama.cpp Android binding currently targets Android 13+.
-        minSdk = 33
+        // Android 10 (API 29) é o piso do app. O script de preparação recompila
+        // o binding llama.cpp com o mesmo minSdk.
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
