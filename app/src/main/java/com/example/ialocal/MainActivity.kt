@@ -49,8 +49,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalAiApp(container: AppContainer) {
     val navController = rememberNavController()
-    val restoredConversation = container.chatSession.activeConversationId
-    val startDestination = restoredConversation?.let { "chat/$it" } ?: "home"
 
     fun openChat(id: String) {
         container.chatSession.setActiveConversation(id)
@@ -59,7 +57,20 @@ private fun LocalAiApp(container: AppContainer) {
         }
     }
 
-    NavHost(navController = navController, startDestination = startDestination) {
+    NavHost(navController = navController, startDestination = "restore") {
+        composable("restore") {
+            LaunchedEffect(Unit) {
+                val savedId = container.chatSession.activeConversationId
+                val validId = savedId?.takeIf { container.chatRepository.getConversation(it) != null }
+                if (savedId != null && validId == null) container.chatSession.clearActiveConversation()
+                val target = validId?.let { "chat/$it" } ?: "home"
+                navController.navigate(target) {
+                    popUpTo("restore") { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+        }
+
         composable("home") {
             val vm: HomeViewModel = viewModel(factory = HomeViewModel.Factory(container.chatRepository))
             HomeScreen(
