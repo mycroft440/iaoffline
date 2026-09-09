@@ -6,6 +6,7 @@ import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.RuntimeState
+import java.io.File
 import kotlinx.coroutines.flow.StateFlow
 
 /** Coordinates persistence and native runtime so activation only follows a successful real inference. */
@@ -21,6 +22,15 @@ class ModelManager(
 
     suspend fun importAndVerify(preview: ModelImportPreview): AiModelEntity {
         val model = repository.importGguf(preview)
+        return finishNewModel(model)
+    }
+
+    suspend fun installDownloaded(file: File, suggestedName: String): AiModelEntity {
+        val model = repository.adoptDownloadedGguf(file, suggestedName)
+        return finishNewModel(model)
+    }
+
+    private suspend fun finishNewModel(model: AiModelEntity): AiModelEntity {
         return try {
             verifyAndActivate(model.id)
             // Free the UI process before the dedicated probe process starts allocating
@@ -28,7 +38,7 @@ class ModelManager(
             runtime.unload()
             contextCalibration.calibrateIfNeeded(model.id)
         } catch (t: Throwable) {
-            // Keep the imported file so the user can retry after freeing RAM.
+            // Keep the imported/downloaded file so the user can retry after freeing RAM.
             throw t
         }
     }
