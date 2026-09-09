@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** Runtime backed by the official llama.cpp Android binding pinned by the build script. */
+/** Runtime backed by the official llama.cpp Android binding pinned and patched by the build script. */
 class LlamaCppRuntime(
     context: Context,
     private val logger: AiEventLogger? = null,
@@ -86,7 +86,10 @@ class LlamaCppRuntime(
             engine.setSystemPrompt(prepared.systemPrompt)
             requestSessionConsumed = true
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
-            logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
+            logger?.info(
+                "INFERENCE",
+                "Gerando com ${model.apiModelId}; contexto=${model.contextLength}; maxTokens=$maxTokens; streaming=true",
+            )
             var emitted = 0
             engine.sendUserPrompt(
                 message = prepared.latestUser,
@@ -139,9 +142,12 @@ class LlamaCppRuntime(
         if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error) unloadLocked()
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
-        logger?.info("MODEL_LOAD", "Carregando ${model.name} (${model.filePath})")
+        logger?.info(
+            "MODEL_LOAD",
+            "Carregando ${model.name} (${model.filePath}) com contexto=${model.contextLength}",
+        )
         try {
-            engine.loadModel(model.filePath)
+            engine.loadModel(model.filePath, model.contextLength)
             loadedModelId = model.id
             requestSessionConsumed = false
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
@@ -191,7 +197,7 @@ class LlamaCppRuntime(
             t::class.java.simpleName.contains("UnsupportedArchitecture", ignoreCase = true) ->
                 "A arquitetura deste GGUF não é suportada pelo runtime llama.cpp Android atual."
             raw.contains("Failed to prepare resources", ignoreCase = true) ->
-                "O modelo foi lido, mas o runtime não conseguiu criar o contexto nativo. Verifique RAM disponível e compatibilidade."
+                "O modelo foi lido, mas o runtime não conseguiu criar o contexto nativo de ${state.value.modelName ?: "inferência"}. Verifique RAM disponível ou reduza o contexto."
             raw.contains("Cannot load model", ignoreCase = true) ->
                 "O runtime ainda não estava pronto para carregar o modelo."
             raw.isNotBlank() -> raw
