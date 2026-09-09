@@ -1,87 +1,101 @@
 package com.example.ialocal.models
 
-import android.app.DownloadManager
 import android.content.Context
-import android.net.Uri
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import java.io.File
 
 sealed interface CatalogDownloadState {
     data object Idle : CatalogDownloadState
     data class Pending(val downloadedBytes: Long = 0L, val totalBytes: Long = 0L) : CatalogDownloadState
     data class Running(val downloadedBytes: Long, val totalBytes: Long) : CatalogDownloadState
-    data class Paused(val downloadedBytes: Long, val totalBytes: Long, val reason: Int) : CatalogDownloadState
+    data class Paused(val downloadedBytes: Long, val totalBytes: Long, val reason: String? = null) : CatalogDownloadState
     data class Successful(val file: File) : CatalogDownloadState
-    data class Failed(val reason: Int) : CatalogDownloadState
+    data class Failed(val message: String) : CatalogDownloadState
 }
 
 /**
- * Thin persistent wrapper around Android DownloadManager.
+ * Persistent, resumable catalog downloads backed by WorkManager.
  *
- * DownloadManager owns the long-running transfer, so downloads continue if the activity is
- * recreated. The destination is app-scoped external storage: no storage permission is required,
- * the file is removed with the app, and the GGUF can be adopted in-place without a second 15-20GB
- * copy in private storage.
+ * The worker writes to <model>.gguf.part and resumes with HTTP Range after a user pause,
+ * network interruption or process recreation. The final GGUF remains in app-scoped external
+ * storage and is adopted in place, so installation never needs a second multi-gigabyte copy.
  */
 class CatalogDownloadManager(context: Context) {
     private val appContext = context.applicationContext
-    private val downloads = appContext.getSystemService(DownloadManager::class.java)
+    private val workManager = WorkManager.getInstance(appContext)
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun start(model: CatalogModel): Long {
-        val existing = downloadId(model.id)
-        if (existing != null) return existing
+    fun start(model: CatalogModel) {
+        val current = state(model)
+        if (current is CatalogDownloadState.Running || current is CatalogDownloadState.Pending) return
+        if (current is CatalogDownloadState.Successful) return
 
-        val destination = destinationFile(model)
-        destination.parentFile?.mkdirs()
-        if (destination.exists()) destination.delete()
+        setUserPaused(model.id, false)
+        markPending(model.id, partialFile(model).length(), savedTotal(model.id))
+        enqueue(model, ExistingWorkPolicy.REPLACE)
+    }
 
-        val request = DownloadManager.Request(Uri.parse(model.downloadUrl))
-            .setTitle("${model.name} · ${model.variant}")
-            .setDescription("Baixando ${model.fileName}")
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(false)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationUri(Uri.fromFile(destination))
+    fun pause(modelId: String) {
+        val model = ModelCatalog.byId(modelId) ?: return
+        setUserPaused(modelId, true)
+        workManager.cancelUniqueWork(workName(modelId))
+        markPaused(
+            modelId = modelId,
+            downloadedBytes = partialFile(model).length(),
+            totalBytes = savedTotal(modelId),
+            reason = "Pausado por você",
+        )
+    }
 
-        val id = downloads.enqueue(request)
-        prefs.edit().putLong(key(model.id), id).apply()
-        return id
+    fun resume(modelId: String) {
+        val model = ModelCatalog.byId(modelId) ?: return
+        setUserPaused(modelId, false)
+        markPending(modelId, partialFile(model).length(), savedTotal(modelId))
+        enqueue(model, ExistingWorkPolicy.REPLACE)
     }
 
     fun cancel(modelId: String) {
-        downloadId(modelId)?.let(downloads::remove)
-        ModelCatalog.byId(modelId)?.let { destinationFile(it).delete() }
-        forget(modelId)
+        workManager.cancelUniqueWork(workName(modelId))
+        ModelCatalog.byId(modelId)?.let { model ->
+            destinationFile(model).delete()
+            partialFile(model).delete()
+        }
+        clear(modelId)
     }
 
+    /** Keeps the downloaded GGUF but removes transfer bookkeeping after successful installation. */
     fun forget(modelId: String) {
-        prefs.edit().remove(key(modelId)).apply()
+        clear(modelId)
     }
 
     fun state(model: CatalogModel): CatalogDownloadState {
-        val id = downloadId(model.id) ?: return CatalogDownloadState.Idle
-        val cursor = downloads.query(DownloadManager.Query().setFilterById(id))
-        cursor.use {
-            if (!it.moveToFirst()) {
-                forget(model.id)
-                return CatalogDownloadState.Idle
-            }
+        val destination = destinationFile(model)
+        if (destination.isFile && destination.length() > 0L) {
+            return CatalogDownloadState.Successful(destination)
+        }
 
-            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            val downloaded = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-            val total = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)).coerceAtLeast(0L)
-            val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-            return when (status) {
-                DownloadManager.STATUS_PENDING -> CatalogDownloadState.Pending(downloaded, total)
-                DownloadManager.STATUS_RUNNING -> CatalogDownloadState.Running(downloaded, total)
-                DownloadManager.STATUS_PAUSED -> CatalogDownloadState.Paused(downloaded, total, reason)
-                DownloadManager.STATUS_SUCCESSFUL -> {
-                    val file = destinationFile(model)
-                    if (file.isFile && file.length() > 0L) CatalogDownloadState.Successful(file)
-                    else CatalogDownloadState.Failed(ERROR_MISSING_FILE)
-                }
-                DownloadManager.STATUS_FAILED -> CatalogDownloadState.Failed(reason)
-                else -> CatalogDownloadState.Pending(downloaded, total)
+        val downloaded = maxOf(savedDownloaded(model.id), partialFile(model).length())
+        val total = savedTotal(model.id)
+        return when (prefs.getString(keyState(model.id), STATE_IDLE)) {
+            STATE_PENDING -> CatalogDownloadState.Pending(downloaded, total)
+            STATE_RUNNING -> CatalogDownloadState.Running(downloaded, total)
+            STATE_PAUSED -> CatalogDownloadState.Paused(
+                downloaded,
+                total,
+                prefs.getString(keyMessage(model.id), null),
+            )
+            STATE_FAILED -> CatalogDownloadState.Failed(
+                prefs.getString(keyMessage(model.id), "Falha no download.") ?: "Falha no download."
+            )
+            else -> if (downloaded > 0L) {
+                CatalogDownloadState.Paused(downloaded, total, "Download parcial disponível")
+            } else {
+                CatalogDownloadState.Idle
             }
         }
     }
@@ -93,16 +107,96 @@ class CatalogDownloadManager(context: Context) {
         return File(File(root, model.id), model.fileName)
     }
 
-    private fun downloadId(modelId: String): Long? {
-        val value = prefs.getLong(key(modelId), NO_DOWNLOAD)
-        return value.takeUnless { it == NO_DOWNLOAD }
+    internal fun partialFile(model: CatalogModel): File {
+        val destination = destinationFile(model)
+        destination.parentFile?.mkdirs()
+        return File(destination.parentFile, destination.name + ".part")
     }
 
-    private fun key(modelId: String) = "download_$modelId"
+    internal fun isUserPaused(modelId: String): Boolean =
+        prefs.getBoolean(keyPaused(modelId), false)
+
+    internal fun markPending(modelId: String, downloadedBytes: Long, totalBytes: Long) {
+        writeState(modelId, STATE_PENDING, downloadedBytes, totalBytes, null)
+    }
+
+    internal fun markRunning(modelId: String, downloadedBytes: Long, totalBytes: Long) {
+        writeState(modelId, STATE_RUNNING, downloadedBytes, totalBytes, null)
+    }
+
+    internal fun markPaused(modelId: String, downloadedBytes: Long, totalBytes: Long, reason: String?) {
+        writeState(modelId, STATE_PAUSED, downloadedBytes, totalBytes, reason)
+    }
+
+    internal fun markSuccessful(modelId: String, downloadedBytes: Long) {
+        writeState(modelId, STATE_SUCCESS, downloadedBytes, downloadedBytes, null)
+    }
+
+    internal fun markFailed(modelId: String, downloadedBytes: Long, totalBytes: Long, message: String) {
+        writeState(modelId, STATE_FAILED, downloadedBytes, totalBytes, message)
+    }
+
+    private fun enqueue(model: CatalogModel, policy: ExistingWorkPolicy) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        val request = OneTimeWorkRequestBuilder<CatalogDownloadWorker>()
+            .setInputData(workDataOf(CatalogDownloadWorker.KEY_MODEL_ID to model.id))
+            .setConstraints(constraints)
+            .addTag(WORK_TAG)
+            .build()
+        workManager.enqueueUniqueWork(workName(model.id), policy, request)
+    }
+
+    private fun setUserPaused(modelId: String, paused: Boolean) {
+        prefs.edit().putBoolean(keyPaused(modelId), paused).apply()
+    }
+
+    private fun savedDownloaded(modelId: String): Long = prefs.getLong(keyDownloaded(modelId), 0L)
+    private fun savedTotal(modelId: String): Long = prefs.getLong(keyTotal(modelId), 0L)
+
+    private fun writeState(
+        modelId: String,
+        state: String,
+        downloadedBytes: Long,
+        totalBytes: Long,
+        message: String?,
+    ) {
+        prefs.edit()
+            .putString(keyState(modelId), state)
+            .putLong(keyDownloaded(modelId), downloadedBytes.coerceAtLeast(0L))
+            .putLong(keyTotal(modelId), totalBytes.coerceAtLeast(0L))
+            .apply {
+                if (message == null) remove(keyMessage(modelId)) else putString(keyMessage(modelId), message)
+            }
+            .apply()
+    }
+
+    private fun clear(modelId: String) {
+        prefs.edit()
+            .remove(keyState(modelId))
+            .remove(keyDownloaded(modelId))
+            .remove(keyTotal(modelId))
+            .remove(keyMessage(modelId))
+            .remove(keyPaused(modelId))
+            .apply()
+    }
+
+    private fun workName(modelId: String) = "catalog-download-$modelId"
+    private fun keyState(modelId: String) = "state_$modelId"
+    private fun keyDownloaded(modelId: String) = "downloaded_$modelId"
+    private fun keyTotal(modelId: String) = "total_$modelId"
+    private fun keyMessage(modelId: String) = "message_$modelId"
+    private fun keyPaused(modelId: String) = "paused_$modelId"
 
     companion object {
-        private const val PREFS_NAME = "catalog_downloads"
-        private const val NO_DOWNLOAD = -1L
-        const val ERROR_MISSING_FILE = -10_001
+        private const val PREFS_NAME = "catalog_downloads_v2"
+        private const val WORK_TAG = "catalog-model-download"
+        private const val STATE_IDLE = "IDLE"
+        private const val STATE_PENDING = "PENDING"
+        private const val STATE_RUNNING = "RUNNING"
+        private const val STATE_PAUSED = "PAUSED"
+        private const val STATE_SUCCESS = "SUCCESS"
+        private const val STATE_FAILED = "FAILED"
     }
 }
