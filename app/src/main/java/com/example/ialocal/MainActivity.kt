@@ -13,6 +13,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.data.ThemeMode
+import com.example.ialocal.ui.catalog.CatalogScreen
+import com.example.ialocal.ui.catalog.CatalogViewModel
 import com.example.ialocal.ui.chat.ChatScreen
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.home.HomeScreen
@@ -48,6 +50,22 @@ private fun LocalAiApp(container: AppContainer) {
                 viewModel = vm,
                 onOpenConversation = { id -> navController.navigate("chat/$id") },
                 onOpenSettings = { navController.navigate("settings") },
+                onOpenModels = { navController.navigate("models") },
+                onOpenCatalog = { navController.navigate("catalog") },
+            )
+        }
+
+        composable("catalog") {
+            val vm: CatalogViewModel = viewModel(
+                factory = CatalogViewModel.Factory(
+                    container.modelRepository,
+                    container.modelManager,
+                    container.modelDownloads,
+                )
+            )
+            CatalogScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
                 onOpenModels = { navController.navigate("models") },
             )
         }
