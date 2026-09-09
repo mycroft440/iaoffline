@@ -9,6 +9,7 @@ import com.example.ialocal.api.LocalApiAiGateway
 import com.example.ialocal.api.LocalApiServer
 import com.example.ialocal.data.AppDatabase
 import com.example.ialocal.data.ChatRepository
+import com.example.ialocal.data.ChatSessionRepository
 import com.example.ialocal.data.ThemeRepository
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.diagnostics.IntegrationSelfTest
@@ -28,6 +29,7 @@ class AppContainer(context: Context) {
 
     val diagnostics = AiEventLogger(appContext)
     val chatRepository = ChatRepository(database.chatDao())
+    val chatSession = ChatSessionRepository(appContext)
     val themeRepository = ThemeRepository(appContext)
     val attachmentImporter = AttachmentImporter(appContext)
     val attachmentProcessor = AttachmentContentProcessor(appContext)
