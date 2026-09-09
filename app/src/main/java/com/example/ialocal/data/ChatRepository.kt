@@ -7,6 +7,7 @@ class ChatRepository(
     private val dao: ChatDao,
 ) {
     val conversations: Flow<List<ConversationListItem>> = dao.observeConversationList()
+    val attachments: Flow<List<ChatAttachmentListItem>> = dao.observeAllAttachments()
 
     fun observeConversation(id: String): Flow<ConversationEntity?> = dao.observeConversation(id)
 
