@@ -4,8 +4,8 @@ package com.example.ialocal.models
  * Curated GGUF downloads shown inside the app.
  *
  * Keep this list intentionally small: every entry should be a single-file GGUF that can be
- * consumed by the current llama.cpp runtime. URLs point directly to the model file so Android's
- * DownloadManager can handle multi-gigabyte transfers without sending the user to a browser.
+ * consumed by the current llama.cpp runtime. URLs point directly to the model file so the app can
+ * manage multi-gigabyte transfers without sending the user to a browser.
  */
 data class CatalogModel(
     val id: String,
@@ -22,6 +22,18 @@ data class CatalogModel(
 
 object ModelCatalog {
     val items: List<CatalogModel> = listOf(
+        CatalogModel(
+            id = "qwen3-8b-q4-k-m",
+            name = "Qwen3 8B",
+            variant = "Q4_K_M · recomendado",
+            description = "Modelo menor e mais indicado para celulares. Boa qualidade com cerca de 5 GB de armazenamento.",
+            fileName = "Qwen3-8B-Q4_K_M.gguf",
+            approximateSizeBytes = 5_030_000_000L,
+            downloadUrl = "https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true",
+            source = "bartowski/Qwen_Qwen3-8B-GGUF",
+            license = "Apache-2.0",
+            recommended = true,
+        ),
         CatalogModel(
             id = "qwen38-27b-iq4-xs",
             name = "Qwen3.8 27B",
@@ -47,14 +59,13 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen38-27b-q4-k-m",
             name = "Qwen3.8 27B",
-            variant = "Q4_K_M · recomendado",
-            description = "Opção padrão de boa qualidade para aparelhos com memória e espaço suficientes.",
+            variant = "Q4_K_M · melhor qualidade",
+            description = "Opção de maior qualidade entre os Q4, voltada a aparelhos com bastante RAM e espaço.",
             fileName = "Qwen3.8-27B-Q4_K_M.gguf",
             approximateSizeBytes = 17_770_000_000L,
             downloadUrl = "https://huggingface.co/bartowski/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_K_M.gguf?download=true",
             source = "bartowski/Qwen3.8-27B-GGUF",
             license = "Apache-2.0",
-            recommended = true,
         ),
     )
 
