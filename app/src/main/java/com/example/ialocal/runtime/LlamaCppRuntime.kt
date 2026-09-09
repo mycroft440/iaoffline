@@ -9,7 +9,6 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
@@ -31,19 +30,24 @@ class LlamaCppRuntime(
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
     private var loadedModelId: String? = null
+    private var loadedTemperature: Float = DEFAULT_TEMPERATURE
     /** setSystemPrompt can only be called directly after a load in the pinned binding. */
     private var requestSessionConsumed = false
 
     override suspend fun warmUp(model: AiModelEntity) {
         mutex.withLock {
-            ensureFreshLoaded(model, forceReload = loadedModelId != model.id || requestSessionConsumed)
+            ensureFreshLoaded(
+                model,
+                forceReload = loadedModelId != model.id || requestSessionConsumed,
+                temperature = DEFAULT_TEMPERATURE,
+            )
         }
     }
 
     override suspend fun verify(model: AiModelEntity): VerificationResult = mutex.withLock {
         try {
             logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
-            ensureFreshLoaded(model, forceReload = true)
+            ensureFreshLoaded(model, forceReload = true, temperature = DEFAULT_TEMPERATURE)
             engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
             requestSessionConsumed = true
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
@@ -52,8 +56,8 @@ class LlamaCppRuntime(
             require(output.isNotBlank()) { "O runtime carregou o modelo, mas a inferência de teste não gerou texto." }
             logger?.info("INFERENCE", "Smoke test respondeu: ${output.take(80)}")
 
-            // Reset once more, so the first real API request may set its own system prompt.
-            ensureFreshLoaded(model, forceReload = true)
+            // Reset once more, so the first real API request may set its own system prompt/temperature.
+            ensureFreshLoaded(model, forceReload = true, temperature = DEFAULT_TEMPERATURE)
             VerificationResult(output)
         } catch (t: Throwable) {
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
@@ -68,13 +72,17 @@ class LlamaCppRuntime(
         messages: List<AiChatMessage>,
         temperature: Float,
         maxTokens: Int,
-    ): Flow<String> = flow {
-        require(kotlin.math.abs(temperature - FIXED_TEMPERATURE) < 0.0001f) {
-            "O binding llama.cpp Android v0.4.0 usa temperature fixa em $FIXED_TEMPERATURE."
+    ): Flow<String> = kotlinx.coroutines.flow.flow {
+        require(temperature.isFinite() && temperature in 0f..2f) {
+            "A temperatura deve ficar entre 0 e 2."
         }
         mutex.lock()
         try {
-            ensureFreshLoaded(model, forceReload = requestSessionConsumed || loadedModelId != model.id)
+            ensureFreshLoaded(
+                model,
+                forceReload = requestSessionConsumed || loadedModelId != model.id,
+                temperature = temperature,
+            )
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
                 messages = messages,
@@ -88,7 +96,7 @@ class LlamaCppRuntime(
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
             logger?.info(
                 "INFERENCE",
-                "Gerando com ${model.apiModelId}; contexto=${model.contextLength}; maxTokens=$maxTokens; streaming=true",
+                "Gerando com ${model.apiModelId}; contexto=${model.contextLength}; temperature=$temperature; maxTokens=$maxTokens; streaming=true",
             )
             var emitted = 0
             engine.sendUserPrompt(
@@ -133,9 +141,19 @@ class LlamaCppRuntime(
         mutex.withLock { unloadLocked() }
     }
 
-    private suspend fun ensureFreshLoaded(model: AiModelEntity, forceReload: Boolean) {
+    private suspend fun ensureFreshLoaded(
+        model: AiModelEntity,
+        forceReload: Boolean,
+        temperature: Float,
+    ) {
         awaitEngineInitialized()
-        if (!forceReload && loadedModelId == model.id && !requestSessionConsumed) {
+        val sameTemperature = kotlin.math.abs(loadedTemperature - temperature) < 0.0001f
+        if (
+            !forceReload &&
+            loadedModelId == model.id &&
+            sameTemperature &&
+            !requestSessionConsumed
+        ) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
         }
@@ -144,16 +162,18 @@ class LlamaCppRuntime(
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         logger?.info(
             "MODEL_LOAD",
-            "Carregando ${model.name} (${model.filePath}) com contexto=${model.contextLength}",
+            "Carregando ${model.name} (${model.filePath}) com contexto=${model.contextLength}; temperature=$temperature",
         )
         try {
-            engine.loadModel(model.filePath, model.contextLength)
+            engine.loadModel(model.filePath, model.contextLength, temperature)
             loadedModelId = model.id
+            loadedTemperature = temperature
             requestSessionConsumed = false
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("MODEL_LOAD", "Modelo READY: ${model.apiModelId}")
         } catch (t: Throwable) {
             loadedModelId = null
+            loadedTemperature = DEFAULT_TEMPERATURE
             requestSessionConsumed = false
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
             logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}", t)
@@ -177,6 +197,7 @@ class LlamaCppRuntime(
         val current = engine.state.value
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
+            loadedTemperature = DEFAULT_TEMPERATURE
             requestSessionConsumed = false
             return
         }
@@ -187,6 +208,7 @@ class LlamaCppRuntime(
         runCatching { engine.cleanUp() }
             .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
         loadedModelId = null
+        loadedTemperature = DEFAULT_TEMPERATURE
         requestSessionConsumed = false
         _state.value = RuntimeState(RuntimeStatus.IDLE)
     }
@@ -206,6 +228,6 @@ class LlamaCppRuntime(
     }
 
     companion object {
-        const val FIXED_TEMPERATURE = 0.3f
+        const val DEFAULT_TEMPERATURE = 0.3f
     }
 }
