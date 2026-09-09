@@ -76,7 +76,7 @@ data class AiModelEntity(
     val sizeBytes: Long,
     val importedAt: Long,
     val isActive: Boolean = false,
-    /** Effective context supported by the bundled Android runtime. */
+    /** Context actually used by the native runtime for this model on this device. */
     val contextLength: Int = 8192,
     val sizeLabel: String? = null,
     val ggufVersion: Int = 0,
@@ -85,6 +85,17 @@ data class AiModelEntity(
     val verificationStatus: String = ModelVerificationStatus.IMPORTED.name,
     val lastError: String? = null,
     val lastVerifiedAt: Long? = null,
+    /** Largest context that completed a real probe in the dedicated calibration process. */
+    val calibratedContextLength: Int? = null,
+    val contextCalibrationStatus: String = ContextCalibrationStatus.NOT_CALIBRATED.name,
+    /** Device + runtime fingerprint. A change invalidates an old calibration. */
+    val contextCalibrationKey: String? = null,
+    val contextCalibrationUpdatedAt: Long? = null,
+    /** First/last candidate known to have failed while calibrating. */
+    val lastFailedContextLength: Int? = null,
+    /** Android exit reason or probe failure reported for the failed candidate. */
+    val lastContextExitReason: String? = null,
+    val contextCalibrationError: String? = null,
 )
 
 @Entity(
@@ -133,6 +144,7 @@ enum class MessageRole { USER, ASSISTANT, SYSTEM }
 enum class MessageStatus { SENDING, COMPLETE, ERROR }
 enum class AttachmentType { FILE, AUDIO }
 enum class ModelVerificationStatus { IMPORTED, VERIFYING, VERIFIED, ERROR }
+enum class ContextCalibrationStatus { NOT_CALIBRATED, RUNNING, CALIBRATED, FAILED }
 
 data class PendingAttachment(
     val id: String,
