@@ -67,7 +67,7 @@ class ModelRepository(
                 )
             }
 
-            val model = persistGguf(destination, preview.suggestedName)
+            val model = persistGguf(destination, preview.suggestedName, id)
             logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
             model
         } catch (t: Throwable) {
@@ -102,21 +102,24 @@ class ModelRepository(
         model
     }
 
-    private suspend fun persistGguf(file: File, suggestedName: String?): AiModelEntity {
+    private suspend fun persistGguf(
+        file: File,
+        suggestedName: String?,
+        modelId: String = UUID.randomUUID().toString(),
+    ): AiModelEntity {
         val metadata = inspector.inspect(file)
         require(metadata.tensorCount > 0) { "O GGUF não contém tensors válidos." }
 
-        val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() }
             ?: suggestedName?.trim().takeUnless { it.isNullOrBlank() }
             ?: file.nameWithoutExtension
-        val apiId = buildApiId(cleanName, id)
+        val apiId = buildApiId(cleanName, modelId)
         val declaredContext = metadata.contextLength
         val initialContext = (declaredContext ?: SAFE_INITIAL_CONTEXT)
             .coerceIn(MIN_CONTEXT, SAFE_INITIAL_CONTEXT)
         val model = AiModelEntity(
-            id = id,
+            id = modelId,
             name = cleanName,
             apiModelId = apiId,
             format = "GGUF",
@@ -139,7 +142,7 @@ class ModelRepository(
             AgentEntity(
                 id = UUID.randomUUID().toString(),
                 name = "$cleanName · Agente",
-                modelId = id,
+                modelId = modelId,
                 systemPrompt = DEFAULT_SYSTEM_PROMPT,
                 temperature = 0.3f,
                 maxTokens = 4096,
