@@ -20,9 +20,10 @@ else
   git -C "${LLAMA_DIR}" clean -fdx
 fi
 
-# IA Offline intentionally carries a small patch over the pinned Android binding:
+# IA Offline intentionally carries a small reproducible patch over the pinned Android binding:
 # - Android 10 (API 29) minimum instead of API 33;
-# - configurable native context size instead of the hard-coded 8192 tokens;
+# - configurable native context size instead of the hard-coded 8192-token runtime ceiling;
+# - configurable sampler temperature per request;
 # - cleanup of a native model allocated before a recoverable State.Error.
 # Keeping the patch here makes CI rebuild and verify the exact AAR used by the app.
 python3 - "${ENGINE_API_FILE}" "${ENGINE_FILE}" "${NATIVE_FILE}" "${LIB_GRADLE_FILE}" <<'PY'
@@ -44,11 +45,24 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_count(text: str, old: str, new: str, expected: int, label: str) -> str:
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(
+            f"Unexpected llama.cpp v0.4.0 source shape in {label}: expected {expected} matches, got {count}"
+        )
+    return text.replace(old, new)
+
+
 api = api_path.read_text()
 api = replace_once(
     api,
     "    suspend fun loadModel(pathToModel: String)\n",
-    "    suspend fun loadModel(pathToModel: String, contextSize: Int = 8192)\n",
+    "    suspend fun loadModel(\n"
+    "        pathToModel: String,\n"
+    "        contextSize: Int = 8192,\n"
+    "        temperature: Float = 0.3f,\n"
+    "    )\n",
     "InferenceEngine.kt",
 )
 api_path.write_text(api)
@@ -57,7 +71,7 @@ engine = engine_path.read_text()
 engine = replace_once(
     engine,
     "    private external fun prepare(): Int\n",
-    "    private external fun prepare(contextSize: Int): Int\n",
+    "    private external fun prepare(contextSize: Int, temperature: Float): Int\n",
     "InferenceEngineImpl.kt",
 )
 engine = replace_once(
@@ -74,12 +88,18 @@ engine = replace_once(
     "                \"Cannot load model in ${_state.value.javaClass.simpleName}!\"\n"
     "            }\n\n"
     "            try {",
-    "    override suspend fun loadModel(pathToModel: String, contextSize: Int) =\n"
-    "        withContext(llamaDispatcher) {\n"
+    "    override suspend fun loadModel(\n"
+    "        pathToModel: String,\n"
+    "        contextSize: Int,\n"
+    "        temperature: Float,\n"
+    "    ) = withContext(llamaDispatcher) {\n"
     "            check(_state.value is InferenceEngine.State.Initialized) {\n"
     "                \"Cannot load model in ${_state.value.javaClass.simpleName}!\"\n"
     "            }\n"
-    "            require(contextSize >= 1024) { \"Context size must be at least 1024 tokens\" }\n\n"
+    "            require(contextSize >= 1024) { \"Context size must be at least 1024 tokens\" }\n"
+    "            require(temperature.isFinite() && temperature in 0f..2f) {\n"
+    "                \"Temperature must be between 0 and 2\"\n"
+    "            }\n\n"
     "            try {",
     "InferenceEngineImpl.kt",
 )
@@ -95,7 +115,7 @@ engine = replace_once(
     "                    if (it != 0) throw UnsupportedArchitectureException()\n"
     "                }\n"
     "                _nativeModelLoaded = true\n"
-    "                prepare(contextSize).let {",
+    "                prepare(contextSize, temperature).let {",
     "InferenceEngineImpl.kt",
 )
 engine = replace_once(
@@ -141,12 +161,44 @@ native = replace_once(
     native,
     "Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {\n"
     "    auto *context = init_context(g_model);",
-    "Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/, jint context_size) {\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(\n"
+    "        JNIEnv * /*env*/, jobject /*unused*/, jint context_size, jfloat temperature) {\n"
     "    if (context_size < 1024) {\n"
     "        LOGe(\"%s: context size must be at least 1024, got %d\", __func__, context_size);\n"
     "        return 2;\n"
     "    }\n"
+    "    if (!std::isfinite(temperature) || temperature < 0.0f || temperature > 2.0f) {\n"
+    "        LOGe(\"%s: invalid temperature %f\", __func__, temperature);\n"
+    "        return 3;\n"
+    "    }\n"
     "    auto *context = init_context(g_model, context_size);",
+    "ai_chat.cpp",
+)
+native = replace_once(
+    native,
+    "    g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);\n",
+    "    g_sampler = new_sampler((float) temperature);\n",
+    "ai_chat.cpp",
+)
+# The upstream Android example allocates a requested context but still checks overflow against
+# DEFAULT_CONTEXT_SIZE (8192) in four places. Use the actual live context capacity everywhere.
+native = replace_once(
+    native,
+    "        if (start_pos + i + cur_batch_size >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {",
+    "        if (start_pos + i + cur_batch_size >= (int) llama_n_ctx(context) - OVERFLOW_HEADROOM) {",
+    "ai_chat.cpp",
+)
+native = replace_count(
+    native,
+    "    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;",
+    "    const int max_batch_size = (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM;",
+    2,
+    "ai_chat.cpp",
+)
+native = replace_once(
+    native,
+    "    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {",
+    "    if (current_position >= (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM) {",
     "ai_chat.cpp",
 )
 native_path.write_text(native)
@@ -160,7 +212,7 @@ gradle = replace_once(
 )
 gradle_path.write_text(gradle)
 
-print("Applied IA Offline Android 10 + dynamic-context + cleanup patches")
+print("Applied IA Offline Android 10 + dynamic-context + configurable-temperature + cleanup patches")
 PY
 
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
