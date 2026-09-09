@@ -15,6 +15,7 @@ import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentContextBuilder
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.models.CatalogDownloadManager
 import com.example.ialocal.models.ContextCalibrationManager
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
@@ -33,6 +34,7 @@ class AppContainer(context: Context) {
     private val attachmentContextBuilder = AttachmentContextBuilder()
 
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
+    val modelDownloads = CatalogDownloadManager(appContext)
     val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics)
     val contextCalibration = ContextCalibrationManager(appContext, modelRepository, diagnostics)
     val modelManager = ModelManager(modelRepository, modelRuntime, contextCalibration, diagnostics)
