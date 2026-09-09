@@ -142,7 +142,7 @@ class ModelRepository(
                 modelId = id,
                 systemPrompt = DEFAULT_SYSTEM_PROMPT,
                 temperature = 0.3f,
-                maxTokens = 1024,
+                maxTokens = 4096,
                 isDefault = false,
                 createdAt = now,
                 updatedAt = now,
@@ -285,7 +285,6 @@ class ModelRepository(
         /** Safe first load. The runtime can use larger values after per-device calibration. */
         const val SAFE_INITIAL_CONTEXT = 8192
         const val DEFAULT_SYSTEM_PROMPT =
-            "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
-                "Quando não souber algo, diga que não sabe em vez de inventar."
+            "Se empenhe ao máximo nas tarefas e use a web quando precisar, nunca pressuponha nada."
     }
 }
