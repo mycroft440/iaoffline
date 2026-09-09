@@ -5,7 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LLAMA_TAG="${LLAMA_CPP_TAG:-v0.4.0}"
 LLAMA_DIR="${ROOT_DIR}/third_party/llama.cpp"
 AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
+ENGINE_API_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
+NATIVE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
+LIB_GRADLE_FILE="${LLAMA_DIR}/examples/llama.android/lib/build.gradle.kts"
 
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
 
@@ -17,46 +20,147 @@ else
   git -C "${LLAMA_DIR}" clean -fdx
 fi
 
-# v0.4.0 resets State.Error without unloading a model that may already have
-# been allocated natively. Track native ownership and unload it on recovery so
-# retrying a failed request/model does not leak or overwrite the previous model.
-python3 - "${ENGINE_FILE}" <<'PY'
+# IA Offline intentionally carries a small patch over the pinned Android binding:
+# - Android 10 (API 29) minimum instead of API 33;
+# - configurable native context size instead of the hard-coded 8192 tokens;
+# - cleanup of a native model allocated before a recoverable State.Error.
+# Keeping the patch here makes CI rebuild and verify the exact AAR used by the app.
+python3 - "${ENGINE_API_FILE}" "${ENGINE_FILE}" "${NATIVE_FILE}" "${LIB_GRADLE_FILE}" <<'PY'
 from pathlib import Path
 import sys
 
-path = Path(sys.argv[1])
-text = path.read_text()
+api_path = Path(sys.argv[1])
+engine_path = Path(sys.argv[2])
+native_path = Path(sys.argv[3])
+gradle_path = Path(sys.argv[4])
 
-def replace_once(old: str, new: str) -> None:
-    global text
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"Unexpected llama.cpp v0.4.0 source shape: expected 1 match, got {count}")
-    text = text.replace(old, new, 1)
+        raise SystemExit(
+            f"Unexpected llama.cpp v0.4.0 source shape in {label}: expected 1 match, got {count}"
+        )
+    return text.replace(old, new, 1)
 
-replace_once(
+
+api = api_path.read_text()
+api = replace_once(
+    api,
+    "    suspend fun loadModel(pathToModel: String)\n",
+    "    suspend fun loadModel(pathToModel: String, contextSize: Int = 8192)\n",
+    "InferenceEngine.kt",
+)
+api_path.write_text(api)
+
+engine = engine_path.read_text()
+engine = replace_once(
+    engine,
+    "    private external fun prepare(): Int\n",
+    "    private external fun prepare(contextSize: Int): Int\n",
+    "InferenceEngineImpl.kt",
+)
+engine = replace_once(
+    engine,
     "    @Volatile\n    private var _cancelGeneration = false\n",
     "    @Volatile\n    private var _cancelGeneration = false\n    private var _nativeModelLoaded = false\n",
+    "InferenceEngineImpl.kt",
 )
-replace_once(
-    "                load(pathToModel).let {\n                    // TODO-han.yin: find a better way to pass other error codes\n                    if (it != 0) throw UnsupportedArchitectureException()\n                }\n                prepare().let {",
-    "                load(pathToModel).let {\n                    // TODO-han.yin: find a better way to pass other error codes\n                    if (it != 0) throw UnsupportedArchitectureException()\n                }\n                _nativeModelLoaded = true\n                prepare().let {",
+engine = replace_once(
+    engine,
+    "    override suspend fun loadModel(pathToModel: String) =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            check(_state.value is InferenceEngine.State.Initialized) {\n"
+    "                \"Cannot load model in ${_state.value.javaClass.simpleName}!\"\n"
+    "            }\n\n"
+    "            try {",
+    "    override suspend fun loadModel(pathToModel: String, contextSize: Int) =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            check(_state.value is InferenceEngine.State.Initialized) {\n"
+    "                \"Cannot load model in ${_state.value.javaClass.simpleName}!\"\n"
+    "            }\n"
+    "            require(contextSize >= 1024) { \"Context size must be at least 1024 tokens\" }\n\n"
+    "            try {",
+    "InferenceEngineImpl.kt",
 )
-replace_once(
+engine = replace_once(
+    engine,
+    "                load(pathToModel).let {\n"
+    "                    // TODO-han.yin: find a better way to pass other error codes\n"
+    "                    if (it != 0) throw UnsupportedArchitectureException()\n"
+    "                }\n"
+    "                prepare().let {",
+    "                load(pathToModel).let {\n"
+    "                    // TODO-han.yin: find a better way to pass other error codes\n"
+    "                    if (it != 0) throw UnsupportedArchitectureException()\n"
+    "                }\n"
+    "                _nativeModelLoaded = true\n"
+    "                prepare(contextSize).let {",
+    "InferenceEngineImpl.kt",
+)
+engine = replace_once(
+    engine,
     "                    unload()\n\n                    _state.value = InferenceEngine.State.Initialized",
     "                    unload()\n                    _nativeModelLoaded = false\n\n                    _state.value = InferenceEngine.State.Initialized",
+    "InferenceEngineImpl.kt",
 )
-replace_once(
-    "                is InferenceEngine.State.Error -> {\n                    Log.i(TAG, \"Resetting error states...\")\n                    _state.value = InferenceEngine.State.Initialized\n                    Log.i(TAG, \"States reset!\")\n                    Unit\n                }",
-    "                is InferenceEngine.State.Error -> {\n                    Log.i(TAG, \"Resetting error states...\")\n                    if (_nativeModelLoaded) {\n                        Log.i(TAG, \"Error occurred after native model allocation; unloading it...\")\n                        unload()\n                        _nativeModelLoaded = false\n                    }\n                    _state.value = InferenceEngine.State.Initialized\n                    Log.i(TAG, \"States reset!\")\n                    Unit\n                }",
+engine = replace_once(
+    engine,
+    "                is InferenceEngine.State.Error -> {\n"
+    "                    Log.i(TAG, \"Resetting error states...\")\n"
+    "                    _state.value = InferenceEngine.State.Initialized\n"
+    "                    Log.i(TAG, \"States reset!\")\n"
+    "                    Unit\n"
+    "                }",
+    "                is InferenceEngine.State.Error -> {\n"
+    "                    Log.i(TAG, \"Resetting error states...\")\n"
+    "                    if (_nativeModelLoaded) {\n"
+    "                        Log.i(TAG, \"Error occurred after native model allocation; unloading it...\")\n"
+    "                        unload()\n"
+    "                        _nativeModelLoaded = false\n"
+    "                    }\n"
+    "                    _state.value = InferenceEngine.State.Initialized\n"
+    "                    Log.i(TAG, \"States reset!\")\n"
+    "                    Unit\n"
+    "                }",
+    "InferenceEngineImpl.kt",
 )
-replace_once(
+engine = replace_once(
+    engine,
     "                else -> { unload(); shutdown() }",
-    "                else -> {\n                    if (_nativeModelLoaded) { unload(); _nativeModelLoaded = false }\n                    shutdown()\n                }",
+    "                else -> {\n"
+    "                    if (_nativeModelLoaded) { unload(); _nativeModelLoaded = false }\n"
+    "                    shutdown()\n"
+    "                }",
+    "InferenceEngineImpl.kt",
 )
+engine_path.write_text(engine)
 
-path.write_text(text)
-print("Applied IA Offline native-model cleanup patch")
+native = native_path.read_text()
+native = replace_once(
+    native,
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {\n"
+    "    auto *context = init_context(g_model);",
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/, jint context_size) {\n"
+    "    if (context_size < 1024) {\n"
+    "        LOGe(\"%s: context size must be at least 1024, got %d\", __func__, context_size);\n"
+    "        return 2;\n"
+    "    }\n"
+    "    auto *context = init_context(g_model, context_size);",
+    "ai_chat.cpp",
+)
+native_path.write_text(native)
+
+gradle = gradle_path.read_text()
+gradle = replace_once(
+    gradle,
+    "        minSdk = 33\n",
+    "        minSdk = 29\n",
+    "lib/build.gradle.kts",
+)
+gradle_path.write_text(gradle)
+
+print("Applied IA Offline Android 10 + dynamic-context + cleanup patches")
 PY
 
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
