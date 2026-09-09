@@ -34,10 +34,28 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     fun observeMessages(conversationId: String): Flow<List<MessageWithAttachments>>
 
-
     @Transaction
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     suspend fun getMessages(conversationId: String): List<MessageWithAttachments>
+
+    @Query(
+        """
+        SELECT a.id AS id,
+               m.conversationId AS conversationId,
+               c.title AS conversationTitle,
+               a.type AS type,
+               a.fileName AS fileName,
+               a.localPath AS localPath,
+               a.mimeType AS mimeType,
+               a.sizeBytes AS sizeBytes,
+               a.createdAt AS createdAt
+        FROM attachments a
+        INNER JOIN messages m ON m.id = a.messageId
+        INNER JOIN conversations c ON c.id = m.conversationId
+        ORDER BY a.createdAt DESC
+        """
+    )
+    fun observeAllAttachments(): Flow<List<ChatAttachmentListItem>>
 
     @Query(
         """
