@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.models.CatalogDownloadManager
 import com.example.ialocal.models.CatalogDownloadState
 import com.example.ialocal.models.CatalogModel
@@ -24,10 +25,13 @@ import kotlinx.coroutines.launch
 data class CatalogItemUi(
     val model: CatalogModel,
     val download: CatalogDownloadState,
-    val installed: Boolean,
+    val installedModelId: String?,
+    val verified: Boolean,
     val installing: Boolean,
     val installError: String? = null,
-)
+) {
+    val installed: Boolean get() = installedModelId != null
+}
 
 class CatalogViewModel(
     private val repository: ModelRepository,
@@ -50,19 +54,29 @@ class CatalogViewModel(
         installErrors,
     ) { installed, states, activeInstall, errors ->
         ModelCatalog.items.map { item ->
+            val installedModel = installed.firstOrNull {
+                sameFile(it.filePath, downloads.destinationFile(item))
+            }
             CatalogItemUi(
                 model = item,
                 download = states[item.id] ?: CatalogDownloadState.Idle,
-                installed = installed.any { sameFile(it.filePath, downloads.destinationFile(item)) },
+                installedModelId = installedModel?.id,
+                verified = installedModel?.verificationStatus == ModelVerificationStatus.VERIFIED.name,
                 installing = activeInstall == item.id,
-                installError = errors[item.id],
+                installError = errors[item.id] ?: installedModel?.lastError,
             )
         }
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
         ModelCatalog.items.map {
-            CatalogItemUi(it, CatalogDownloadState.Idle, installed = false, installing = false)
+            CatalogItemUi(
+                model = it,
+                download = CatalogDownloadState.Idle,
+                installedModelId = null,
+                verified = false,
+                installing = false,
+            )
         },
     )
 
@@ -79,13 +93,23 @@ class CatalogViewModel(
     fun download(modelId: String) {
         val model = ModelCatalog.byId(modelId) ?: return
         if (items.value.firstOrNull { it.model.id == modelId }?.installed == true) return
-
-        val current = downloads.state(model)
-        if (current is CatalogDownloadState.Failed) downloads.cancel(modelId)
         installErrors.value = installErrors.value - modelId
-
         runCatching { downloads.start(model) }
             .onFailure { _message.value = it.message ?: "Não foi possível iniciar o download." }
+        refreshDownloads()
+    }
+
+    fun pause(modelId: String) {
+        if (installingId.value == modelId) return
+        downloads.pause(modelId)
+        refreshDownloads()
+    }
+
+    fun resume(modelId: String) {
+        if (items.value.firstOrNull { it.model.id == modelId }?.installed == true) return
+        installErrors.value = installErrors.value - modelId
+        runCatching { downloads.resume(modelId) }
+            .onFailure { _message.value = it.message ?: "Não foi possível continuar o download." }
         refreshDownloads()
     }
 
@@ -127,17 +151,17 @@ class CatalogViewModel(
         val file = (downloadStates.value[item.id] as? CatalogDownloadState.Successful)?.file ?: return
 
         installingId.value = item.id
-        _message.value = "Download concluído. Verificando ${item.name}…"
+        _message.value = "Download concluído. Configurando ${item.name} automaticamente…"
         try {
             manager.installDownloaded(file, "${item.name} ${item.variant.substringBefore('·').trim()}")
             downloads.forget(item.id)
             installErrors.value = installErrors.value - item.id
-            _message.value = "${item.name} instalado, verificado e pronto para uso."
+            _message.value = "${item.name} instalado, verificado e calibrado. Toque em Abrir para revisar as configurações."
         } catch (t: Throwable) {
             val wasAdopted = repository.getModels().any { sameFile(it.filePath, file) }
             if (wasAdopted) {
                 downloads.forget(item.id)
-                _message.value = "Modelo baixado e registrado, mas a verificação falhou: ${t.message ?: "erro desconhecido"}. Você pode tentar novamente em Modelos."
+                _message.value = "O modelo foi baixado e registrado, mas a configuração automática falhou: ${t.message ?: "erro desconhecido"}."
             } else {
                 val message = t.message ?: "Falha ao instalar o GGUF baixado."
                 installErrors.value = installErrors.value + (item.id to message)
