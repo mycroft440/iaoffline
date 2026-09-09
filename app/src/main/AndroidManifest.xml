@@ -27,5 +27,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Native context probes intentionally run outside the UI process. A low-memory
+          kill or native crash at an aggressive context size must not take the app UI
+          down with it. This is a same-UID private process so it can read imported GGUFs.
+        -->
+        <service
+            android:name=".models.ContextProbeService"
+            android:exported="false"
+            android:process=":ai_context_probe" />
     </application>
 </manifest>
