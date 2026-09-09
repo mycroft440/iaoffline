@@ -15,6 +15,7 @@ import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentContextBuilder
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.models.ContextCalibrationManager
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.LlamaCppRuntime
@@ -33,7 +34,8 @@ class AppContainer(context: Context) {
 
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
     val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics)
-    val modelManager = ModelManager(modelRepository, modelRuntime, diagnostics)
+    val contextCalibration = ContextCalibrationManager(appContext, modelRepository, diagnostics)
+    val modelManager = ModelManager(modelRepository, modelRuntime, contextCalibration, diagnostics)
     val agentTools = AgentToolRegistry(chatRepository, diagnostics)
     val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools)
 
