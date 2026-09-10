@@ -8,6 +8,7 @@ AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_API_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
 NATIVE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
+LOGGING_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/logging.h"
 LIB_GRADLE_FILE="${LLAMA_DIR}/examples/llama.android/lib/build.gradle.kts"
 
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
@@ -21,19 +22,20 @@ else
 fi
 
 # IA Offline intentionally carries a small reproducible patch over the pinned Android binding:
-# - Android 10 (API 29) minimum instead of API 33;
+# - Android 10 (API 29) minimum instead of API 33, including an API-29-safe logging fallback;
 # - configurable native context size instead of the hard-coded 8192-token runtime ceiling;
 # - configurable sampler temperature per request;
 # - cleanup of a native model allocated before a recoverable State.Error.
 # Keeping the patch here makes CI rebuild and verify the exact AAR used by the app.
-python3 - "${ENGINE_API_FILE}" "${ENGINE_FILE}" "${NATIVE_FILE}" "${LIB_GRADLE_FILE}" <<'PY'
+python3 - "${ENGINE_API_FILE}" "${ENGINE_FILE}" "${NATIVE_FILE}" "${LOGGING_FILE}" "${LIB_GRADLE_FILE}" <<'PY'
 from pathlib import Path
 import sys
 
 api_path = Path(sys.argv[1])
 engine_path = Path(sys.argv[2])
 native_path = Path(sys.argv[3])
-gradle_path = Path(sys.argv[4])
+logging_path = Path(sys.argv[4])
+gradle_path = Path(sys.argv[5])
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -202,6 +204,27 @@ native = replace_once(
     "ai_chat.cpp",
 )
 native_path.write_text(native)
+
+# __android_log_is_loggable() is only available from API 30. The upstream Android example has a
+# higher minSdk, so targeting Android 10 (API 29) requires a compile-time-safe fallback. Filtering
+# by LOG_MIN_LEVEL preserves the intended release/debug behavior without referencing an unavailable
+# API in API-29 builds.
+logging = logging_path.read_text()
+logging = replace_once(
+    logging,
+    "static inline int ai_should_log(int prio) {\n"
+    "    return __android_log_is_loggable(prio, LOG_TAG, LOG_MIN_LEVEL);\n"
+    "}",
+    "static inline int ai_should_log(int prio) {\n"
+    "#if __ANDROID_API__ >= 30\n"
+    "    return __android_log_is_loggable(prio, LOG_TAG, LOG_MIN_LEVEL);\n"
+    "#else\n"
+    "    return prio >= LOG_MIN_LEVEL;\n"
+    "#endif\n"
+    "}",
+    "logging.h",
+)
+logging_path.write_text(logging)
 
 gradle = gradle_path.read_text()
 gradle = replace_once(
