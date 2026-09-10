@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -47,9 +52,38 @@ jobs:
           sdkmanager --list_installed
 
       - name: Build llama.cpp Android binding
+        id: llama_build
         env:
           LLAMA_CPP_TAG: v0.4.0
-        run: ./scripts/prepare_llama_android.sh
+        shell: bash
+        run: |
+          set +e
+          ./scripts/prepare_llama_android.sh 2>&1 | tee /tmp/llama-build.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Publish native build error on PR
+        if: ${{ failure() && github.event_name == 'pull_request' && steps.llama_build.outputs.status != '0' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.existsSync('/tmp/llama-build.log')
+              ? fs.readFileSync('/tmp/llama-build.log', 'utf8')
+              : 'Log nativo não encontrado.';
+            const tail = log.split('\n').slice(-180).join('\n').slice(-60000);
+            const marker = '<!-- iaoffline-native-build-diagnostic -->';
+            const body = `${marker}\n### Diagnóstico temporário da build nativa\n\n\`\`\`text\n${tail}\n\`\`\``;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const previous = comments.find(c => c.body && c.body.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
 
       - name: Unit tests + debug APK
         run: gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
