@@ -60,12 +60,16 @@ class CatalogDownloadManager(context: Context) {
     }
 
     fun cancel(modelId: String) {
+        // Mark it as a user stop before cancelling WorkManager. The worker may receive its
+        // CancellationException a little later; keeping this marker prevents that old worker from
+        // recreating a Paused state after the user explicitly chose Cancelar.
+        setUserPaused(modelId, true)
         workManager.cancelUniqueWork(workName(modelId))
         ModelCatalog.byId(modelId)?.let { model ->
             destinationFile(model).delete()
             partialFile(model).delete()
         }
-        clear(modelId)
+        clearTransferState(modelId)
     }
 
     /** Keeps the downloaded GGUF but removes transfer bookkeeping after successful installation. */
@@ -172,14 +176,18 @@ class CatalogDownloadManager(context: Context) {
             .apply()
     }
 
-    private fun clear(modelId: String) {
+    private fun clearTransferState(modelId: String) {
         prefs.edit()
             .remove(keyState(modelId))
             .remove(keyDownloaded(modelId))
             .remove(keyTotal(modelId))
             .remove(keyMessage(modelId))
-            .remove(keyPaused(modelId))
             .apply()
+    }
+
+    private fun clear(modelId: String) {
+        clearTransferState(modelId)
+        prefs.edit().remove(keyPaused(modelId)).apply()
     }
 
     private fun workName(modelId: String) = "catalog-download-$modelId"
