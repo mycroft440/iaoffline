@@ -164,25 +164,35 @@ private fun CatalogModelCard(
             Spacer(Modifier.height(12.dp))
 
             when {
+                item.installing -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Text("Configurando automaticamente: validando GGUF, inferência real e contexto…")
+                }
                 item.installed -> {
                     FilledTonalButton(onClick = {}, enabled = false) {
                         Icon(Icons.Default.CheckCircle, contentDescription = null)
-                        Text(if (item.verified) "  Instalado" else "  Instalado · verificar")
+                        Text(if (item.verified) "  Instalado" else "  Configuração pendente")
                     }
                     item.installError?.let { error ->
                         Spacer(Modifier.height(6.dp))
                         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
+                    if (!item.verified) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onRetryInstall) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Text("  Continuar configuração")
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
-                    Button(onClick = onOpen, enabled = item.installedModelId != null) {
+                    Button(
+                        onClick = onOpen,
+                        enabled = item.installedModelId != null && item.verified,
+                    ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Text("  Abrir ${model.name}")
                     }
-                }
-                item.installing -> {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                    Text("Configurando automaticamente: validando GGUF, inferência real e contexto…")
                 }
                 item.installError != null && item.download is CatalogDownloadState.Successful -> {
                     Text(
