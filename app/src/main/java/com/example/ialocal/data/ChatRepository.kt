@@ -7,13 +7,14 @@ class ChatRepository(
     private val dao: ChatDao,
 ) {
     val conversations: Flow<List<ConversationListItem>> = dao.observeConversationList()
+    val attachments: Flow<List<ChatAttachmentListItem>> = dao.observeAllAttachments()
 
     fun observeConversation(id: String): Flow<ConversationEntity?> = dao.observeConversation(id)
 
     fun observeMessages(conversationId: String): Flow<List<MessageWithAttachments>> =
         dao.observeMessages(conversationId)
 
-    suspend fun createConversation(): String {
+    suspend fun createConversation(agentId: String? = null): String {
         val now = System.currentTimeMillis()
         val id = UUID.randomUUID().toString()
         dao.insertConversation(
@@ -22,10 +23,13 @@ class ChatRepository(
                 title = "Nova conversa",
                 createdAt = now,
                 updatedAt = now,
+                agentId = agentId,
             )
         )
         return id
     }
+
+    suspend fun getConversation(id: String): ConversationEntity? = dao.getConversation(id)
 
     suspend fun renameConversation(id: String, title: String) {
         val clean = title.trim().ifBlank { "Nova conversa" }
@@ -92,12 +96,11 @@ class ChatRepository(
     suspend fun getMessages(conversationId: String): List<MessageWithAttachments> =
         dao.getMessages(conversationId)
 
-    suspend fun searchConversations(query: String, limit: Int = 10): List<ConversationListItem> =
+    suspend fun searchConversations(query: String, limit: Int = 50): List<ConversationListItem> =
         dao.searchConversations("%${query.trim()}%", limit)
 
-    suspend fun listRecentConversations(limit: Int = 10): List<ConversationListItem> =
+    suspend fun listRecentConversations(limit: Int = 50): List<ConversationListItem> =
         dao.listRecentConversations(limit)
-
 
     private suspend fun maybeCreateAutomaticTitle(
         conversationId: String,

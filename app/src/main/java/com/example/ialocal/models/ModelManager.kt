@@ -6,12 +6,14 @@ import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.RuntimeState
+import java.io.File
 import kotlinx.coroutines.flow.StateFlow
 
 /** Coordinates persistence and native runtime so activation only follows a successful real inference. */
 class ModelManager(
     private val repository: ModelRepository,
     private val runtime: ModelRuntime,
+    private val contextCalibration: ContextCalibrationManager,
     private val logger: AiEventLogger? = null,
 ) {
     val runtimeState: StateFlow<RuntimeState> = runtime.state
@@ -20,10 +22,23 @@ class ModelManager(
 
     suspend fun importAndVerify(preview: ModelImportPreview): AiModelEntity {
         val model = repository.importGguf(preview)
+        return finishNewModel(model)
+    }
+
+    suspend fun installDownloaded(file: File, suggestedName: String): AiModelEntity {
+        val model = repository.adoptDownloadedGguf(file, suggestedName)
+        return finishNewModel(model)
+    }
+
+    private suspend fun finishNewModel(model: AiModelEntity): AiModelEntity {
         return try {
             verifyAndActivate(model.id)
+            // Free the UI process before the dedicated probe process starts allocating
+            // progressively larger KV caches.
+            runtime.unload()
+            contextCalibration.calibrateIfNeeded(model.id)
         } catch (t: Throwable) {
-            // Keep the imported file so the user can retry after freeing RAM.
+            // Keep the imported/downloaded file so the user can retry after freeing RAM.
             throw t
         }
     }
@@ -51,11 +66,24 @@ class ModelManager(
         require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
             "Verifique o modelo com uma inferência real antes de carregá-lo para uso."
         }
-        runtime.warmUp(model)
-        repository.activateModel(model.id)
+        // Always unload before asking calibrateIfNeeded. If the saved calibration key is
+        // stale after an OS/runtime update, this avoids having two copies of the model in RAM.
+        runtime.unload()
+        val calibrated = contextCalibration.calibrateIfNeeded(modelId)
+        runtime.warmUp(calibrated)
+        repository.activateModel(calibrated.id)
     }
 
-    suspend fun retryVerification(modelId: String): AiModelEntity = verifyAndActivate(modelId)
+    suspend fun retryVerification(modelId: String): AiModelEntity {
+        verifyAndActivate(modelId)
+        runtime.unload()
+        return contextCalibration.calibrateIfNeeded(modelId)
+    }
+
+    suspend fun recalibrateContext(modelId: String): AiModelEntity {
+        runtime.unload()
+        return contextCalibration.calibrate(modelId)
+    }
 
     suspend fun delete(modelId: String) {
         if (runtime.state.value.modelId == modelId) runtime.unload()

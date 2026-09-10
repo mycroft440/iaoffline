@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AiModelEntity::class,
         AgentEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -81,13 +81,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN calibratedContextLength INTEGER")
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN contextCalibrationStatus TEXT NOT NULL DEFAULT 'NOT_CALIBRATED'")
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN contextCalibrationKey TEXT")
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN contextCalibrationUpdatedAt INTEGER")
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN lastFailedContextLength INTEGER")
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN lastContextExitReason TEXT")
+                db.execSQL("ALTER TABLE ai_models ADD COLUMN contextCalibrationError TEXT")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(
                 context,
                 AppDatabase::class.java,
                 "ia-local.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

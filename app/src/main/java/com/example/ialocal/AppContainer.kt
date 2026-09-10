@@ -9,12 +9,15 @@ import com.example.ialocal.api.LocalApiAiGateway
 import com.example.ialocal.api.LocalApiServer
 import com.example.ialocal.data.AppDatabase
 import com.example.ialocal.data.ChatRepository
+import com.example.ialocal.data.ChatSessionRepository
 import com.example.ialocal.data.ThemeRepository
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentContextBuilder
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.models.CatalogDownloadManager
+import com.example.ialocal.models.ContextCalibrationManager
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.LlamaCppRuntime
@@ -26,14 +29,17 @@ class AppContainer(context: Context) {
 
     val diagnostics = AiEventLogger(appContext)
     val chatRepository = ChatRepository(database.chatDao())
+    val chatSession = ChatSessionRepository(appContext)
     val themeRepository = ThemeRepository(appContext)
     val attachmentImporter = AttachmentImporter(appContext)
     val attachmentProcessor = AttachmentContentProcessor(appContext)
     private val attachmentContextBuilder = AttachmentContextBuilder()
 
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
+    val modelDownloads = CatalogDownloadManager(appContext)
     val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics)
-    val modelManager = ModelManager(modelRepository, modelRuntime, diagnostics)
+    val contextCalibration = ContextCalibrationManager(appContext, modelRepository, diagnostics)
+    val modelManager = ModelManager(modelRepository, modelRuntime, contextCalibration, diagnostics)
     val agentTools = AgentToolRegistry(chatRepository, diagnostics)
     val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools)
 

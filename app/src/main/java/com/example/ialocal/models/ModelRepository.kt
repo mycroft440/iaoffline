@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.data.ContextCalibrationStatus
 import com.example.ialocal.data.ModelDao
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
@@ -66,44 +67,7 @@ class ModelRepository(
                 )
             }
 
-            // Re-read the private copy. This catches truncation/provider issues before native loading.
-            val metadata = inspector.inspect(destination)
-            require(metadata.tensorCount > 0) { "O arquivo copiado não contém tensors válidos." }
-            val now = System.currentTimeMillis()
-            val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() } ?: preview.suggestedName
-            val apiId = buildApiId(cleanName, id)
-            val declaredContext = metadata.contextLength
-            val model = AiModelEntity(
-                id = id,
-                name = cleanName,
-                apiModelId = apiId,
-                format = "GGUF",
-                architecture = metadata.architecture,
-                filePath = destination.absolutePath,
-                sizeBytes = destination.length(),
-                importedAt = now,
-                isActive = false,
-                contextLength = (declaredContext ?: ANDROID_RUNTIME_CONTEXT).coerceIn(1024, ANDROID_RUNTIME_CONTEXT),
-                sizeLabel = metadata.sizeLabel,
-                ggufVersion = metadata.version,
-                tensorCount = metadata.tensorCount,
-                declaredContextLength = declaredContext,
-                verificationStatus = ModelVerificationStatus.IMPORTED.name,
-            )
-            dao.insertModel(model)
-
-            val agent = AgentEntity(
-                id = UUID.randomUUID().toString(),
-                name = "$cleanName · Agente",
-                modelId = id,
-                systemPrompt = DEFAULT_SYSTEM_PROMPT,
-                temperature = 0.3f,
-                maxTokens = 1024,
-                isDefault = false,
-                createdAt = now,
-                updatedAt = now,
-            )
-            dao.insertAgent(agent)
+            val model = persistGguf(destination, preview.suggestedName, id)
             logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
             model
         } catch (t: Throwable) {
@@ -112,6 +76,82 @@ class ModelRepository(
             modelDir.deleteRecursively()
             throw t
         }
+    }
+
+    /**
+     * Registers a GGUF already downloaded into app-scoped storage.
+     * No second copy is created: for 15-20GB catalog models this avoids temporarily requiring
+     * roughly twice the model size just to finish installation.
+     */
+    suspend fun adoptDownloadedGguf(file: File, suggestedName: String? = null): AiModelEntity = withContext(Dispatchers.IO) {
+        require(file.isFile && file.length() > 0L) { "O download do modelo não foi encontrado." }
+        require(file.extension.equals("gguf", ignoreCase = true)) { "O arquivo baixado não é um GGUF." }
+
+        val canonicalPath = file.canonicalPath
+        dao.getModels().firstOrNull {
+            runCatching { File(it.filePath).canonicalPath }.getOrNull() == canonicalPath
+        }?.let { return@withContext it }
+
+        val compatibility = compatibilityChecker.check(file.length())
+        require(compatibility.supportedAbi) {
+            "Este aparelho usa ${compatibility.primaryAbi}; o runtime atual exige arm64-v8a ou x86_64."
+        }
+
+        val model = persistGguf(file, suggestedName)
+        logger?.info("IMPORT", "Download interno adotado sem cópia: ${model.apiModelId}")
+        model
+    }
+
+    private suspend fun persistGguf(
+        file: File,
+        suggestedName: String?,
+        modelId: String = UUID.randomUUID().toString(),
+    ): AiModelEntity {
+        val metadata = inspector.inspect(file)
+        require(metadata.tensorCount > 0) { "O GGUF não contém tensors válidos." }
+
+        val now = System.currentTimeMillis()
+        val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() }
+            ?: suggestedName?.trim().takeUnless { it.isNullOrBlank() }
+            ?: file.nameWithoutExtension
+        val apiId = buildApiId(cleanName, modelId)
+        val declaredContext = metadata.contextLength
+        val initialContext = (declaredContext ?: SAFE_INITIAL_CONTEXT)
+            .coerceIn(MIN_CONTEXT, SAFE_INITIAL_CONTEXT)
+        val model = AiModelEntity(
+            id = modelId,
+            name = cleanName,
+            apiModelId = apiId,
+            format = "GGUF",
+            architecture = metadata.architecture,
+            filePath = file.absolutePath,
+            sizeBytes = file.length(),
+            importedAt = now,
+            isActive = false,
+            contextLength = initialContext,
+            sizeLabel = metadata.sizeLabel,
+            ggufVersion = metadata.version,
+            tensorCount = metadata.tensorCount,
+            declaredContextLength = declaredContext,
+            verificationStatus = ModelVerificationStatus.IMPORTED.name,
+            contextCalibrationStatus = ContextCalibrationStatus.NOT_CALIBRATED.name,
+        )
+        dao.insertModel(model)
+
+        dao.insertAgent(
+            AgentEntity(
+                id = UUID.randomUUID().toString(),
+                name = "$cleanName · Agente",
+                modelId = modelId,
+                systemPrompt = DEFAULT_SYSTEM_PROMPT,
+                temperature = 0.3f,
+                maxTokens = 4096,
+                isDefault = false,
+                createdAt = now,
+                updatedAt = now,
+            )
+        )
+        return model
     }
 
     suspend fun activateModel(id: String) {
@@ -131,6 +171,42 @@ class ModelRepository(
 
     suspend fun markVerificationError(id: String, message: String) =
         dao.updateVerification(id, ModelVerificationStatus.ERROR.name, message, null)
+
+    suspend fun startContextCalibration(id: String, calibrationKey: String, safeContext: Int) {
+        dao.startContextCalibration(
+            id = id,
+            safeContext = safeContext.coerceAtLeast(MIN_CONTEXT),
+            status = ContextCalibrationStatus.RUNNING.name,
+            calibrationKey = calibrationKey,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    suspend fun recordContextProbeSuccess(id: String, contextLength: Int) {
+        dao.recordContextProbeSuccess(id, contextLength, System.currentTimeMillis())
+    }
+
+    suspend fun recordContextProbeFailure(id: String, contextLength: Int, reason: String?) {
+        dao.recordContextProbeFailure(id, contextLength, reason, System.currentTimeMillis())
+    }
+
+    suspend fun finishContextCalibration(id: String, contextLength: Int) {
+        dao.finishContextCalibration(
+            id = id,
+            contextLength = contextLength,
+            status = ContextCalibrationStatus.CALIBRATED.name,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    suspend fun failContextCalibration(id: String, error: String) {
+        dao.failContextCalibration(
+            id = id,
+            status = ContextCalibrationStatus.FAILED.name,
+            error = error,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
 
     suspend fun setDefaultAgent(id: String) {
         requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
@@ -174,6 +250,11 @@ class ModelRepository(
     suspend fun getAgentForModel(modelId: String): AgentEntity? = dao.getAgentForModel(modelId)
 
     private fun sourceInfo(uri: Uri): Pair<String, Long?> {
+        if (uri.scheme == "file") {
+            val file = uri.path?.let(::File)
+            if (file != null) return file.name to file.length().takeIf { it > 0L }
+        }
+
         var name: String? = null
         var size: Long? = null
         context.contentResolver.query(
@@ -203,10 +284,10 @@ class ModelRepository(
     }
 
     companion object {
-        /** v0.4.0 Android binding currently creates an 8192-token native context. */
-        const val ANDROID_RUNTIME_CONTEXT = 8192
+        const val MIN_CONTEXT = 1024
+        /** Safe first load. The runtime can use larger values after per-device calibration. */
+        const val SAFE_INITIAL_CONTEXT = 8192
         const val DEFAULT_SYSTEM_PROMPT =
-            "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
-                "Quando não souber algo, diga que não sabe em vez de inventar."
+            "Se empenhe ao máximo nas tarefas e use a web quando precisar, nunca pressuponha nada."
     }
 }

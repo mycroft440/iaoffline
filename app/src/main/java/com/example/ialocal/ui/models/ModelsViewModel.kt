@@ -78,7 +78,7 @@ class ModelsViewModel(
         if (_isImporting.value) return
         _preview.value = null
         _isImporting.value = true
-        _operationText.value = "Copiando e verificando modelo…"
+        _operationText.value = "Copiando, verificando e calibrando contexto…"
         _error.value = null
         viewModelScope.launch {
             runCatching { manager.importAndVerify(selected) }
@@ -91,7 +91,7 @@ class ModelsViewModel(
     fun activate(id: String) = viewModelScope.launch {
         val model = repository.getModel(id) ?: return@launch
         _operationText.value = if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
-            "Carregando ${model.name}…"
+            "Conferindo contexto e carregando ${model.name}…"
         } else {
             "Testando ${model.name}…"
         }
@@ -99,6 +99,13 @@ class ModelsViewModel(
             if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) manager.load(id)
             else manager.retryVerification(id)
         }.onFailure { _error.value = it.message ?: "Falha ao ativar o modelo." }
+        _operationText.value = null
+    }
+
+    fun recalibrateContext(id: String) = viewModelScope.launch {
+        _operationText.value = "Recalibrando contexto máximo…"
+        runCatching { manager.recalibrateContext(id) }
+            .onFailure { _error.value = it.message ?: "Falha ao recalibrar o contexto." }
         _operationText.value = null
     }
 

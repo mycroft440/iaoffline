@@ -57,6 +57,79 @@ interface ModelDao {
     @Query("UPDATE ai_models SET verificationStatus = :status, lastError = :lastError, lastVerifiedAt = :verifiedAt WHERE id = :id")
     suspend fun updateVerification(id: String, status: String, lastError: String?, verifiedAt: Long?)
 
+    @Query(
+        """
+        UPDATE ai_models SET
+            contextLength = :safeContext,
+            calibratedContextLength = NULL,
+            contextCalibrationStatus = :status,
+            contextCalibrationKey = :calibrationKey,
+            contextCalibrationUpdatedAt = :updatedAt,
+            lastFailedContextLength = NULL,
+            lastContextExitReason = NULL,
+            contextCalibrationError = NULL
+        WHERE id = :id
+        """
+    )
+    suspend fun startContextCalibration(
+        id: String,
+        safeContext: Int,
+        status: String,
+        calibrationKey: String,
+        updatedAt: Long,
+    )
+
+    @Query(
+        """
+        UPDATE ai_models SET
+            contextLength = :contextLength,
+            calibratedContextLength = :contextLength,
+            contextCalibrationUpdatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun recordContextProbeSuccess(id: String, contextLength: Int, updatedAt: Long)
+
+    @Query(
+        """
+        UPDATE ai_models SET
+            lastFailedContextLength = :contextLength,
+            lastContextExitReason = :reason,
+            contextCalibrationUpdatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun recordContextProbeFailure(id: String, contextLength: Int, reason: String?, updatedAt: Long)
+
+    @Query(
+        """
+        UPDATE ai_models SET
+            contextLength = :contextLength,
+            calibratedContextLength = :contextLength,
+            contextCalibrationStatus = :status,
+            contextCalibrationUpdatedAt = :updatedAt,
+            contextCalibrationError = NULL
+        WHERE id = :id
+        """
+    )
+    suspend fun finishContextCalibration(
+        id: String,
+        contextLength: Int,
+        status: String,
+        updatedAt: Long,
+    )
+
+    @Query(
+        """
+        UPDATE ai_models SET
+            contextCalibrationStatus = :status,
+            contextCalibrationUpdatedAt = :updatedAt,
+            contextCalibrationError = :error
+        WHERE id = :id
+        """
+    )
+    suspend fun failContextCalibration(id: String, status: String, error: String, updatedAt: Long)
+
     @Query("UPDATE agents SET isDefault = 0")
     suspend fun clearDefaultAgent()
 
