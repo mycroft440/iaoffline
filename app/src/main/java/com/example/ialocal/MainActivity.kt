@@ -52,6 +52,22 @@ private fun LocalAiApp(container: AppContainer) {
 
     fun openChat(id: String) {
         container.chatSession.setActiveConversation(id)
+
+        // Catálogo, configuração, busca e arquivos são telas auxiliares do chat. Ao abrir uma
+        // conversa, retire essas telas do topo para que o botão Voltar do Android nunca revele
+        // novamente as etapas de escolha/configuração de modelo. Elas continuam acessíveis pelo
+        // menu superior esquerdo, como parte explícita do fluxo do chat.
+        while (
+            navController.currentDestination?.route in setOf(
+                "catalog",
+                "model-config/{modelId}",
+                "chat-files",
+                "chat-search",
+            )
+        ) {
+            if (!navController.popBackStack()) break
+        }
+
         navController.navigate("chat/$id") {
             launchSingleTop = true
         }
