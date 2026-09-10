@@ -84,7 +84,13 @@ private fun LocalAiApp(container: AppContainer) {
         composable("restore") {
             LaunchedEffect(Unit) {
                 val savedId = container.chatSession.activeConversationId
-                val validId = savedId?.takeIf { container.chatRepository.getConversation(it) != null }
+                val validId = if (
+                    savedId != null && container.chatRepository.getConversation(savedId) != null
+                ) {
+                    savedId
+                } else {
+                    null
+                }
                 if (savedId != null && validId == null) container.chatSession.clearActiveConversation()
                 val target = validId?.let { "chat/$it" } ?: "home"
                 navController.navigate(target) {
