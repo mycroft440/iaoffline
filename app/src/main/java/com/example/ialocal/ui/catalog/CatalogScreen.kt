@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -92,7 +93,7 @@ fun CatalogScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "O app baixa, valida, configura e calibra o contexto automaticamente. Depois toque em Abrir para revisar os parâmetros.",
+                        "O app baixa, valida, configura e calibra o contexto automaticamente. Cada opção também mostra um link para a página original do GGUF, arquivos e licença.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -115,7 +116,7 @@ fun CatalogScreen(
             item {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(
-                        "Os GGUFs do catálogo mostram origem e licença. Você também pode importar manualmente um GGUF compatível.",
+                        "O catálogo inclui GGUFs de arquivo único verificados. Modelos divididos em vários shards ou que exigem arquivos auxiliares obrigatórios continuam disponíveis pela importação manual.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -137,6 +138,7 @@ private fun CatalogModelCard(
     onOpen: () -> Unit,
 ) {
     val model = item.model
+    val uriHandler = LocalUriHandler.current
     Card(modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -161,7 +163,10 @@ private fun CatalogModelCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = { uriHandler.openUri(model.sourceUrl) }) {
+                Text("Ver fonte, licença e arquivos")
+            }
+            Spacer(Modifier.height(4.dp))
 
             when {
                 item.installing -> {
