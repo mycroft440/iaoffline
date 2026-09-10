@@ -121,8 +121,34 @@ class CatalogViewModel(
     }
 
     fun retryInstall(modelId: String) {
+        if (installingId.value != null) return
+        val catalogModel = ModelCatalog.byId(modelId) ?: return
         installErrors.value = installErrors.value - modelId
-        viewModelScope.launch { installNextCompletedDownload(preferredId = modelId) }
+
+        viewModelScope.launch {
+            val registered = installedModels.value.firstOrNull {
+                sameFile(it.filePath, downloads.destinationFile(catalogModel))
+            }
+            if (registered == null) {
+                installNextCompletedDownload(preferredId = modelId)
+                return@launch
+            }
+
+            installingId.value = modelId
+            _message.value = "Continuando a configuração de ${catalogModel.name}…"
+            try {
+                manager.retryVerification(registered.id)
+                installErrors.value = installErrors.value - modelId
+                _message.value = "${catalogModel.name} verificado e calibrado. Agora você pode abrir o modelo."
+            } catch (t: Throwable) {
+                val message = t.message ?: "Não foi possível concluir a configuração do modelo."
+                installErrors.value = installErrors.value + (modelId to message)
+                _message.value = message
+            } finally {
+                installingId.value = null
+                refreshDownloads()
+            }
+        }
     }
 
     fun clearMessage() {
