@@ -68,7 +68,14 @@ private fun LocalAiApp(container: AppContainer) {
             if (!navController.popBackStack()) break
         }
 
+        val replacingChat = navController.currentDestination?.route == "chat/{conversationId}"
         navController.navigate("chat/$id") {
+            if (replacingChat) {
+                // A troca entre conversas substitui a conversa atual em vez de empilhá-la. Assim
+                // uma conversa antiga não reaparece pelo botão Voltar e não volta a ser marcada
+                // como ativa por seu LaunchedEffect.
+                popUpTo("chat/{conversationId}") { inclusive = true }
+            }
             launchSingleTop = true
         }
     }
@@ -161,6 +168,10 @@ private fun LocalAiApp(container: AppContainer) {
                 onAllConversations = {
                     container.chatSession.clearActiveConversation()
                     navController.navigate("home") {
+                        // Há no máximo uma entrada de chat porque openChat substitui a atual.
+                        // Removê-la aqui impede que Voltar restaure a conversa que o usuário
+                        // acabou de abandonar pela opção “Todas as conversas”.
+                        popUpTo("chat/{conversationId}") { inclusive = true }
                         launchSingleTop = true
                     }
                 },
