@@ -222,6 +222,9 @@ class LocalApiServer(
                 .put("name", agent.name)
                 .put("model", modelMap[agent.modelId]?.apiModelId ?: agent.modelId)
                 .put("default", agent.isDefault)
+                .put("temperature", agent.temperature)
+                .put("deep_thinking", agent.deepThinking)
+                .put("usage_count", agent.usageCount)
                 .put("max_tokens", agent.maxTokens)
                 .put("tools", JSONArray()
                     .put("list_recent_conversations")
@@ -238,7 +241,12 @@ class LocalApiServer(
             val result = orchestrator.runAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
             result.model to result.output
         } else {
-            orchestrator.chatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
+            orchestrator.chatCompletion(
+                p.model,
+                p.messages,
+                p.maxTokens,
+                p.temperature ?: DEFAULT_TEMPERATURE,
+            )
         }
         return HttpResponse(200, fullCompletionJson(model.apiModelId, output).toString())
     }
@@ -251,7 +259,12 @@ class LocalApiServer(
             val (model, chunks) = if (p.agentId != null) {
                 orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
             } else {
-                val stream = orchestrator.streamChatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
+                val stream = orchestrator.streamChatCompletion(
+                    p.model,
+                    p.messages,
+                    p.maxTokens,
+                    p.temperature ?: DEFAULT_TEMPERATURE,
+                )
                 stream.model to stream.chunks
             }
             val id = "chatcmpl-${UUID.randomUUID()}"
@@ -290,6 +303,8 @@ class LocalApiServer(
         val result = orchestrator.runAgent(
             json.optString("agent_id").takeIf { it.isNotBlank() },
             messages,
+            maxTokensOverride = json.optInt("max_tokens", 1024).coerceIn(16, 4096),
+            temperatureOverride = json.optDouble("temperature").takeIf { json.has("temperature") }?.toFloat()?.coerceIn(0f, 2f),
         )
         return HttpResponse(200, JSONObject()
             .put("id", "agent-${UUID.randomUUID()}")
@@ -305,9 +320,10 @@ class LocalApiServer(
 
     private fun parseChat(body: String): ChatParams {
         val json = JSONObject(body)
-        val requestedTemperature = json.optDouble("temperature", 0.3).toFloat().coerceIn(0f, 2f)
-        require(kotlin.math.abs(requestedTemperature - 0.3f) < 0.0001f) {
-            "O runtime llama.cpp Android v0.4.0 usa temperature fixa em 0.3. Remova o parâmetro ou use 0.3."
+        val requestedTemperature = if (json.has("temperature")) {
+            json.getDouble("temperature").toFloat().coerceIn(0f, 2f)
+        } else {
+            null
         }
         return ChatParams(
             model = json.optString("model").takeIf { it.isNotBlank() },
@@ -458,10 +474,11 @@ class LocalApiServer(
         val agentId: String?,
         val messages: List<AiChatMessage>,
         val maxTokens: Int,
-        val temperature: Float,
+        val temperature: Float?,
     )
 
     companion object {
+        private const val DEFAULT_TEMPERATURE = 0.3f
         private const val MAX_HEADER_BYTES = 64 * 1024
         private const val MAX_BODY_BYTES = 4 * 1024 * 1024
         private const val MAX_ACTIVE_CLIENTS = 8
