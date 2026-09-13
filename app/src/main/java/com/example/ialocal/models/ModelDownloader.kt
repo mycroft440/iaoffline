@@ -88,10 +88,33 @@ class ModelDownloader(
         require(compatibility.supportedAbi) {
             "Este aparelho usa ${compatibility.primaryAbi}; o runtime exige arm64-v8a ou x86_64."
         }
+        require(compatibility.likelyFitsRam != false) {
+            "${model.displayName} é grande demais para a RAM estimada deste aparelho. Escolha um modelo menor para evitar travamentos durante a carga."
+        }
 
         if (partial.length() > model.approximateSizeBytes + PARTIAL_SIZE_TOLERANCE) {
             partial.delete()
         }
+
+        // If the process was cancelled after the network transfer but before/during hashing, avoid
+        // throwing away a complete multi-GB file. Only pay for this hash when the partial is very
+        // close to the catalog size; ordinary resumptions continue directly with HTTP Range.
+        if (partial.isFile && partial.length() >= nearCompleteThreshold(model.approximateSizeBytes)) {
+            onState(
+                initial.copy(
+                    phase = ModelDownloadPhase.VERIFYING_FILE,
+                    downloadedBytes = partial.length(),
+                    totalBytes = partial.length(),
+                    message = "Verificando download interrompido…",
+                )
+            )
+            if (sha256(partial).equals(model.sha256, ignoreCase = true)) {
+                finalizeVerifiedDownload(partial, complete)
+                logger?.info("MODEL_DOWNLOAD", "Download interrompido já estava completo: ${model.displayName}")
+                return@withContext complete
+            }
+        }
+
         val estimatedRemaining = (model.approximateSizeBytes - partial.length()).coerceAtLeast(0L)
         require(compatibility.availableStorageBytes > estimatedRemaining + STORAGE_HEADROOM) {
             "Espaço insuficiente. Libere armazenamento antes de baixar ${model.displayName}."
@@ -117,13 +140,7 @@ class ModelDownloader(
             )
         }
 
-        if (complete.exists() && !complete.delete()) {
-            throw IllegalStateException("Não foi possível substituir um download antigo.")
-        }
-        if (!partial.renameTo(complete)) {
-            partial.copyTo(complete, overwrite = true)
-            if (!partial.delete()) logger?.info("MODEL_DOWNLOAD", "Não foi possível apagar o arquivo parcial após a cópia")
-        }
+        finalizeVerifiedDownload(partial, complete)
         logger?.info("MODEL_DOWNLOAD", "Download verificado: ${model.displayName} (${complete.length()} bytes)")
         complete
     }
@@ -250,6 +267,20 @@ class ModelDownloader(
         }
     }
 
+    private fun finalizeVerifiedDownload(partial: File, complete: File) {
+        if (complete.exists() && !complete.delete()) {
+            throw IllegalStateException("Não foi possível substituir um download antigo.")
+        }
+        if (!partial.renameTo(complete)) {
+            partial.copyTo(complete, overwrite = true)
+            require(complete.length() == partial.length()) { "A cópia final do download ficou incompleta." }
+            if (!partial.delete()) logger?.info("MODEL_DOWNLOAD", "Não foi possível apagar o arquivo parcial após a cópia")
+        }
+    }
+
+    private fun nearCompleteThreshold(approximateSizeBytes: Long): Long =
+        (approximateSizeBytes * NEAR_COMPLETE_RATIO).toLong()
+
     private suspend fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         FileInputStream(file).use { input ->
@@ -273,5 +304,6 @@ class ModelDownloader(
         private const val HTTP_RANGE_NOT_SATISFIABLE = 416
         private const val STORAGE_HEADROOM = 256L * 1024 * 1024
         private const val PARTIAL_SIZE_TOLERANCE = 512L * 1024 * 1024
+        private const val NEAR_COMPLETE_RATIO = 0.97
     }
 }
