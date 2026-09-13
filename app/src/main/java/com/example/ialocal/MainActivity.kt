@@ -17,6 +17,7 @@ import com.example.ialocal.ui.chat.ChatScreen
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.home.HomeScreen
 import com.example.ialocal.ui.home.HomeViewModel
+import com.example.ialocal.ui.models.AiHomeScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.settings.SettingsScreen
@@ -41,14 +42,37 @@ class MainActivity : ComponentActivity() {
 private fun LocalAiApp(container: AppContainer) {
     val navController = rememberNavController()
 
-    NavHost(navController = navController, startDestination = "home") {
+    NavHost(navController = navController, startDestination = "ai-home") {
+        composable("ai-home") {
+            val vm: ModelsViewModel = viewModel(
+                key = "ai-home-models",
+                factory = ModelsViewModel.Factory(
+                    container.modelRepository,
+                    container.modelManager,
+                    container.apiServer,
+                    container.apiSettings,
+                    container.integrationSelfTest,
+                ),
+            )
+            AiHomeScreen(
+                viewModel = vm,
+                onOpenChats = { navController.navigate("home") },
+                onOpenApi = { navController.navigate("models") },
+                onOpenSettings = { navController.navigate("settings") },
+            )
+        }
+
         composable("home") {
             val vm: HomeViewModel = viewModel(factory = HomeViewModel.Factory(container.chatRepository))
             HomeScreen(
                 viewModel = vm,
                 onOpenConversation = { id -> navController.navigate("chat/$id") },
                 onOpenSettings = { navController.navigate("settings") },
-                onOpenModels = { navController.navigate("models") },
+                onOpenModels = {
+                    if (!navController.popBackStack("ai-home", inclusive = false)) {
+                        navController.navigate("ai-home")
+                    }
+                },
             )
         }
 
@@ -73,13 +97,14 @@ private fun LocalAiApp(container: AppContainer) {
 
         composable("models") {
             val vm: ModelsViewModel = viewModel(
+                key = "models-settings",
                 factory = ModelsViewModel.Factory(
                     container.modelRepository,
                     container.modelManager,
                     container.apiServer,
                     container.apiSettings,
                     container.integrationSelfTest,
-                )
+                ),
             )
             ModelsScreen(viewModel = vm, onBack = { navController.popBackStack() })
         }

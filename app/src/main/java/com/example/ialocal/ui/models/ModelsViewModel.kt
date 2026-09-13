@@ -108,8 +108,20 @@ class ModelsViewModel(
         }
     }
 
+    /** Pauses the current installation while preserving the partial file for HTTP Range resume. */
     fun cancelDownload() {
         downloadJob?.cancel()
+    }
+
+    /** Ends the current installation state. A future install may still reuse a safe partial file. */
+    fun endDownload() {
+        val current = downloadJob
+        current?.cancel()
+        viewModelScope.launch {
+            current?.join()
+            manager.resetDownloadState()
+            if (downloadJob === current) downloadJob = null
+        }
     }
 
     fun clearDownloadState() {

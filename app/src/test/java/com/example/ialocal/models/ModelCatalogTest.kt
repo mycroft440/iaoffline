@@ -30,5 +30,18 @@ class ModelCatalogTest {
         assertNotNull(qwen38)
         assertEquals("Q4_K_M", qwen3EightB?.quantization)
         assertEquals("Q4_K_M", qwen38?.quantization)
+        assertEquals(ModelProvider.ALIBABA, qwen3EightB?.provider)
+        assertEquals(ModelProvider.ALIBABA, qwen38?.provider)
+    }
+
+    @Test
+    fun providerSectionsHaveInstallableModels() {
+        assertEquals("Modelos do Google", ModelProvider.GOOGLE.sectionLabel)
+        assertEquals("Modelos da Alibaba", ModelProvider.ALIBABA.sectionLabel)
+        assertEquals("Modelos da Meta", ModelProvider.META.sectionLabel)
+
+        ModelProvider.values().forEach { provider ->
+            assertTrue("Sem modelos para $provider", ModelCatalog.entries.any { it.provider == provider })
+        }
     }
 }

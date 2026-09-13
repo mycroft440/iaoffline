@@ -1,9 +1,16 @@
 package com.example.ialocal.models
 
+enum class ModelProvider(val sectionLabel: String) {
+    GOOGLE("Modelos do Google"),
+    ALIBABA("Modelos da Alibaba"),
+    META("Modelos da Meta"),
+}
+
 /** A curated GGUF that can be downloaded directly by the app. */
 data class CatalogModel(
     val id: String,
     val displayName: String,
+    val provider: ModelProvider,
     val repository: String,
     val fileName: String,
     val quantization: String,
@@ -26,8 +33,21 @@ data class CatalogModel(
 object ModelCatalog {
     val entries: List<CatalogModel> = listOf(
         CatalogModel(
+            id = "gemma3-1b-it-q4-k-m",
+            displayName = "Gemma 3 1B",
+            provider = ModelProvider.GOOGLE,
+            repository = "ggml-org/gemma-3-1b-it-GGUF",
+            fileName = "gemma-3-1b-it-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 806_000_000L,
+            sha256 = "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
+            recommendedRamBytes = 2_000_000_000L,
+            description = "Modelo compacto do Google para conversa local, indicado para aparelhos com pouca RAM.",
+        ),
+        CatalogModel(
             id = "qwen3-0.6b-q4-k-m",
             displayName = "Qwen3 0.6B",
+            provider = ModelProvider.ALIBABA,
             repository = "Qwen/Qwen3-0.6B-GGUF",
             fileName = "Qwen3-0.6B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -39,6 +59,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-1.7b-q4-k-m",
             displayName = "Qwen3 1.7B",
+            provider = ModelProvider.ALIBABA,
             repository = "ggml-org/Qwen3-1.7B-GGUF",
             fileName = "Qwen3-1.7B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -50,6 +71,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-4b-q4-k-m",
             displayName = "Qwen3 4B",
+            provider = ModelProvider.ALIBABA,
             repository = "ggml-org/Qwen3-4B-GGUF",
             fileName = "Qwen3-4B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -61,6 +83,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-8b-q4-k-m",
             displayName = "Qwen3 8B",
+            provider = ModelProvider.ALIBABA,
             repository = "Qwen/Qwen3-8B-GGUF",
             fileName = "Qwen3-8B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -72,6 +95,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3.8-27b-q4-k-m",
             displayName = "Qwen3.8 27B",
+            provider = ModelProvider.ALIBABA,
             repository = "ggml-org/Qwen3.8-27B-GGUF",
             fileName = "Qwen3.8-27B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -79,6 +103,18 @@ object ModelCatalog {
             sha256 = "31629f53165ab6a7dad8c9847dcfd1fdf55829dac1e6e748f4a68581b0033d34",
             recommendedRamBytes = 32_000_000_000L,
             description = "Opção avançada e muito pesada. No app atual é usada em texto; exige aparelho excepcional, muito armazenamento e RAM.",
+        ),
+        CatalogModel(
+            id = "llama3.2-1b-instruct-q4-k-m",
+            displayName = "Llama 3.2 1B",
+            provider = ModelProvider.META,
+            repository = "bartowski/Llama-3.2-1B-Instruct-GGUF",
+            fileName = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 807_694_464L,
+            sha256 = "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+            recommendedRamBytes = 2_000_000_000L,
+            description = "Modelo compacto da Meta, apropriado para conversa offline em aparelhos móveis.",
         ),
     )
 
