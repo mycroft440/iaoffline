@@ -53,6 +53,16 @@ class OnDeviceAudioTranscriber(
     }
 
     private suspend fun recognize(audio: DecodedAudio): String = suspendCancellableCoroutine { continuation ->
+        if (
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            continuation.resumeWithException(
+                SecurityException("A permissão de microfone é necessária para transcrever áudio.")
+            )
+            return@suspendCancellableCoroutine
+        }
+
         val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         val pipe = ParcelFileDescriptor.createPipe()
         val readSide = pipe[0]
