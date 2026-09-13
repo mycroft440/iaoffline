@@ -13,8 +13,10 @@ import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -29,7 +31,14 @@ class OnDeviceAudioTranscriber(
             require(SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
                 "Este aparelho não possui reconhecimento de voz on-device disponível."
             }
-            recognize(audio)
+            try {
+                withTimeout(transcriptionTimeoutMs(audio)) { recognize(audio) }
+            } catch (timeout: TimeoutCancellationException) {
+                throw IllegalStateException(
+                    "A transcrição local excedeu o tempo seguro de processamento. Tente um áudio menor ou novamente.",
+                    timeout,
+                )
+            }
         }
     }
 
@@ -123,6 +132,17 @@ class OnDeviceAudioTranscriber(
         }
     }
 
+    private fun transcriptionTimeoutMs(audio: DecodedAudio): Long {
+        val bytesPerSecond = audio.sampleRate.toLong() * audio.channelCount.coerceAtLeast(1) * PCM16_BYTES_PER_SAMPLE
+        val durationMs = if (bytesPerSecond > 0) {
+            (audio.pcm16.size.toLong() * 1_000L) / bytesPerSecond
+        } else {
+            0L
+        }
+        return (durationMs * TIMEOUT_DURATION_MULTIPLIER + TIMEOUT_GRACE_MS)
+            .coerceIn(MIN_TRANSCRIPTION_TIMEOUT_MS, MAX_TRANSCRIPTION_TIMEOUT_MS)
+    }
+
     private fun errorMessage(code: Int): String = when (code) {
         SpeechRecognizer.ERROR_AUDIO -> "Falha ao fornecer o áudio ao reconhecedor."
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permissão de áudio insuficiente."
@@ -132,5 +152,13 @@ class OnDeviceAudioTranscriber(
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "O reconhecedor de voz está ocupado. Tente novamente."
         SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "O serviço local de reconhecimento foi desconectado."
         else -> "Falha na transcrição local de áudio (código $code)."
+    }
+
+    companion object {
+        private const val PCM16_BYTES_PER_SAMPLE = 2L
+        private const val TIMEOUT_DURATION_MULTIPLIER = 2L
+        private const val TIMEOUT_GRACE_MS = 30_000L
+        private const val MIN_TRANSCRIPTION_TIMEOUT_MS = 60_000L
+        private const val MAX_TRANSCRIPTION_TIMEOUT_MS = 15L * 60L * 1_000L
     }
 }
