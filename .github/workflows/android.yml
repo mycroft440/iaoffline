@@ -35,6 +35,7 @@ jobs:
       - name: Native toolchain
         run: |
           sdkmanager --install \
+            "platforms;android-36" \
             "platforms;android-37.0" \
             "build-tools;36.0.0" \
             "ndk;29.0.13113456" \
