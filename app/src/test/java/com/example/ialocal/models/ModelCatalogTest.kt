@@ -31,4 +31,10 @@ class ModelCatalogTest {
         assertEquals("Q4_K_M", qwen3EightB?.quantization)
         assertEquals("Q4_K_M", qwen38?.quantization)
     }
+
+    @Test
+    fun currentQwenCatalogIsGroupedUnderAlibaba() {
+        assertTrue(ModelCatalog.entries.isNotEmpty())
+        assertTrue(ModelCatalog.entries.all { it.provider == ModelProvider.ALIBABA })
+    }
 }

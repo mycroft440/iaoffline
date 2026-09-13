@@ -41,14 +41,19 @@ class MainActivity : ComponentActivity() {
 private fun LocalAiApp(container: AppContainer) {
     val navController = rememberNavController()
 
-    NavHost(navController = navController, startDestination = "home") {
+    NavHost(navController = navController, startDestination = "models") {
         composable("home") {
             val vm: HomeViewModel = viewModel(factory = HomeViewModel.Factory(container.chatRepository))
             HomeScreen(
                 viewModel = vm,
                 onOpenConversation = { id -> navController.navigate("chat/$id") },
                 onOpenSettings = { navController.navigate("settings") },
-                onOpenModels = { navController.navigate("models") },
+                onOpenModels = {
+                    navController.navigate("models") {
+                        popUpTo("models") { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
             )
         }
 
@@ -81,7 +86,11 @@ private fun LocalAiApp(container: AppContainer) {
                     container.integrationSelfTest,
                 )
             )
-            ModelsScreen(viewModel = vm, onBack = { navController.popBackStack() })
+            ModelsScreen(
+                viewModel = vm,
+                onOpenChats = { navController.navigate("home") { launchSingleTop = true } },
+                onOpenSettings = { navController.navigate("settings") },
+            )
         }
 
         composable("settings") {
