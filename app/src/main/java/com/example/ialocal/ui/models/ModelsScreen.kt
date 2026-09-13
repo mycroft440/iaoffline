@@ -479,16 +479,16 @@ private fun CatalogInstallCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            if (hasOperationState) {
+            if (state != null && state.phase != ModelDownloadPhase.IDLE) {
                 Text(
                     buildString {
-                        append(downloadPhaseLabel(state!!.phase))
+                        append(downloadPhaseLabel(state.phase))
                         if (state.phase == ModelDownloadPhase.DOWNLOADING && progressText != null) {
                             append(" · ").append(progressText)
                         }
                     },
                     fontWeight = FontWeight.SemiBold,
-                    color = when (state!!.phase) {
+                    color = when (state.phase) {
                         ModelDownloadPhase.ERROR -> MaterialTheme.colorScheme.error
                         ModelDownloadPhase.COMPLETE -> MaterialTheme.colorScheme.primary
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
