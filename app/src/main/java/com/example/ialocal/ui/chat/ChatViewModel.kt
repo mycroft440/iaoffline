@@ -59,6 +59,13 @@ class ChatViewModel(
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     private var generationJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            runCatching { modelRepository.ensureBuiltinPersonalities() }
+                .onFailure { _error.value = it.message ?: "Não foi possível preparar as personalidades offline." }
+        }
+    }
+
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
 
@@ -68,9 +75,11 @@ class ChatViewModel(
     }
 
     fun selectModel(modelId: String) {
-        val agent = agents.value.firstOrNull { it.modelId == modelId }
+        val candidates = agents.value.filter { it.modelId == modelId }
+        val agent = candidates.firstOrNull { !ModelRepository.isLegacyGenericAgent(it) }
+            ?: candidates.firstOrNull()
         if (agent == null) {
-            _error.value = "Este modelo não possui um agente configurado."
+            _error.value = "Este modelo não possui uma personalidade configurada."
             return
         }
         selectAgent(agent.id)
@@ -79,7 +88,27 @@ class ChatViewModel(
     fun updateAgent(agent: AgentEntity) {
         viewModelScope.launch {
             runCatching { modelRepository.updateAgent(agent) }
-                .onFailure { _error.value = it.message ?: "Não foi possível salvar as configurações do agente." }
+                .onFailure { _error.value = it.message ?: "Não foi possível salvar a personalidade." }
+        }
+    }
+
+    fun createPersonality(
+        modelId: String,
+        name: String,
+        systemPrompt: String,
+        temperature: Float,
+        deepThinking: Boolean,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                modelRepository.createPersonality(
+                    modelId = modelId,
+                    name = name,
+                    systemPrompt = systemPrompt,
+                    temperature = temperature,
+                    deepThinking = deepThinking,
+                )
+            }.onFailure { _error.value = it.message ?: "Não foi possível criar a personalidade." }
         }
     }
 
@@ -147,12 +176,16 @@ class ChatViewModel(
                 val history = historyBeforeSend + AiChatMessage("user", content)
                 val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
                 assistantId = replyId
+                val agentId = _selectedAgentId.value
+                    ?: conversation.value?.agentId
+                    ?: agents.value.firstOrNull { it.isDefault }?.id
+                if (agentId != null) modelRepository.markAgentUsed(agentId)
                 var accumulated = ""
                 aiGateway.streamChat(AiChatRequest(
                     conversationId = conversationId,
                     messages = history,
                     attachments = attachments,
-                    agentId = _selectedAgentId.value ?: conversation.value?.agentId,
+                    agentId = agentId,
                 )).collect { chunk ->
                     accumulated += chunk
                     repository.updateMessageContent(replyId, accumulated)

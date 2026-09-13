@@ -107,6 +107,9 @@ data class AgentEntity(
     val temperature: Float = 0.3f,
     val maxTokens: Int = 1024,
     val isDefault: Boolean = false,
+    val deepThinking: Boolean = false,
+    val usageCount: Long = 0,
+    val lastUsedAt: Long? = null,
     val createdAt: Long,
     val updatedAt: Long,
 )

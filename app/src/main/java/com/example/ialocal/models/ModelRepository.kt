@@ -147,19 +147,7 @@ class ModelRepository(
             verificationStatus = ModelVerificationStatus.IMPORTED.name,
         )
         dao.insertModel(model)
-
-        val agent = AgentEntity(
-            id = UUID.randomUUID().toString(),
-            name = "$cleanName · Agente",
-            modelId = id,
-            systemPrompt = DEFAULT_SYSTEM_PROMPT,
-            temperature = 0.3f,
-            maxTokens = 1024,
-            isDefault = false,
-            createdAt = now,
-            updatedAt = now,
-        )
-        dao.insertAgent(agent)
+        ensureBuiltinPersonalitiesForModel(id, now)
         logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
         return model
     }
@@ -200,8 +188,103 @@ class ModelRepository(
         dao.markAgentDefault(id, now)
     }
 
+    suspend fun ensureBuiltinPersonalities() {
+        val availableModels = dao.getModels()
+        availableModels.forEachIndexed { index, model ->
+            ensureBuiltinPersonalitiesForModel(model.id, System.currentTimeMillis() + index * 10L)
+        }
+
+        val currentDefault = dao.getDefaultAgent()
+        if (currentDefault == null || isLegacyGenericAgent(currentDefault)) {
+            val preferredModel = dao.getActiveModel() ?: availableModels.firstOrNull()
+            preferredModel?.let { model ->
+                val engineer = dao.getAgent(builtinAgentId(model.id, BUILTIN_PERSONALITIES.first().key))
+                if (engineer != null) {
+                    dao.clearDefaultAgent()
+                    dao.markAgentDefault(engineer.id, System.currentTimeMillis())
+                }
+            }
+        }
+    }
+
+    private suspend fun ensureBuiltinPersonalitiesForModel(modelId: String, baseTime: Long) {
+        BUILTIN_PERSONALITIES.forEachIndexed { index, preset ->
+            val id = builtinAgentId(modelId, preset.key)
+            if (dao.getAgent(id) == null) {
+                dao.insertAgent(
+                    AgentEntity(
+                        id = id,
+                        name = preset.name,
+                        modelId = modelId,
+                        systemPrompt = preset.prompt,
+                        temperature = preset.temperature,
+                        maxTokens = 1024,
+                        isDefault = false,
+                        deepThinking = false,
+                        usageCount = 0,
+                        lastUsedAt = null,
+                        createdAt = baseTime + index,
+                        updatedAt = baseTime + index,
+                    )
+                )
+            }
+        }
+    }
+
+    suspend fun createPersonality(
+        modelId: String,
+        name: String,
+        systemPrompt: String,
+        temperature: Float,
+        deepThinking: Boolean,
+    ): AgentEntity {
+        val model = requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
+        val cleanName = name.trim()
+        val cleanPrompt = systemPrompt.trim()
+        require(cleanName.isNotBlank()) { "Informe o nome da personalidade." }
+        require(cleanPrompt.isNotBlank()) { "Informe o prompt da personalidade." }
+        require(temperature in 0f..2f) { "A temperatura deve ficar entre 0,0 e 2,0." }
+        require(!deepThinking || supportsDeepThinking(model)) {
+            "Deep Thinking não está disponível para este modelo."
+        }
+        val now = System.currentTimeMillis()
+        val agent = AgentEntity(
+            id = UUID.randomUUID().toString(),
+            name = cleanName,
+            modelId = modelId,
+            systemPrompt = cleanPrompt,
+            temperature = temperature,
+            maxTokens = 1024,
+            isDefault = false,
+            deepThinking = deepThinking,
+            usageCount = 0,
+            lastUsedAt = null,
+            createdAt = now,
+            updatedAt = now,
+        )
+        dao.insertAgent(agent)
+        return agent
+    }
+
     suspend fun updateAgent(agent: AgentEntity) {
-        dao.updateAgent(agent.copy(updatedAt = System.currentTimeMillis()))
+        val model = requireNotNull(dao.getModel(agent.modelId)) { "Modelo não encontrado." }
+        require(agent.name.trim().isNotBlank()) { "Informe o nome da personalidade." }
+        require(agent.systemPrompt.trim().isNotBlank()) { "Informe o prompt da personalidade." }
+        require(agent.temperature in 0f..2f) { "A temperatura deve ficar entre 0,0 e 2,0." }
+        require(!agent.deepThinking || supportsDeepThinking(model)) {
+            "Deep Thinking não está disponível para este modelo."
+        }
+        dao.updateAgent(
+            agent.copy(
+                name = agent.name.trim(),
+                systemPrompt = agent.systemPrompt.trim(),
+                updatedAt = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    suspend fun markAgentUsed(id: String) {
+        dao.markAgentUsed(id, System.currentTimeMillis())
     }
 
     suspend fun deleteModel(id: String) = withContext(Dispatchers.IO) {
@@ -269,6 +352,52 @@ class ModelRepository(
         const val DEFAULT_SYSTEM_PROMPT =
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
                 "Quando não souber algo, diga que não sabe em vez de inventar."
+
+        private data class BuiltinPersonality(
+            val key: String,
+            val name: String,
+            val prompt: String,
+            val temperature: Float,
+        )
+
+        private val BUILTIN_PERSONALITIES = listOf(
+            BuiltinPersonality(
+                key = "software-engineer",
+                name = "Engenheiro de software",
+                prompt = "Atue como um engenheiro de software sênior. Analise requisitos antes de propor mudanças, " +
+                    "priorize código correto, simples, testável e seguro, explique decisões técnicas relevantes e " +
+                    "aponte riscos, regressões e critérios objetivos de validação.",
+                temperature = 0.2f,
+            ),
+            BuiltinPersonality(
+                key = "dedicated-researcher",
+                name = "Pesquisador dedicado",
+                prompt = "Atue como um pesquisador dedicado e rigoroso. Estruture o problema, examine hipóteses, " +
+                    "separe fatos de inferências, destaque incertezas e produza sínteses claras. Como esta IA pode " +
+                    "estar offline, nunca invente fontes ou dados que não estejam disponíveis no contexto.",
+                temperature = 0.3f,
+            ),
+            BuiltinPersonality(
+                key = "responsive-critic",
+                name = "Crítico responsivo",
+                prompt = "Atue como um crítico construtivo e responsivo. Questione premissas frágeis, procure " +
+                    "contradições e alternativas, explique objeções de forma respeitosa e termine com recomendações " +
+                    "práticas que ajudem a melhorar a ideia, texto ou decisão analisada.",
+                temperature = 0.5f,
+            ),
+        )
+
+        private fun builtinAgentId(modelId: String, key: String): String =
+            UUID.nameUUIDFromBytes("iaoffline-personality:$modelId:$key".toByteArray(Charsets.UTF_8)).toString()
+
+        fun supportsDeepThinking(model: AiModelEntity): Boolean {
+            val signature = "${model.name} ${model.apiModelId} ${model.architecture.orEmpty()}".lowercase()
+            return signature.contains("qwen3")
+        }
+
+        fun isLegacyGenericAgent(agent: AgentEntity): Boolean =
+            agent.name.endsWith(" · Agente") && agent.systemPrompt == DEFAULT_SYSTEM_PROMPT
+
         private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
     }
 }

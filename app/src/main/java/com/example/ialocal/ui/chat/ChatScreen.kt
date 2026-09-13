@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -19,7 +18,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -29,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.audio.AudioRecorder
 import com.example.ialocal.data.*
+import com.example.ialocal.models.ModelRepository
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,7 +36,7 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
-    onOpenModels: () -> Unit,
+    onOpenCatalog: () -> Unit,
 ) {
     val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
@@ -58,7 +57,7 @@ fun ChatScreen(
     val audioRecorder = remember { AudioRecorder(context) }
     var isRecording by remember { mutableStateOf(false) }
     var modelMenuOpen by remember { mutableStateOf(false) }
-    var agentSettingsOpen by remember { mutableStateOf(false) }
+    var personalitiesOpen by remember { mutableStateOf(false) }
     var pendingAudioImport by remember { mutableStateOf<android.net.Uri?>(null) }
 
     val readyModels = remember(models) {
@@ -69,6 +68,16 @@ fun ChatScreen(
     val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
         ?: readyModels.firstOrNull { it.isActive }
         ?: readyModels.firstOrNull()
+    val personalities = remember(agents, selectedModel?.id) {
+        val modelId = selectedModel?.id
+        if (modelId == null) {
+            emptyList()
+        } else {
+            agents.filter {
+                it.modelId == modelId && !ModelRepository.isLegacyGenericAgent(it)
+            }
+        }
+    }
 
     val micPermission = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -125,7 +134,9 @@ fun ChatScreen(
             ChatDrawer(
                 conversations = conversations,
                 currentConversationId = conversation?.id,
-                agentSettingsEnabled = selectedAgent != null,
+                personalities = personalities,
+                selectedAgentId = selectedAgent?.id,
+                personalityManagementEnabled = selectedModel != null,
                 onNewConversation = {
                     scope.launch {
                         drawerState.close()
@@ -144,16 +155,22 @@ fun ChatScreen(
                         onOpenHistory()
                     }
                 },
-                onOpenAgentSettings = {
+                onOpenCatalog = {
                     scope.launch {
                         drawerState.close()
-                        if (selectedAgent != null) agentSettingsOpen = true
+                        onOpenCatalog()
                     }
                 },
-                onOpenModels = {
+                onSelectPersonality = { agentId ->
+                    scope.launch {
+                        viewModel.selectAgent(agentId)
+                        drawerState.close()
+                    }
+                },
+                onManagePersonalities = {
                     scope.launch {
                         drawerState.close()
-                        onOpenModels()
+                        personalitiesOpen = true
                     }
                 },
             )
@@ -208,11 +225,11 @@ fun ChatScreen(
                                         enabled = false,
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Gerenciar modelos offline") },
+                                        text = { Text("Catálogo de modelos") },
                                         leadingIcon = { Icon(Icons.Default.SmartToy, null) },
                                         onClick = {
                                             modelMenuOpen = false
-                                            onOpenModels()
+                                            onOpenCatalog()
                                         },
                                     )
                                 } else {
@@ -241,6 +258,15 @@ fun ChatScreen(
                                             },
                                         )
                                     }
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("Catálogo de modelos") },
+                                        leadingIcon = { Icon(Icons.Default.Add, null) },
+                                        onClick = {
+                                            modelMenuOpen = false
+                                            onOpenCatalog()
+                                        },
+                                    )
                                 }
                             }
                         }
@@ -326,13 +352,23 @@ fun ChatScreen(
         }
     }
 
-    if (agentSettingsOpen && selectedAgent != null) {
-        AgentSettingsDialog(
-            agent = selectedAgent,
-            onDismiss = { agentSettingsOpen = false },
-            onSave = {
-                viewModel.updateAgent(it)
-                agentSettingsOpen = false
+    if (personalitiesOpen && selectedModel != null) {
+        PersonalitiesManagerDialog(
+            model = selectedModel,
+            personalities = personalities,
+            selectedAgentId = selectedAgent?.id,
+            supportsDeepThinking = ModelRepository.supportsDeepThinking(selectedModel),
+            onDismiss = { personalitiesOpen = false },
+            onSelect = viewModel::selectAgent,
+            onUpdate = viewModel::updateAgent,
+            onCreate = { name, prompt, temperature, deepThinking ->
+                viewModel.createPersonality(
+                    modelId = selectedModel.id,
+                    name = name,
+                    systemPrompt = prompt,
+                    temperature = temperature,
+                    deepThinking = deepThinking,
+                )
             },
         )
     }
@@ -342,12 +378,15 @@ fun ChatScreen(
 private fun ChatDrawer(
     conversations: List<ConversationListItem>,
     currentConversationId: String?,
-    agentSettingsEnabled: Boolean,
+    personalities: List<AgentEntity>,
+    selectedAgentId: String?,
+    personalityManagementEnabled: Boolean,
     onNewConversation: () -> Unit,
     onOpenConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
-    onOpenAgentSettings: () -> Unit,
-    onOpenModels: () -> Unit,
+    onOpenCatalog: () -> Unit,
+    onSelectPersonality: (String) -> Unit,
+    onManagePersonalities: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(320.dp)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
@@ -365,18 +404,22 @@ private fun ChatDrawer(
                 onClick = onNewConversation,
             )
             NavigationDrawerItem(
-                label = { Text("Configurações do agente") },
-                selected = false,
-                icon = { Icon(Icons.Default.Tune, null) },
-                onClick = { if (agentSettingsEnabled) onOpenAgentSettings() },
-                modifier = Modifier.alpha(if (agentSettingsEnabled) 1f else 0.45f),
-            )
-            NavigationDrawerItem(
-                label = { Text("Modelos offline") },
+                label = { Text("Catálogo de modelos") },
                 selected = false,
                 icon = { Icon(Icons.Default.SmartToy, null) },
-                onClick = onOpenModels,
+                onClick = onOpenCatalog,
             )
+
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+
+            PersonalityDrawerSection(
+                personalities = personalities,
+                selectedAgentId = selectedAgentId,
+                enabled = personalityManagementEnabled,
+                onSelect = onSelectPersonality,
+                onManage = onManagePersonalities,
+            )
+
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -617,51 +660,6 @@ private fun ChatComposer(
             }
         }
     }
-}
-
-@Composable
-private fun AgentSettingsDialog(
-    agent: AgentEntity,
-    onDismiss: () -> Unit,
-    onSave: (AgentEntity) -> Unit,
-) {
-    var name by remember(agent.id) { mutableStateOf(agent.name) }
-    var prompt by remember(agent.id) { mutableStateOf(agent.systemPrompt) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Configurações do agente") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                TextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Nome do agente") },
-                    singleLine = true,
-                )
-                TextField(
-                    value = prompt,
-                    onValueChange = { prompt = it },
-                    label = { Text("Instruções do agente") },
-                    minLines = 5,
-                    maxLines = 10,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onSave(
-                        agent.copy(
-                            name = name.trim().ifBlank { agent.name },
-                            systemPrompt = prompt.trim(),
-                        )
-                    )
-                },
-            ) { Text("Salvar") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
-    )
 }
 
 private fun formatBytes(bytes: Long): String = when {

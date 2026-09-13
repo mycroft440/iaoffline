@@ -106,7 +106,13 @@ private fun LocalAiApp(container: AppContainer) {
                         navController.navigate("home")
                     }
                 },
-                onOpenModels = { navController.navigate("models") },
+                onOpenCatalog = {
+                    if (!navController.popBackStack("ai-home", inclusive = false)) {
+                        navController.navigate("ai-home") {
+                            launchSingleTop = true
+                        }
+                    }
+                },
             )
         }
 

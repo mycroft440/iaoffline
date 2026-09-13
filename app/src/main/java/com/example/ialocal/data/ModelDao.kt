@@ -12,13 +12,13 @@ interface ModelDao {
     @Query("SELECT * FROM ai_models ORDER BY isActive DESC, importedAt DESC")
     fun observeModels(): Flow<List<AiModelEntity>>
 
-    @Query("SELECT * FROM agents ORDER BY isDefault DESC, updatedAt DESC")
+    @Query("SELECT * FROM agents ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, createdAt ASC")
     fun observeAgents(): Flow<List<AgentEntity>>
 
     @Query("SELECT * FROM ai_models ORDER BY isActive DESC, importedAt DESC")
     suspend fun getModels(): List<AiModelEntity>
 
-    @Query("SELECT * FROM agents ORDER BY isDefault DESC, updatedAt DESC")
+    @Query("SELECT * FROM agents ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, createdAt ASC")
     suspend fun getAgents(): List<AgentEntity>
 
     @Query("SELECT * FROM ai_models WHERE id = :id LIMIT 1")
@@ -36,7 +36,7 @@ interface ModelDao {
     @Query("SELECT * FROM agents WHERE isDefault = 1 LIMIT 1")
     suspend fun getDefaultAgent(): AgentEntity?
 
-    @Query("SELECT * FROM agents WHERE modelId = :modelId ORDER BY isDefault DESC, createdAt ASC LIMIT 1")
+    @Query("SELECT * FROM agents WHERE modelId = :modelId ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, createdAt ASC LIMIT 1")
     suspend fun getAgentForModel(modelId: String): AgentEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -47,6 +47,9 @@ interface ModelDao {
 
     @Update
     suspend fun updateAgent(agent: AgentEntity)
+
+    @Query("UPDATE agents SET usageCount = usageCount + 1, lastUsedAt = :usedAt WHERE id = :id")
+    suspend fun markAgentUsed(id: String, usedAt: Long)
 
     @Query("UPDATE ai_models SET isActive = 0")
     suspend fun clearActiveModel()
