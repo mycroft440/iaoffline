@@ -6,11 +6,12 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 - Android 13+; arm64-v8a/x86_64.
 - Runtime local baseado no binding Android do llama.cpp.
-- Catálogo integrado para baixar modelos Qwen3 em GGUF diretamente no app:
+- Catálogo integrado para baixar modelos em GGUF diretamente no app:
   - Qwen3 0.6B Q4_K_M
   - Qwen3 1.7B Q4_K_M
   - Qwen3 4B Q4_K_M
   - Qwen3 8B Q4_K_M
+  - Qwen3.8 27B Q4_K_M (opção avançada, ~19 GB; texto no app atual)
 - Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
 - SHA-256 fixado no app para cada GGUF do catálogo antes de qualquer carregamento nativo.
 - Importação manual de outros arquivos `.gguf` continua disponível.
@@ -44,6 +45,7 @@ O workflow de CI executa essas etapas automaticamente.
 - Temperature fixa em 0.3 pelo binding Android utilizado atualmente.
 - Contexto efetivo limitado a 8192 tokens no runtime Android atual.
 - Modelos grandes podem não caber na RAM de todos os aparelhos; o app mostra uma recomendação e ainda exige um teste real antes de ativar.
+- O Qwen3.8 é multimodal na origem, mas esta integração usa apenas texto; suporte a imagem exigiria integrar o projetor multimodal correspondente.
 - PDF escaneado sem OCR.
 - Áudio dependente de reconhecimento on-device.
 
