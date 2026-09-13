@@ -46,11 +46,11 @@ jobs:
           LLAMA_CPP_TAG: v0.4.0
         run: ./scripts/prepare_llama_android.sh
 
-      - name: Prepare Gradle wrapper
+      - name: Prepare Gradle bootstrap
         run: chmod +x ./gradlew
 
-      - name: Unit tests + debug APK + debug AAB
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
+      - name: Unit tests + lint + debug APK + debug AAB
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
 
       - name: Verify Android artifacts
         run: |

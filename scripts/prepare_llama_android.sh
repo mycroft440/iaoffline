@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LLAMA_TAG="${LLAMA_CPP_TAG:-v0.4.0}"
+# Exact commit behind the v0.4.0 release tag. Pinning the commit avoids trusting a mutable tag.
+LLAMA_COMMIT="${LLAMA_CPP_COMMIT:-5266f24da75dc449bd56cbed7addb9c8e4a6a73e}"
 LLAMA_DIR="${ROOT_DIR}/third_party/llama.cpp"
 AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
@@ -10,12 +11,19 @@ ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aicha
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
 
 if [[ ! -d "${LLAMA_DIR}/.git" ]]; then
-  git clone --depth 1 --branch "${LLAMA_TAG}" https://github.com/ggml-org/llama.cpp.git "${LLAMA_DIR}"
-else
-  git -C "${LLAMA_DIR}" fetch --depth 1 origin "${LLAMA_TAG}"
-  git -C "${LLAMA_DIR}" checkout --force FETCH_HEAD
-  git -C "${LLAMA_DIR}" clean -fdx
+  rm -rf "${LLAMA_DIR}"
+  git init "${LLAMA_DIR}"
+  git -C "${LLAMA_DIR}" remote add origin https://github.com/ggml-org/llama.cpp.git
 fi
+
+git -C "${LLAMA_DIR}" fetch --depth 1 origin "${LLAMA_COMMIT}"
+ACTUAL_COMMIT="$(git -C "${LLAMA_DIR}" rev-parse FETCH_HEAD)"
+if [[ "${ACTUAL_COMMIT}" != "${LLAMA_COMMIT}" ]]; then
+  echo "Commit inesperado do llama.cpp. Esperado ${LLAMA_COMMIT}, recebido ${ACTUAL_COMMIT}." >&2
+  exit 1
+fi
+git -C "${LLAMA_DIR}" checkout --detach --force "${LLAMA_COMMIT}"
+git -C "${LLAMA_DIR}" clean -fdx
 
 # v0.4.0 resets State.Error without unloading a model that may already have
 # been allocated natively. Track native ownership and unload it on recovery so

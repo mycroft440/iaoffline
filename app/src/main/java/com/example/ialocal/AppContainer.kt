@@ -20,6 +20,7 @@ import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.LlamaCppRuntime
 import com.example.ialocal.runtime.ModelRuntime
+import kotlinx.coroutines.runBlocking
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -56,6 +57,12 @@ class AppContainer(context: Context) {
     )
 
     init {
+        // Model files are deliberately excluded from Android backup/device transfer while Room data
+        // can be restored. Reconcile before exposing the API so no restored row points at a missing GGUF.
+        runBlocking {
+            runCatching { modelRepository.reconcileStorage() }
+                .onFailure { diagnostics.error("MODEL_STORAGE", "Falha ao reconciliar biblioteca de modelos", it) }
+        }
         apiServer.start()
     }
 }

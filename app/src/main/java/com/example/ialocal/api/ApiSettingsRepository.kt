@@ -6,20 +6,23 @@ import java.security.SecureRandom
 
 class ApiSettingsRepository(context: Context) {
     private val prefs = context.getSharedPreferences("local_api", Context.MODE_PRIVATE)
+    private val keyLock = Any()
 
     val port: Int
         get() = prefs.getInt(KEY_PORT, DEFAULT_PORT)
 
     val apiKey: String
-        get() = prefs.getString(KEY_API_KEY, null) ?: generateAndPersistKey()
+        get() = prefs.getString(KEY_API_KEY, null) ?: synchronized(keyLock) {
+            prefs.getString(KEY_API_KEY, null) ?: generateAndPersistKey()
+        }
 
     val baseUrl: String
         get() = "http://127.0.0.1:$port"
 
-    fun regenerateApiKey(): String {
+    fun regenerateApiKey(): String = synchronized(keyLock) {
         val key = newKey()
         prefs.edit().putString(KEY_API_KEY, key).apply()
-        return key
+        key
     }
 
     private fun generateAndPersistKey(): String {

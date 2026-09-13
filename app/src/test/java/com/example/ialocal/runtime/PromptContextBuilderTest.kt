@@ -4,6 +4,7 @@ import com.example.ialocal.ai.AiChatMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class PromptContextBuilderTest {
@@ -44,5 +45,35 @@ class PromptContextBuilderTest {
 
         assertTrue(result.truncated)
         assertEquals("agora", result.latestUser)
+    }
+
+    @Test
+    fun rejectsLatestUserThatCannotFitInsteadOfOverflowingNativeContext() {
+        try {
+            builder.prepare(
+                baseSystemPrompt = "Sistema",
+                messages = listOf(AiChatMessage("user", "x".repeat(20_000))),
+                contextTokens = 2048,
+                maxOutputTokens = 512,
+            )
+            fail("Era esperado rejeitar uma entrada maior que o contexto.")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("excedem o contexto"))
+        }
+    }
+
+    @Test
+    fun rejectsOutputBudgetThatLeavesNoUsefulInputContext() {
+        try {
+            builder.prepare(
+                baseSystemPrompt = "Sistema",
+                messages = listOf(AiChatMessage("user", "oi")),
+                contextTokens = 1024,
+                maxOutputTokens = 800,
+            )
+            fail("Era esperado rejeitar max_tokens incompatível com o contexto.")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("pouco contexto"))
+        }
     }
 }

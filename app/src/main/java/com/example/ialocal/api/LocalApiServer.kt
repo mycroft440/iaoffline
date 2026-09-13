@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 enum class ApiServerStatus { STOPPED, STARTING, RUNNING, ERROR }
@@ -57,7 +59,11 @@ class LocalApiServer(
     fun start() {
         if (acceptJob?.isActive == true || serverSocket != null || _state.value.status == ApiServerStatus.STARTING) return
         _state.value = ApiServerState(ApiServerStatus.STARTING, settings.port)
-        acceptJob = scope.launch {
+
+        // Start lazily so acceptJob is assigned before the coroutine can fail/finish. This prevents an
+        // old stop/start cycle from clearing the state of a newer server instance in its finally block.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val ownedJob = requireNotNull(coroutineContext[Job])
             var ownedSocket: ServerSocket? = null
             try {
                 val socket = ServerSocket().apply {
@@ -65,10 +71,19 @@ class LocalApiServer(
                     bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), settings.port))
                 }
                 ownedSocket = socket
-                synchronized(this@LocalApiServer) {
-                    serverSocket = socket
+                val ownsServer = synchronized(this@LocalApiServer) {
+                    if (acceptJob !== ownedJob || !ownedJob.isActive) {
+                        false
+                    } else {
+                        serverSocket = socket
+                        _state.value = ApiServerState(ApiServerStatus.RUNNING, settings.port)
+                        true
+                    }
                 }
-                _state.value = ApiServerState(ApiServerStatus.RUNNING, settings.port)
+                if (!ownsServer) {
+                    socket.close()
+                    return@launch
+                }
                 logger?.info("API_RESPONSE", "API local ativa em ${settings.baseUrl}")
 
                 while (!socket.isClosed) {
@@ -95,25 +110,34 @@ class LocalApiServer(
                     }
                 }
             } catch (error: Throwable) {
-                if (_state.value.status != ApiServerStatus.STOPPED) {
-                    _state.value = ApiServerState(
-                        ApiServerStatus.ERROR,
-                        settings.port,
-                        error.message ?: "Falha ao iniciar a API local.",
-                    )
-                    logger?.error("API_RESPONSE", "Falha no servidor localhost", error)
+                val report = synchronized(this@LocalApiServer) {
+                    if (acceptJob === ownedJob && _state.value.status != ApiServerStatus.STOPPED) {
+                        _state.value = ApiServerState(
+                            ApiServerStatus.ERROR,
+                            settings.port,
+                            error.message ?: "Falha ao iniciar a API local.",
+                        )
+                        true
+                    } else {
+                        false
+                    }
                 }
+                if (report) logger?.error("API_RESPONSE", "Falha no servidor localhost", error)
             } finally {
+                runCatching { ownedSocket?.close() }
                 synchronized(this@LocalApiServer) {
-                    runCatching { ownedSocket?.close() }
                     if (serverSocket === ownedSocket) serverSocket = null
-                    acceptJob = null
-                    if (_state.value.status != ApiServerStatus.ERROR) {
-                        _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
+                    if (acceptJob === ownedJob) {
+                        acceptJob = null
+                        if (_state.value.status != ApiServerStatus.ERROR) {
+                            _state.value = ApiServerState(ApiServerStatus.STOPPED, settings.port)
+                        }
                     }
                 }
             }
         }
+        acceptJob = job
+        job.start()
     }
 
     @Synchronized
@@ -160,7 +184,7 @@ class LocalApiServer(
 
             val response = runCatching { route(request) }.getOrElse { error ->
                 val status = when (error) {
-                    is IllegalArgumentException -> 400
+                    is IllegalArgumentException, is JSONException -> 400
                     is IllegalStateException -> 409
                     else -> 500
                 }
