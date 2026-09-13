@@ -22,9 +22,13 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun catalogIncludesQwen3EightB() {
-        val model = ModelCatalog.entries.firstOrNull { it.id.startsWith("qwen3-8b") }
-        assertNotNull(model)
-        assertEquals("Q4_K_M", model?.quantization)
+    fun catalogIncludesRequestedQwenFamilies() {
+        val qwen3EightB = ModelCatalog.entries.firstOrNull { it.id.startsWith("qwen3-8b") }
+        val qwen38 = ModelCatalog.entries.firstOrNull { it.id.startsWith("qwen3.8-27b") }
+
+        assertNotNull(qwen3EightB)
+        assertNotNull(qwen38)
+        assertEquals("Q4_K_M", qwen3EightB?.quantization)
+        assertEquals("Q4_K_M", qwen38?.quantization)
     }
 }
