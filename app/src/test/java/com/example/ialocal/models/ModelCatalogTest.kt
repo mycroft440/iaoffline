@@ -35,10 +35,13 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun providerSectionsMatchHomeNavigation() {
+    fun providerSectionsHaveInstallableModels() {
         assertEquals("Modelos do Google", ModelProvider.GOOGLE.sectionLabel)
         assertEquals("Modelos da Alibaba", ModelProvider.ALIBABA.sectionLabel)
         assertEquals("Modelos da Meta", ModelProvider.META.sectionLabel)
-        assertTrue(ModelCatalog.entries.all { it.provider == ModelProvider.ALIBABA })
+
+        ModelProvider.values().forEach { provider ->
+            assertTrue("Sem modelos para $provider", ModelCatalog.entries.any { it.provider == provider })
+        }
     }
 }
