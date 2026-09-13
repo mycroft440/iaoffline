@@ -1,9 +1,16 @@
 package com.example.ialocal.models
 
+enum class ModelProvider(val sectionLabel: String) {
+    GOOGLE("Modelos do Google"),
+    ALIBABA("Modelos da Alibaba"),
+    META("Modelos da Meta"),
+}
+
 /** A curated GGUF that can be downloaded directly by the app. */
 data class CatalogModel(
     val id: String,
     val displayName: String,
+    val provider: ModelProvider,
     val repository: String,
     val fileName: String,
     val quantization: String,
@@ -28,6 +35,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-0.6b-q4-k-m",
             displayName = "Qwen3 0.6B",
+            provider = ModelProvider.ALIBABA,
             repository = "Qwen/Qwen3-0.6B-GGUF",
             fileName = "Qwen3-0.6B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -39,6 +47,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-1.7b-q4-k-m",
             displayName = "Qwen3 1.7B",
+            provider = ModelProvider.ALIBABA,
             repository = "ggml-org/Qwen3-1.7B-GGUF",
             fileName = "Qwen3-1.7B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -50,6 +59,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-4b-q4-k-m",
             displayName = "Qwen3 4B",
+            provider = ModelProvider.ALIBABA,
             repository = "ggml-org/Qwen3-4B-GGUF",
             fileName = "Qwen3-4B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -61,6 +71,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3-8b-q4-k-m",
             displayName = "Qwen3 8B",
+            provider = ModelProvider.ALIBABA,
             repository = "Qwen/Qwen3-8B-GGUF",
             fileName = "Qwen3-8B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
@@ -72,6 +83,7 @@ object ModelCatalog {
         CatalogModel(
             id = "qwen3.8-27b-q4-k-m",
             displayName = "Qwen3.8 27B",
+            provider = ModelProvider.ALIBABA,
             repository = "ggml-org/Qwen3.8-27B-GGUF",
             fileName = "Qwen3.8-27B-Q4_K_M.gguf",
             quantization = "Q4_K_M",
