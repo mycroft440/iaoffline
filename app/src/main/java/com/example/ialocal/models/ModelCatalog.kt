@@ -69,6 +69,17 @@ object ModelCatalog {
             recommendedRamBytes = 8_000_000_000L,
             description = "Modelo maior. Baixe apenas em aparelhos com bastante armazenamento e RAM.",
         ),
+        CatalogModel(
+            id = "qwen3.8-27b-q4-k-m",
+            displayName = "Qwen3.8 27B",
+            repository = "ggml-org/Qwen3.8-27B-GGUF",
+            fileName = "Qwen3.8-27B-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 19_000_000_000L,
+            sha256 = "31629f53165ab6a7dad8c9847dcfd1fdf55829dac1e6e748f4a68581b0033d34",
+            recommendedRamBytes = 32_000_000_000L,
+            description = "Opção avançada e muito pesada. No app atual é usada em texto; exige aparelho excepcional, muito armazenamento e RAM.",
+        ),
     )
 
     fun requireById(id: String): CatalogModel =
