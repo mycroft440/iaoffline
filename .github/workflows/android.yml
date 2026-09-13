@@ -1,4 +1,4 @@
-name: Android APK
+name: Android APK + AAB
 
 on:
   workflow_dispatch:
@@ -51,15 +51,28 @@ jobs:
           LLAMA_CPP_TAG: v0.4.0
         run: ./scripts/prepare_llama_android.sh
 
-      - name: Unit tests + debug APK
-        run: gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - name: Unit tests + debug APK + debug AAB
+        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
 
-      - name: Verify APK exists
-        run: test -f app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify Android artifacts
+        run: |
+          test -f app/build/outputs/apk/debug/app-debug.apk
+          test -f app/build/outputs/bundle/debug/app-debug.aab
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/bundle/debug/app-debug.aab
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: IA-Local-debug
+          name: IA-Local-debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v6
+        with:
+          name: IA-Local-debug-AAB
+          path: app/build/outputs/bundle/debug/app-debug.aab
+          if-no-files-found: error
+          retention-days: 14

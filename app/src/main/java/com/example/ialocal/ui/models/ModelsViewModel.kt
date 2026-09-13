@@ -16,6 +16,8 @@ import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.RuntimeState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -36,6 +38,8 @@ class ModelsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val serverState: StateFlow<ApiServerState> = apiServer.state
     val runtimeState: StateFlow<RuntimeState> = manager.runtimeState
+    val downloadState = manager.downloadState
+    val catalog = manager.catalog
 
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
@@ -55,10 +59,12 @@ class ModelsViewModel(
     private val _integrationTest = MutableStateFlow(IntegrationTestState())
     val integrationTest: StateFlow<IntegrationTestState> = _integrationTest.asStateFlow()
 
+    private var downloadJob: Job? = null
+
     val baseUrl: String get() = apiSettings.baseUrl
 
     fun inspectModel(uri: Uri) {
-        if (_isImporting.value) return
+        if (_isImporting.value || manager.downloadState.value.isBusy) return
         _isImporting.value = true
         _operationText.value = "Validando GGUF…"
         _error.value = null
@@ -75,7 +81,7 @@ class ModelsViewModel(
 
     fun confirmImport() {
         val selected = _preview.value ?: return
-        if (_isImporting.value) return
+        if (_isImporting.value || manager.downloadState.value.isBusy) return
         _preview.value = null
         _isImporting.value = true
         _operationText.value = "Copiando e verificando modelo…"
@@ -86,6 +92,28 @@ class ModelsViewModel(
             _isImporting.value = false
             _operationText.value = null
         }
+    }
+
+    fun downloadCatalogModel(catalogId: String) {
+        if (_isImporting.value || _operationText.value != null || downloadJob?.isActive == true) return
+        _error.value = null
+        downloadJob = viewModelScope.launch {
+            try {
+                manager.downloadAndVerify(catalogId)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (t: Throwable) {
+                _error.value = t.message ?: "Falha ao baixar ou verificar o modelo."
+            }
+        }
+    }
+
+    fun cancelDownload() {
+        downloadJob?.cancel()
+    }
+
+    fun clearDownloadState() {
+        manager.resetDownloadState()
     }
 
     fun activate(id: String) = viewModelScope.launch {
