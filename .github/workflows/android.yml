@@ -25,17 +25,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
-
-      - name: Gradle 9.6
-        run: |
-          curl -fsSL https://services.gradle.org/distributions/gradle-9.6.0-bin.zip -o /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /opt
-          echo "/opt/gradle-9.6.0/bin" >> "$GITHUB_PATH"
 
       - name: Native toolchain
         run: |
@@ -51,8 +46,11 @@ jobs:
           LLAMA_CPP_TAG: v0.4.0
         run: ./scripts/prepare_llama_android.sh
 
+      - name: Prepare Gradle wrapper
+        run: chmod +x ./gradlew
+
       - name: Unit tests + debug APK + debug AAB
-        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
 
       - name: Verify Android artifacts
         run: |
