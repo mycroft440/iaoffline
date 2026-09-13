@@ -22,6 +22,7 @@ import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -74,7 +75,9 @@ class ChatViewModel(
                 raw = withContext(Dispatchers.IO) { attachmentImporter.import(uri) }
                 _pendingAttachments.value += attachmentProcessor.enrich(raw)
             } catch (cancel: CancellationException) {
-                raw?.let { withContext(Dispatchers.IO) { runCatching { File(it.localPath).delete() } } }
+                raw?.let {
+                    withContext(NonCancellable + Dispatchers.IO) { runCatching { File(it.localPath).delete() } }
+                }
                 throw cancel
             } catch (t: Throwable) {
                 raw?.let { withContext(Dispatchers.IO) { runCatching { File(it.localPath).delete() } } }
@@ -91,7 +94,7 @@ class ChatViewModel(
             try {
                 _pendingAttachments.value += attachmentProcessor.enrich(attachment)
             } catch (cancel: CancellationException) {
-                withContext(Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
+                withContext(NonCancellable + Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
                 throw cancel
             } catch (t: Throwable) {
                 withContext(Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
