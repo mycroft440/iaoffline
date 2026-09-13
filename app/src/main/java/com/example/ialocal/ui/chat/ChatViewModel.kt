@@ -59,6 +59,7 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     private var generationJob: Job? = null
+    private var attachmentProcessingCount = 0
 
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
@@ -69,7 +70,7 @@ class ChatViewModel(
 
     fun importFile(uri: Uri) {
         viewModelScope.launch {
-            _isProcessingAttachments.value = true
+            beginAttachmentProcessing()
             var raw: PendingAttachment? = null
             try {
                 raw = withContext(Dispatchers.IO) { attachmentImporter.import(uri) }
@@ -83,14 +84,14 @@ class ChatViewModel(
                 raw?.let { withContext(Dispatchers.IO) { runCatching { File(it.localPath).delete() } } }
                 _error.value = t.message ?: "Não foi possível processar o arquivo."
             } finally {
-                _isProcessingAttachments.value = false
+                endAttachmentProcessing()
             }
         }
     }
 
     fun addPendingAttachment(attachment: PendingAttachment) {
         viewModelScope.launch {
-            _isProcessingAttachments.value = true
+            beginAttachmentProcessing()
             try {
                 _pendingAttachments.value += attachmentProcessor.enrich(attachment)
             } catch (cancel: CancellationException) {
@@ -100,7 +101,7 @@ class ChatViewModel(
                 withContext(Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
                 _error.value = t.message ?: "Não foi possível processar o áudio."
             } finally {
-                _isProcessingAttachments.value = false
+                endAttachmentProcessing()
             }
         }
     }
@@ -153,8 +154,17 @@ class ChatViewModel(
                 }
                 repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
             } catch (cancel: CancellationException) {
-                assistantId?.let { repository.updateMessageStatus(it, MessageStatus.COMPLETE) }
                 if (!userMessagePersisted) restoreUnsentInput(currentDraft, attachments)
+                withContext(NonCancellable) {
+                    val id = assistantId
+                    if (id != null) {
+                        try {
+                            repository.updateMessageStatus(id, MessageStatus.COMPLETE)
+                        } catch (_: Throwable) {
+                            // Preserve the original cancellation; stale SENDING rows are recoverable UI state.
+                        }
+                    }
+                }
                 throw cancel
             } catch (t: Throwable) {
                 assistantId?.let { repository.updateMessageStatus(it, MessageStatus.ERROR) }
@@ -165,6 +175,16 @@ class ChatViewModel(
                 generationJob = null
             }
         }
+    }
+
+    private fun beginAttachmentProcessing() {
+        attachmentProcessingCount += 1
+        _isProcessingAttachments.value = true
+    }
+
+    private fun endAttachmentProcessing() {
+        attachmentProcessingCount = (attachmentProcessingCount - 1).coerceAtLeast(0)
+        _isProcessingAttachments.value = attachmentProcessingCount > 0
     }
 
     private suspend fun resolveAgentId(): String? {
