@@ -39,6 +39,7 @@ class LocalApiAiGateway(
         val attachmentContext = attachmentContextBuilder.build(request.attachments)
         val lastUserIndex = request.messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
         val payload = JSONObject().apply {
+            request.model?.let { put("model", it) }
             request.agentId?.let { put("agent_id", it) }
             put("stream", true)
             put("messages", JSONArray().apply {
