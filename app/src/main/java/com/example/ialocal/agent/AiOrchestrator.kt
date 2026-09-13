@@ -114,14 +114,20 @@ class AiOrchestrator(
         model: AiModelEntity,
         messages: List<AiChatMessage>,
     ): List<AiChatMessage> {
-        if (!agent.deepThinking || !ModelRepository.supportsDeepThinking(model)) return messages
+        if (!ModelRepository.supportsDeepThinking(model)) return messages
         val lastUserIndex = messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
         if (lastUserIndex < 0) return messages
+        val directive = if (agent.deepThinking) "/think" else "/no_think"
         return messages.mapIndexed { index, message ->
-            if (index != lastUserIndex || message.content.trimStart().startsWith("/think")) {
+            val trimmed = message.content.trimStart()
+            if (
+                index != lastUserIndex ||
+                trimmed.startsWith("/think") ||
+                trimmed.startsWith("/no_think")
+            ) {
                 message
             } else {
-                message.copy(content = "/think\n${message.content}")
+                message.copy(content = "$directive\n${message.content}")
             }
         }
     }
