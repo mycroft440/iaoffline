@@ -48,4 +48,23 @@ Enquanto esses valores não forem alterados, não tratar como causa desta falha 
 - compatibilidade do AGP 9.4.0 com API 37.0;
 - existência da DSL de API menor para `compileSdk`.
 
+## Rodada 4 — revisão cruzada API 37 / llama.cpp / KSP
+
+- **Plataforma Android 37.0 no runner:** a etapa `Native toolchain` do run #111 concluiu com sucesso usando `platforms;android-37.0`, confirmando que esse é um pacote válido no ambiente atual.
+- **Duas plataformas são intencionais:** o app principal compila contra API 37.0, enquanto o binding fixado `llama.cpp v0.4.0` declara `compileSdk = 36`. O workflow agora instala explicitamente `platforms;android-36` e `platforms;android-37.0`, sem depender da imagem do runner trazer API 36 implicitamente.
+- **NDK e CMake do binding:** o `llama.cpp v0.4.0` fixa NDK `29.0.13113456` e CMake `3.31.6`; são exatamente as versões instaladas pelo workflow.
+- **Compose estável não exige API 37.1:** a linha Compose 1.12 usada pela BOM estável `2026.08.00` exige API 37. A exigência 37.1 aparece nas linhas alpha posteriores, que não estão declaradas neste projeto.
+- **KSP com AGP 9:** o projeto usa KSP `2.3.11`, acima do mínimo `2.3.6` recomendado para migração AGP 9. Room `2.8.4` é processado via KSP e o código não usa `@Parcelize` em entidades, portanto o bug conhecido dessa combinação específica não se aplica ao código atual.
+- **JVM target com Kotlin integrado:** com Kotlin integrado do AGP 9, o alvo Kotlin herda `android.compileOptions.targetCompatibility`; o módulo já define Java 17, portanto não é necessário adicionar uma segunda configuração `kotlinOptions.jvmTarget`.
+
+### Itens excluídos das próximas revisões
+
+Enquanto as versões e dependências permanecerem iguais:
+
+- validade de `platforms;android-37.0` no runner;
+- necessidade de API 37.1 para a BOM estável atual;
+- compatibilidade básica de KSP `2.3.11` com AGP 9;
+- alinhamento NDK/CMake do workflow com `llama.cpp v0.4.0`;
+- divergência de JVM target Java/Kotlin no módulo principal.
+
 > Observação: confirmar que esses pontos estão corretos não significa que todo o quadrante esteja correto. Apenas esses itens específicos foram encerrados e não serão reavaliados enquanto não houver mudança no código correspondente.
