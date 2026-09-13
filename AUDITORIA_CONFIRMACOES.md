@@ -25,9 +25,8 @@ Não revisar novamente, salvo alteração futura desses arquivos/versões:
 ## Rodada 2 — AAR metadata / API Android
 
 - **`minSdk = 33`:** não controla o nível de API usado para compilar dependências e não é a causa da falha `checkDebugAarMetadata` identificada nesta rodada.
-- **`targetSdk = 36`:** pode permanecer em 36 enquanto o projeto compila com API 37; ele não é a causa da exigência de AAR metadata observada.
+- **`targetSdk = 36`:** pode permanecer em 36 enquanto o projeto compila com API 37.x; ele não é a causa da exigência de AAR metadata observada.
 - **Trigger `push` do workflow no `main`:** está funcional. O merge da correção disparou automaticamente um novo run do workflow Android.
-- **Escopo da correção:** o diff revisado alterou somente `compileSdk` de 36 para 37 e a plataforma instalada pelo CI de `android-36` para `android-37`; nenhum outro parâmetro do app ou toolchain foi modificado.
 
 ### Itens excluídos das próximas revisões
 
@@ -36,5 +35,17 @@ Enquanto esses valores não forem alterados, não tratar como causa desta falha 
 - `minSdk = 33`;
 - `targetSdk = 36`;
 - mecanismo de trigger `push` do workflow no `main`.
+
+## Rodada 3 — Android API 37.0 no toolchain
+
+- **SDK Build Tools 36.0.0:** é a versão padrão suportada pelo AGP 9.4.0; não precisa ser elevado para 37.0.0 apenas porque o `compileSdk` é API 37.0.
+- **AGP 9.4.0 e API 37.0:** o AGP 9.4 suporta oficialmente API 37.0, portanto não é necessário trocar o plugin para corrigir a instalação da plataforma.
+- **Forma do `compileSdk` para API menor:** o AGP atual oferece a DSL `compileSdk { version = release(...) { minorApiLevel = ... } }`, adequada para declarar explicitamente API 37.0.
+
+### Itens excluídos das próximas revisões
+
+- necessidade de atualizar Build Tools apenas por causa da API 37.0;
+- compatibilidade do AGP 9.4.0 com API 37.0;
+- existência da DSL de API menor para `compileSdk`.
 
 > Observação: confirmar que esses pontos estão corretos não significa que todo o quadrante esteja correto. Apenas esses itens específicos foram encerrados e não serão reavaliados enquanto não houver mudança no código correspondente.
