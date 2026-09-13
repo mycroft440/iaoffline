@@ -19,8 +19,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Key
@@ -65,6 +67,9 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.IntegrationCheckStatus
 import com.example.ialocal.diagnostics.IntegrationTestState
+import com.example.ialocal.models.CatalogModel
+import com.example.ialocal.models.ModelDownloadPhase
+import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.runtime.RuntimeStatus
 
@@ -76,6 +81,7 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val server by viewModel.serverState.collectAsStateWithLifecycle()
     val runtime by viewModel.runtimeState.collectAsStateWithLifecycle()
+    val download by viewModel.downloadState.collectAsStateWithLifecycle()
     val importing by viewModel.isImporting.collectAsStateWithLifecycle()
     val operation by viewModel.operationText.collectAsStateWithLifecycle()
     val preview by viewModel.preview.collectAsStateWithLifecycle()
@@ -144,9 +150,30 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
             }
 
             item {
+                Text("Baixar uma IA para usar offline", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "O app baixa GGUFs selecionados, valida a integridade e só ativa o modelo depois de uma inferência real no aparelho.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            items(viewModel.catalog, key = { "catalog-${it.id}" }) { catalogModel ->
+                CatalogModelCard(
+                    model = catalogModel,
+                    state = download.takeIf { it.catalogId == catalogModel.id },
+                    installed = models.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) },
+                    anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
+                    onDownload = { viewModel.downloadCatalogModel(catalogModel.id) },
+                    onCancel = viewModel::cancelDownload,
+                )
+            }
+
+            item {
+                Text("Ou importar um GGUF existente", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Button(
                     onClick = { picker.launch(arrayOf("application/octet-stream", "*/*")) },
-                    enabled = !importing && operation == null,
+                    enabled = !importing && operation == null && !download.isBusy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (importing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -158,10 +185,14 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
             if (models.isEmpty()) {
                 item {
                     Text(
-                        "Nenhum modelo importado. O app valida o GGUF antes de copiar e só marca como funcional depois de uma inferência real.",
+                        "Nenhum modelo instalado. Escolha um modelo acima ou importe um GGUF do armazenamento.",
                         modifier = Modifier.padding(12.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            } else {
+                item {
+                    Text("Modelos instalados", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -196,6 +227,107 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
             onSave = { viewModel.saveAgent(it); editAgent = null },
         )
     }
+}
+
+@Composable
+private fun CatalogModelCard(
+    model: CatalogModel,
+    state: ModelDownloadState?,
+    installed: Boolean,
+    anotherOperationRunning: Boolean,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val currentBusy = state?.isBusy == true
+    val progressText = state?.progress?.let { "${(it * 100).toInt()}%" }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(model.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${model.quantization} · ~${formatBytes(model.approximateSizeBytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (installed) Icon(Icons.Default.CheckCircle, "Modelo instalado", tint = MaterialTheme.colorScheme.primary)
+            }
+            Text(model.description, style = MaterialTheme.typography.bodySmall)
+            Text(
+                "RAM recomendada: ~${formatBytes(model.recommendedRamBytes)} · Fonte: ${model.repository}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (state != null && state.phase != ModelDownloadPhase.IDLE) {
+                Text(
+                    buildString {
+                        append(downloadPhaseLabel(state.phase))
+                        if (state.phase == ModelDownloadPhase.DOWNLOADING && progressText != null) append(" · ").append(progressText)
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                    color = when (state.phase) {
+                        ModelDownloadPhase.ERROR -> MaterialTheme.colorScheme.error
+                        ModelDownloadPhase.COMPLETE -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                if (state.phase == ModelDownloadPhase.DOWNLOADING) {
+                    val total = state.totalBytes ?: model.approximateSizeBytes
+                    Text(
+                        "${formatBytes(state.downloadedBytes)} de ${formatBytes(total)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                state.message?.takeIf { state.phase != ModelDownloadPhase.DOWNLOADING }?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = onDownload,
+                    enabled = !installed && !currentBusy && !anotherOperationRunning,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    if (currentBusy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Default.Download, contentDescription = null)
+                    Text(
+                        when {
+                            installed -> "  Instalado"
+                            state?.phase == ModelDownloadPhase.CANCELLED -> "  Continuar download"
+                            state?.phase == ModelDownloadPhase.ERROR -> "  Tentar novamente"
+                            else -> "  Baixar e instalar"
+                        }
+                    )
+                }
+                if (currentBusy && state?.phase in setOf(
+                        ModelDownloadPhase.CHECKING,
+                        ModelDownloadPhase.DOWNLOADING,
+                        ModelDownloadPhase.VERIFYING_FILE,
+                    )
+                ) {
+                    OutlinedButton(onClick = onCancel) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Text(" Cancelar")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun downloadPhaseLabel(phase: ModelDownloadPhase): String = when (phase) {
+    ModelDownloadPhase.IDLE -> "Pronto"
+    ModelDownloadPhase.CHECKING -> "Preparando download"
+    ModelDownloadPhase.DOWNLOADING -> "Baixando"
+    ModelDownloadPhase.VERIFYING_FILE -> "Verificando arquivo"
+    ModelDownloadPhase.IMPORTING -> "Registrando modelo"
+    ModelDownloadPhase.VERIFYING_MODEL -> "Testando inferência"
+    ModelDownloadPhase.COMPLETE -> "Instalado e verificado"
+    ModelDownloadPhase.ERROR -> "Falha"
+    ModelDownloadPhase.CANCELLED -> "Download pausado"
 }
 
 @Composable
