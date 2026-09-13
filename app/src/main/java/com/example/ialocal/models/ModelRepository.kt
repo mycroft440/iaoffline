@@ -52,14 +52,43 @@ class ModelRepository(
     suspend fun importGguf(preview: ModelImportPreview): AiModelEntity = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val modelDir = File(context.filesDir, "models/$id").apply { mkdirs() }
+        require(modelDir.isDirectory) { "Não foi possível preparar a pasta privada do modelo." }
         val destination = File(modelDir, "model.gguf")
 
         try {
             logger?.info("MODEL_COPY", "Copiando ${preview.displayName} para armazenamento privado")
+            val storageLimit = (context.filesDir.usableSpace - COPY_FALLBACK_HEADROOM).coerceAtLeast(0L)
+            require(storageLimit > 0) { "Não há espaço livre suficiente para importar este modelo." }
+            preview.sourceSizeBytes?.takeIf { it > 0 }?.let { declared ->
+                require(declared <= storageLimit) {
+                    "Não há espaço livre suficiente para importar este modelo com margem de segurança."
+                }
+            }
+            val maxCopyBytes = preview.sourceSizeBytes?.takeIf { it > 0 }?.let { minOf(it, storageLimit) }
+                ?: storageLimit
+            var copied = 0L
             context.contentResolver.openInputStream(preview.uri)?.use { input ->
-                FileOutputStream(destination).use { output -> input.copyTo(output, 1024 * 1024) }
+                FileOutputStream(destination).buffered(COPY_BUFFER_SIZE).use { output ->
+                    val buffer = ByteArray(COPY_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        if (read == 0) continue
+                        copied += read
+                        require(copied <= maxCopyBytes) {
+                            if (preview.sourceSizeBytes?.takeIf { it > 0 } != null) {
+                                "O provedor entregou mais dados que o tamanho declarado para este modelo."
+                            } else {
+                                "O modelo excedeu o espaço disponível com margem de segurança durante a cópia."
+                            }
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
             } ?: error("Não foi possível abrir o modelo selecionado.")
 
+            require(copied > 0) { "O modelo selecionado está vazio." }
             if (preview.sourceSizeBytes != null && preview.sourceSizeBytes > 0 && destination.length() != preview.sourceSizeBytes) {
                 throw IllegalStateException(
                     "A cópia do modelo ficou incompleta (${destination.length()} de ${preview.sourceSizeBytes} bytes)."
@@ -89,6 +118,7 @@ class ModelRepository(
         require(download.isFile && download.length() > 0) { "O download do modelo não está disponível." }
         val id = UUID.randomUUID().toString()
         val modelDir = File(context.filesDir, "models/$id").apply { mkdirs() }
+        require(modelDir.isDirectory) { "Não foi possível preparar a pasta privada do modelo." }
         val destination = File(modelDir, "model.gguf")
 
         try {
@@ -296,6 +326,7 @@ class ModelRepository(
         const val DEFAULT_SYSTEM_PROMPT =
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
                 "Quando não souber algo, diga que não sabe em vez de inventar."
+        private const val COPY_BUFFER_SIZE = 1024 * 1024
         private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
     }
 }
