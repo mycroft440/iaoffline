@@ -41,7 +41,6 @@ Enquanto esses valores não forem alterados, não tratar como causa desta falha 
 - **SDK Build Tools 36.0.0:** é a versão padrão suportada pelo AGP 9.4.0; não precisa ser elevado para 37.0.0 apenas porque o `compileSdk` é API 37.0.
 - **AGP 9.4.0 e API 37.0:** o AGP 9.4 suporta oficialmente API 37.0, portanto não é necessário trocar o plugin para corrigir a instalação da plataforma.
 - **Forma do `compileSdk` para API menor:** o AGP atual oferece a DSL `compileSdk { version = release(...) { minorApiLevel = ... } }`, adequada para declarar explicitamente API 37.0.
-- **Demais componentes nativos:** NDK 29.0.13113456 e CMake 3.31.6 não foram implicados na falha observada da etapa de instalação; permanecem sem alteração nesta correção.
 
 ### Itens excluídos das próximas revisões
 
