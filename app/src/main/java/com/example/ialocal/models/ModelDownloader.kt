@@ -128,7 +128,7 @@ class ModelDownloader(
         complete
     }
 
-    private fun downloadBody(
+    private suspend fun downloadBody(
         model: CatalogModel,
         partial: File,
         onState: (ModelDownloadState) -> Unit,
@@ -250,7 +250,7 @@ class ModelDownloader(
         }
     }
 
-    private fun sha256(file: File): String {
+    private suspend fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         FileInputStream(file).use { input ->
             val buffer = ByteArray(BUFFER_SIZE)
@@ -261,7 +261,7 @@ class ModelDownloader(
                 digest.update(buffer, 0, read)
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
     companion object {
