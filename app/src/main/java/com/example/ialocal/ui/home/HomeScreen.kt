@@ -66,7 +66,7 @@ fun HomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("IA Local") },
+                title = { Text("I.A Off-line") },
                 actions = {
                     IconButton(onClick = { viewModel.createConversation(onOpenConversation) }) {
                         Icon(Icons.Default.Add, contentDescription = "Nova conversa")
