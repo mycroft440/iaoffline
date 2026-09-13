@@ -69,9 +69,7 @@ class LlamaCppRuntime(
         temperature: Float,
         maxTokens: Int,
     ): Flow<String> = flow {
-        require(kotlin.math.abs(temperature - FIXED_TEMPERATURE) < 0.0001f) {
-            "O binding llama.cpp Android v0.4.0 usa temperature fixa em $FIXED_TEMPERATURE."
-        }
+        require(temperature in 0f..2f) { "A temperatura deve ficar entre 0,0 e 2,0." }
         mutex.lock()
         try {
             ensureFreshLoaded(model, forceReload = requestSessionConsumed || loadedModelId != model.id)
@@ -86,11 +84,15 @@ class LlamaCppRuntime(
             engine.setSystemPrompt(prepared.systemPrompt)
             requestSessionConsumed = true
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
-            logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
+            logger?.info(
+                "INFERENCE",
+                "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; temperature=$temperature; streaming=true",
+            )
             var emitted = 0
             engine.sendUserPrompt(
                 message = prepared.latestUser,
                 predictLength = maxTokens.coerceIn(16, 4096),
+                temperature = temperature,
             ).collect { chunk ->
                 if (chunk.isNotEmpty()) {
                     emitted += chunk.length
@@ -197,9 +199,5 @@ class LlamaCppRuntime(
             raw.isNotBlank() -> raw
             else -> "Falha nativa desconhecida ao executar o modelo."
         }
-    }
-
-    companion object {
-        const val FIXED_TEMPERATURE = 0.3f
     }
 }
