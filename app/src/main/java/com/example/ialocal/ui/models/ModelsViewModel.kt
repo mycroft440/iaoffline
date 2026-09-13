@@ -117,15 +117,17 @@ class ModelsViewModel(
     fun cancelDownload() = pauseDownload()
 
     /**
-     * Stops the current catalog operation and clears its visible state. A partial network file is
-     * preserved internally, so installing the same model later can continue instead of redownloading.
-     * If the catalog model is already installed, it is removed from the private model library.
+     * Stops only the selected catalog operation and clears its visible state. A partial network file
+     * is preserved internally, so installing the same model later can continue instead of redownloading.
+     * If the selected catalog model is already installed, it is removed from the private model library.
      */
     fun stopOrUninstallCatalogModel(catalogId: String) {
         viewModelScope.launch {
-            downloadJob?.cancelAndJoin()
-            downloadJob = null
-            manager.resetDownloadState()
+            if (manager.downloadState.value.catalogId == catalogId) {
+                downloadJob?.cancelAndJoin()
+                downloadJob = null
+                manager.resetDownloadState()
+            }
 
             val prefix = catalog.firstOrNull { it.id == catalogId }?.apiIdPrefix ?: return@launch
             runCatching {
