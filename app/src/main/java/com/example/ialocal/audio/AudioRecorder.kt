@@ -1,8 +1,11 @@
 package com.example.ialocal.audio
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.os.Build
+import androidx.core.content.ContextCompat
 import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.PendingAttachment
 import java.io.File
@@ -18,6 +21,13 @@ class AudioRecorder(
 
     fun start() {
         if (recorder != null) return
+        if (
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("A permissão de microfone é necessária para gravar áudio.")
+        }
+
         val dir = File(context.filesDir, "audio").apply { mkdirs() }
         require(dir.isDirectory) { "Não foi possível preparar a pasta privada de áudio." }
         val file = File(dir, "audio-${System.currentTimeMillis()}.m4a")

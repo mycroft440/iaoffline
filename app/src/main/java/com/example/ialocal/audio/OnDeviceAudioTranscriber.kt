@@ -1,13 +1,16 @@
 package com.example.ialocal.audio
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -26,6 +29,13 @@ class OnDeviceAudioTranscriber(
     private val decoder: AudioDecoder = AudioDecoder(),
 ) {
     suspend fun transcribe(file: File): String {
+        if (
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("A permissão de microfone é necessária para transcrever áudio.")
+        }
+
         val audio = withContext(Dispatchers.IO) { decoder.decodeToPcm16(file) }
         return withContext(Dispatchers.Main.immediate) {
             require(SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
