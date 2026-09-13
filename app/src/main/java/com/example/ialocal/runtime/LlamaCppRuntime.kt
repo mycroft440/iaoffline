@@ -7,13 +7,15 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -55,6 +57,16 @@ class LlamaCppRuntime(
             // Reset once more, so the first real API request may set its own system prompt.
             ensureFreshLoaded(model, forceReload = true)
             VerificationResult(output)
+        } catch (cancel: CancellationException) {
+            if (_state.value.status != RuntimeStatus.ERROR) {
+                _state.value = if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
+                    RuntimeState(RuntimeStatus.READY, model.id, model.name)
+                } else {
+                    RuntimeState(RuntimeStatus.IDLE)
+                }
+            }
+            logger?.info("INFERENCE", "Verificação cancelada")
+            throw cancel
         } catch (t: Throwable) {
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
             logger?.error("INFERENCE", "Falha no teste real de inferência", t)
@@ -75,22 +87,23 @@ class LlamaCppRuntime(
         mutex.lock()
         try {
             ensureFreshLoaded(model, forceReload = requestSessionConsumed || loadedModelId != model.id)
+            val effectiveMaxTokens = effectiveMaxTokens(model.contextLength, maxTokens)
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
                 messages = messages,
                 contextTokens = model.contextLength,
-                maxOutputTokens = maxTokens.coerceIn(16, 4096),
+                maxOutputTokens = effectiveMaxTokens,
             )
             if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
 
             engine.setSystemPrompt(prepared.systemPrompt)
             requestSessionConsumed = true
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
-            logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
+            logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$effectiveMaxTokens; streaming=true")
             var emitted = 0
             engine.sendUserPrompt(
                 message = prepared.latestUser,
-                predictLength = maxTokens.coerceIn(16, 4096),
+                predictLength = effectiveMaxTokens,
             ).collect { chunk ->
                 if (chunk.isNotEmpty()) {
                     emitted += chunk.length
@@ -101,7 +114,13 @@ class LlamaCppRuntime(
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Resposta concluída ($emitted caracteres)")
         } catch (cancel: CancellationException) {
-            _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
+            if (_state.value.status != RuntimeStatus.ERROR) {
+                _state.value = if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
+                    RuntimeState(RuntimeStatus.READY, model.id, model.name)
+                } else {
+                    RuntimeState(RuntimeStatus.IDLE)
+                }
+            }
             logger?.info("INFERENCE", "Geração cancelada pelo usuário")
             throw cancel
         } catch (t: Throwable) {
@@ -132,20 +151,42 @@ class LlamaCppRuntime(
 
     private suspend fun ensureFreshLoaded(model: AiModelEntity, forceReload: Boolean) {
         awaitEngineInitialized()
-        if (!forceReload && loadedModelId == model.id && !requestSessionConsumed) {
+        if (!forceReload && loadedModelId == model.id && !requestSessionConsumed &&
+            engine.state.value is InferenceEngine.State.ModelReady
+        ) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
         }
-        if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error) unloadLocked()
+
+        // ModelReady with no matching Kotlin bookkeeping can happen if cancellation lands just after
+        // native load completion. Clean that stale native ownership before loading anything else.
+        if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error ||
+            engine.state.value is InferenceEngine.State.ModelReady
+        ) {
+            unloadLocked()
+        }
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         logger?.info("MODEL_LOAD", "Carregando ${model.name} (${model.filePath})")
         try {
             engine.loadModel(model.filePath)
+            currentCoroutineContext().ensureActive()
             loadedModelId = model.id
             requestSessionConsumed = false
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("MODEL_LOAD", "Modelo READY: ${model.apiModelId}")
+        } catch (cancel: CancellationException) {
+            loadedModelId = null
+            requestSessionConsumed = false
+            if (engine.state.value is InferenceEngine.State.ModelReady || engine.state.value is InferenceEngine.State.Error) {
+                runCatching { engine.cleanUp() }.onFailure { cleanupFailure ->
+                    cancel.addSuppressed(cleanupFailure)
+                    _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(cleanupFailure))
+                    logger?.error("MODEL_UNLOAD", "Falha ao limpar carga nativa cancelada", cleanupFailure)
+                }
+            }
+            if (_state.value.status != RuntimeStatus.ERROR) _state.value = RuntimeState(RuntimeStatus.IDLE)
+            throw cancel
         } catch (t: Throwable) {
             loadedModelId = null
             requestSessionConsumed = false
@@ -174,15 +215,30 @@ class LlamaCppRuntime(
             requestSessionConsumed = false
             return
         }
-        if (loadedModelId == null && current is InferenceEngine.State.Initialized) return
+        if (loadedModelId == null && current is InferenceEngine.State.Initialized) {
+            _state.value = RuntimeState(RuntimeStatus.IDLE)
+            return
+        }
 
         _state.value = RuntimeState(RuntimeStatus.UNLOADING, loadedModelId)
         logger?.info("MODEL_UNLOAD", "Liberando contexto nativo")
-        runCatching { engine.cleanUp() }
-            .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
-        loadedModelId = null
-        requestSessionConsumed = false
-        _state.value = RuntimeState(RuntimeStatus.IDLE)
+        try {
+            engine.cleanUp()
+            loadedModelId = null
+            requestSessionConsumed = false
+            _state.value = RuntimeState(RuntimeStatus.IDLE)
+        } catch (t: Throwable) {
+            loadedModelId = null
+            requestSessionConsumed = false
+            _state.value = RuntimeState(RuntimeStatus.ERROR, error = humanize(t))
+            logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", t)
+            throw IllegalStateException("Falha ao liberar o contexto nativo: ${humanize(t)}", t)
+        }
+    }
+
+    private fun effectiveMaxTokens(contextTokens: Int, requested: Int): Int {
+        val maximum = minOf(MAX_OUTPUT_TOKENS, (contextTokens - MIN_INPUT_RESERVE_TOKENS).coerceAtLeast(MIN_OUTPUT_TOKENS))
+        return requested.coerceIn(MIN_OUTPUT_TOKENS, maximum)
     }
 
     private fun humanize(t: Throwable): String {
@@ -201,5 +257,8 @@ class LlamaCppRuntime(
 
     companion object {
         const val FIXED_TEMPERATURE = 0.3f
+        private const val MIN_OUTPUT_TOKENS = 16
+        private const val MAX_OUTPUT_TOKENS = 4096
+        private const val MIN_INPUT_RESERVE_TOKENS = 768
     }
 }

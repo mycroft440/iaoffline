@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
 
 /** Coordinates persistence, downloads and native runtime so activation follows a successful real inference. */
 class ModelManager(
@@ -23,23 +24,18 @@ class ModelManager(
 
     private val _downloadState = MutableStateFlow(ModelDownloadState())
     val downloadState: StateFlow<ModelDownloadState> = _downloadState.asStateFlow()
+    private val operationMutex = Mutex()
 
     suspend fun inspect(uri: Uri): ModelImportPreview = repository.inspectForImport(uri)
 
-    suspend fun importAndVerify(preview: ModelImportPreview): AiModelEntity {
+    suspend fun importAndVerify(preview: ModelImportPreview): AiModelEntity = exclusiveOperation {
         val model = repository.importGguf(preview)
-        return try {
-            verifyAndActivate(model.id)
-        } catch (t: Throwable) {
-            // Keep the imported file so the user can retry after freeing RAM.
-            throw t
-        }
+        verifyAndActivateLocked(model.id)
     }
 
-    suspend fun downloadAndVerify(catalogId: String): AiModelEntity {
-        check(!_downloadState.value.isBusy) { "Já existe um download ou verificação de modelo em andamento." }
+    suspend fun downloadAndVerify(catalogId: String): AiModelEntity = exclusiveOperation {
         val catalogModel = ModelCatalog.requireById(catalogId)
-        return try {
+        try {
             val file = downloader.download(catalogModel) { _downloadState.value = it }
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.IMPORTING,
@@ -52,7 +48,7 @@ class ModelManager(
                 phase = ModelDownloadPhase.VERIFYING_MODEL,
                 message = "Executando teste real de inferência…",
             )
-            val verified = verifyAndActivate(imported.id)
+            val verified = verifyAndActivateLocked(imported.id)
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.COMPLETE,
                 message = "${catalogModel.displayName} instalado e verificado.",
@@ -61,7 +57,7 @@ class ModelManager(
         } catch (cancel: CancellationException) {
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.CANCELLED,
-                message = "Download pausado. Ao tentar novamente, o app continua do arquivo parcial quando possível.",
+                message = "Operação pausada. Um download parcial será continuado quando possível.",
             )
             throw cancel
         } catch (t: Throwable) {
@@ -78,39 +74,58 @@ class ModelManager(
         if (!_downloadState.value.isBusy) _downloadState.value = ModelDownloadState()
     }
 
-    suspend fun verifyAndActivate(modelId: String): AiModelEntity {
-        val model = requireNotNull(repository.getModel(modelId)) { "Modelo não encontrado." }
-        repository.markVerifying(model.id)
+    suspend fun verifyAndActivate(modelId: String): AiModelEntity = exclusiveOperation {
+        verifyAndActivateLocked(modelId)
+    }
+
+    private suspend fun verifyAndActivateLocked(modelId: String): AiModelEntity {
+        val original = requireNotNull(repository.getModel(modelId)) { "Modelo não encontrado." }
+        repository.markVerifying(original.id)
         return try {
-            val result = runtime.verify(model)
-            logger?.info("INFERENCE", "Verificação concluída para ${model.apiModelId}: ${result.output.take(40)}")
-            repository.markVerified(model.id)
-            repository.activateModel(model.id)
-            val agent = repository.getAgentForModel(model.id)
-            if (repository.getDefaultAgent() == null && agent != null) repository.setDefaultAgent(agent.id)
-            requireNotNull(repository.getModel(model.id))
+            val result = runtime.verify(original)
+            logger?.info("INFERENCE", "Verificação concluída para ${original.apiModelId}: ${result.output.take(40)}")
+            repository.markVerified(original.id)
+            repository.activateModel(original.id)
+            repository.repairSelections()
+            requireNotNull(repository.getModel(original.id))
+        } catch (cancel: CancellationException) {
+            repository.restoreVerification(original)
+            throw cancel
         } catch (t: Throwable) {
             val message = t.message ?: "Falha ao verificar o modelo."
-            repository.markVerificationError(model.id, message)
+            repository.markVerificationError(original.id, message)
+            repository.repairSelections()
             throw t
         }
     }
 
-    suspend fun load(modelId: String) {
+    suspend fun load(modelId: String) = exclusiveOperation {
         val model = requireNotNull(repository.getModel(modelId)) { "Modelo não encontrado." }
         require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
             "Verifique o modelo com uma inferência real antes de carregá-lo para uso."
         }
         runtime.warmUp(model)
         repository.activateModel(model.id)
+        repository.repairSelections()
     }
 
     suspend fun retryVerification(modelId: String): AiModelEntity = verifyAndActivate(modelId)
 
-    suspend fun delete(modelId: String) {
+    suspend fun delete(modelId: String) = exclusiveOperation {
         if (runtime.state.value.modelId == modelId) runtime.unload()
         repository.deleteModel(modelId)
     }
 
-    suspend fun unload() = runtime.unload()
+    suspend fun unload() = exclusiveOperation { runtime.unload() }
+
+    private suspend fun <T> exclusiveOperation(block: suspend () -> T): T {
+        check(operationMutex.tryLock()) {
+            "Já existe uma operação de modelo em andamento. Aguarde a conclusão antes de iniciar outra."
+        }
+        return try {
+            block()
+        } finally {
+            operationMutex.unlock()
+        }
+    }
 }

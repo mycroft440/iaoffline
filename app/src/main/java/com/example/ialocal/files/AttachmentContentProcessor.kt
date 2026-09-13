@@ -33,6 +33,9 @@ class AttachmentContentProcessor(
     }
 
     private suspend fun extractPdf(file: File): String = withContext(Dispatchers.IO) {
+        require(file.length() <= MAX_PDF_BYTES) {
+            "O PDF é grande demais para processamento seguro no aparelho."
+        }
         PDDocument.load(file).use { document ->
             val text = PDFTextStripper().getText(document).trim()
             require(text.isNotBlank()) { "O PDF não contém texto extraível. PDFs digitalizados exigirão OCR em uma etapa futura." }
@@ -41,7 +44,19 @@ class AttachmentContentProcessor(
     }
 
     private suspend fun readText(file: File): String = withContext(Dispatchers.IO) {
-        file.bufferedReader().use { it.readText().take(MAX_EXTRACTED_CHARS) }
+        file.bufferedReader().use { reader ->
+            val output = StringBuilder(minOf(MAX_EXTRACTED_CHARS, 16_384))
+            val buffer = CharArray(TEXT_BUFFER_CHARS)
+            var remaining = MAX_EXTRACTED_CHARS
+            while (remaining > 0) {
+                val read = reader.read(buffer, 0, minOf(buffer.size, remaining))
+                if (read < 0) break
+                if (read == 0) continue
+                output.append(buffer, 0, read)
+                remaining -= read
+            }
+            output.toString()
+        }
     }
 
     private fun isPdf(a: PendingAttachment): Boolean =
@@ -56,5 +71,7 @@ class AttachmentContentProcessor(
 
     companion object {
         private const val MAX_EXTRACTED_CHARS = 500_000
+        private const val TEXT_BUFFER_CHARS = 8_192
+        private const val MAX_PDF_BYTES = 64L * 1024 * 1024
     }
 }

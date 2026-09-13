@@ -34,7 +34,6 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     fun observeMessages(conversationId: String): Flow<List<MessageWithAttachments>>
 
-
     @Transaction
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     suspend fun getMessages(conversationId: String): List<MessageWithAttachments>
@@ -82,14 +81,35 @@ interface ChatDao {
     @Query("UPDATE conversations SET agentId = :agentId WHERE id = :id")
     suspend fun setConversationAgent(id: String, agentId: String?)
 
+    @Query("SELECT a.localPath FROM attachments a INNER JOIN messages m ON m.id = a.messageId WHERE m.conversationId = :conversationId")
+    suspend fun getAttachmentPaths(conversationId: String): List<String>
+
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteConversation(id: String)
+
+    @Transaction
+    suspend fun deleteConversationWithAttachmentPaths(id: String): List<String> {
+        val paths = getAttachmentPaths(id)
+        deleteConversation(id)
+        return paths
+    }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: MessageEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAttachments(attachments: List<AttachmentEntity>)
+
+    @Transaction
+    suspend fun insertMessageWithAttachments(
+        message: MessageEntity,
+        attachments: List<AttachmentEntity>,
+        updatedAt: Long,
+    ) {
+        insertMessage(message)
+        if (attachments.isNotEmpty()) insertAttachments(attachments)
+        touchConversation(message.conversationId, updatedAt)
+    }
 
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)

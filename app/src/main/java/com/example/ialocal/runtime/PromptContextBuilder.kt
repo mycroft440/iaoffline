@@ -15,16 +15,26 @@ class PromptContextBuilder {
         contextTokens: Int,
         maxOutputTokens: Int,
     ): Prepared {
+        require(contextTokens > TOKEN_HEADROOM) { "O contexto configurado para o modelo é pequeno demais." }
+        require(maxOutputTokens in 1 until contextTokens) { "maxOutputTokens precisa caber no contexto do modelo." }
+
         val lastUserIndex = messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
         require(lastUserIndex >= 0) { "A solicitação precisa conter uma mensagem do usuário." }
         val latestUser = messages[lastUserIndex].content.trim()
         require(latestUser.isNotBlank()) { "A última mensagem do usuário está vazia." }
 
         // Conservative approximation. Native context is 8192 in the pinned Android binding.
-        val usableInputTokens = (contextTokens - maxOutputTokens - TOKEN_HEADROOM).coerceAtLeast(1024)
+        val usableInputTokens = contextTokens - maxOutputTokens - TOKEN_HEADROOM
+        require(usableInputTokens >= MIN_INPUT_TOKENS) {
+            "O limite de saída deixa pouco contexto disponível para a entrada. Reduza max_tokens."
+        }
         val charBudget = usableInputTokens * APPROX_CHARS_PER_TOKEN
         val base = baseSystemPrompt.trim().ifBlank { DEFAULT_FALLBACK_SYSTEM }
-        val historyBudget = (charBudget - base.length - latestUser.length - 512).coerceAtLeast(0)
+        val fixedChars = base.length + latestUser.length + PROMPT_OVERHEAD_CHARS
+        require(fixedChars <= charBudget) {
+            "A mensagem atual e as instruções excedem o contexto disponível do modelo. Reduza o texto ou os anexos."
+        }
+        val historyBudget = (charBudget - fixedChars).coerceAtLeast(0)
 
         val history = messages.take(lastUserIndex)
         val selected = ArrayDeque<String>()
@@ -60,6 +70,8 @@ class PromptContextBuilder {
     companion object {
         private const val APPROX_CHARS_PER_TOKEN = 3
         private const val TOKEN_HEADROOM = 512
+        private const val MIN_INPUT_TOKENS = 256
+        private const val PROMPT_OVERHEAD_CHARS = 512
         private const val DEFAULT_FALLBACK_SYSTEM = "Você é um assistente útil."
     }
 }

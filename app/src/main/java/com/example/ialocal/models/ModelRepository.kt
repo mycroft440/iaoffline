@@ -75,7 +75,7 @@ class ModelRepository(
             )
         } catch (t: Throwable) {
             logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
-            runCatching { dao.deleteModel(id) }
+            runCatching { dao.deleteModelAtomically(id) }
             modelDir.deleteRecursively()
             throw t
         }
@@ -103,8 +103,13 @@ class ModelRepository(
             )
         } catch (t: Throwable) {
             logger?.error("IMPORT", "Falha ao registrar ${catalog.displayName}", t)
-            runCatching { dao.deleteModel(id) }
-            modelDir.deleteRecursively()
+            runCatching { dao.deleteModelAtomically(id) }
+            val recovered = runCatching {
+                if (destination.isFile && !download.exists()) restoreDownload(destination, download)
+            }.onFailure {
+                logger?.error("MODEL_COPY", "Não foi possível devolver o GGUF verificado à pasta de downloads", it)
+            }.isSuccess
+            if (recovered || !destination.exists()) modelDir.deleteRecursively()
             throw t
         }
     }
@@ -146,8 +151,6 @@ class ModelRepository(
             declaredContextLength = declaredContext,
             verificationStatus = ModelVerificationStatus.IMPORTED.name,
         )
-        dao.insertModel(model)
-
         val agent = AgentEntity(
             id = UUID.randomUUID().toString(),
             name = "$cleanName · Agente",
@@ -159,7 +162,7 @@ class ModelRepository(
             createdAt = now,
             updatedAt = now,
         )
-        dao.insertAgent(agent)
+        dao.insertModelWithAgent(model, agent)
         logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
         return model
     }
@@ -175,13 +178,20 @@ class ModelRepository(
         if (!source.delete()) logger?.info("MODEL_COPY", "Arquivo de download permaneceu após cópia interna")
     }
 
+    private fun restoreDownload(source: File, destination: File) {
+        destination.parentFile?.mkdirs()
+        if (source.renameTo(destination)) return
+        source.copyTo(destination, overwrite = true)
+        require(destination.length() == source.length()) { "A recuperação do download verificado ficou incompleta." }
+        require(source.delete()) { "O GGUF foi recuperado, mas a cópia temporária não pôde ser removida." }
+    }
+
     suspend fun activateModel(id: String) {
         val model = requireNotNull(dao.getModel(id)) { "Modelo não encontrado." }
         require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
             "O modelo precisa passar pela verificação real de inferência antes de ser ativado."
         }
-        dao.clearActiveModel()
-        dao.markModelActive(id)
+        dao.activateModelAtomically(id)
     }
 
     suspend fun markVerifying(id: String) =
@@ -193,35 +203,52 @@ class ModelRepository(
     suspend fun markVerificationError(id: String, message: String) =
         dao.updateVerification(id, ModelVerificationStatus.ERROR.name, message, null)
 
+    suspend fun restoreVerification(model: AiModelEntity) =
+        dao.updateVerification(model.id, model.verificationStatus, model.lastError, model.lastVerifiedAt)
+
     suspend fun setDefaultAgent(id: String) {
-        requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
-        val now = System.currentTimeMillis()
-        dao.clearDefaultAgent()
-        dao.markAgentDefault(id, now)
+        val agent = requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
+        val model = requireNotNull(dao.getModel(agent.modelId)) { "O modelo deste agente não está disponível." }
+        require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
+            "Só é possível tornar padrão um agente cujo modelo foi verificado."
+        }
+        dao.setDefaultAgentAtomically(id, System.currentTimeMillis())
     }
 
     suspend fun updateAgent(agent: AgentEntity) {
+        val persisted = requireNotNull(dao.getAgent(agent.id)) { "Agente não encontrado." }
+        require(agent.modelId == persisted.modelId) { "Não é permitido trocar o modelo de um agente por esta operação." }
         dao.updateAgent(agent.copy(updatedAt = System.currentTimeMillis()))
+    }
+
+    suspend fun repairSelections() {
+        dao.repairSelections(ModelVerificationStatus.VERIFIED.name, System.currentTimeMillis())
+    }
+
+    /** Removes restored/stale database entries whose excluded private GGUF no longer exists. */
+    suspend fun reconcileStorage() = withContext(Dispatchers.IO) {
+        dao.getModels().forEach { model ->
+            val file = File(model.filePath)
+            if (!file.isFile || file.length() != model.sizeBytes) {
+                logger?.error(
+                    "MODEL_STORAGE",
+                    "Removendo registro inconsistente de ${model.apiModelId}: GGUF ausente ou com tamanho inesperado",
+                )
+                dao.deleteModelAtomically(model.id)
+                if (file.exists()) runCatching { file.parentFile?.deleteRecursively() }
+            }
+        }
+        repairSelections()
     }
 
     suspend fun deleteModel(id: String) = withContext(Dispatchers.IO) {
         val model = dao.getModel(id) ?: return@withContext
-        File(model.filePath).parentFile?.deleteRecursively()
-        dao.deleteModel(id)
-
-        val remaining = dao.getModels()
-        val verified = remaining.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
-        if (verified.isNotEmpty() && remaining.none { it.isActive }) {
-            dao.clearActiveModel()
-            dao.markModelActive(verified.first().id)
-        }
-        val verifiedIds = verified.mapTo(mutableSetOf()) { it.id }
-        val agents = dao.getAgents()
-        val eligibleAgents = agents.filter { it.modelId in verifiedIds }
-        if (eligibleAgents.isNotEmpty() && agents.none { it.isDefault }) {
-            dao.clearDefaultAgent()
-            dao.markAgentDefault(eligibleAgents.first().id, System.currentTimeMillis())
-        }
+        // Commit database state first. A leftover private file is recoverable; a row pointing to a
+        // file already deleted is not.
+        dao.deleteModelAtomically(id)
+        repairSelections()
+        runCatching { File(model.filePath).parentFile?.deleteRecursively() }
+            .onFailure { logger?.error("MODEL_STORAGE", "Falha ao remover arquivos de ${model.apiModelId}", it) }
         logger?.info("IMPORT", "Modelo removido: ${model.apiModelId}")
     }
 

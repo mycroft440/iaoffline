@@ -1,7 +1,10 @@
 package com.example.ialocal.data
 
+import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 class ChatRepository(
     private val dao: ChatDao,
@@ -34,7 +37,12 @@ class ChatRepository(
 
     suspend fun setPinned(id: String, pinned: Boolean) = dao.setPinned(id, pinned)
 
-    suspend fun deleteConversation(id: String) = dao.deleteConversation(id)
+    suspend fun deleteConversation(id: String) {
+        val paths = dao.deleteConversationWithAttachmentPaths(id)
+        withContext(Dispatchers.IO) {
+            paths.forEach { path -> runCatching { File(path).delete() } }
+        }
+    }
 
     suspend fun setConversationAgent(id: String, agentId: String?) = dao.setConversationAgent(id, agentId)
 
@@ -47,36 +55,28 @@ class ChatRepository(
     ): String {
         val now = System.currentTimeMillis()
         val messageId = UUID.randomUUID().toString()
-        dao.insertMessage(
-            MessageEntity(
-                id = messageId,
-                conversationId = conversationId,
-                role = role.name,
-                content = content,
-                createdAt = now,
-                status = status.name,
-            )
+        val message = MessageEntity(
+            id = messageId,
+            conversationId = conversationId,
+            role = role.name,
+            content = content,
+            createdAt = now,
+            status = status.name,
         )
-
-        if (pendingAttachments.isNotEmpty()) {
-            dao.insertAttachments(
-                pendingAttachments.map { pending ->
-                    AttachmentEntity(
-                        id = pending.id,
-                        messageId = messageId,
-                        type = pending.type.name,
-                        fileName = pending.fileName,
-                        localPath = pending.localPath,
-                        mimeType = pending.mimeType,
-                        sizeBytes = pending.sizeBytes,
-                        createdAt = now,
-                        extractedText = pending.extractedText,
-                    )
-                }
+        val attachments = pendingAttachments.map { pending ->
+            AttachmentEntity(
+                id = pending.id,
+                messageId = messageId,
+                type = pending.type.name,
+                fileName = pending.fileName,
+                localPath = pending.localPath,
+                mimeType = pending.mimeType,
+                sizeBytes = pending.sizeBytes,
+                createdAt = now,
+                extractedText = pending.extractedText,
             )
         }
-
-        dao.touchConversation(conversationId, now)
+        dao.insertMessageWithAttachments(message, attachments, now)
         maybeCreateAutomaticTitle(conversationId, role, content)
         return messageId
     }
@@ -97,7 +97,6 @@ class ChatRepository(
 
     suspend fun listRecentConversations(limit: Int = 10): List<ConversationListItem> =
         dao.listRecentConversations(limit)
-
 
     private suspend fun maybeCreateAutomaticTitle(
         conversationId: String,
