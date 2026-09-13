@@ -30,5 +30,15 @@ class ModelCatalogTest {
         assertNotNull(qwen38)
         assertEquals("Q4_K_M", qwen3EightB?.quantization)
         assertEquals("Q4_K_M", qwen38?.quantization)
+        assertEquals(ModelProvider.ALIBABA, qwen3EightB?.provider)
+        assertEquals(ModelProvider.ALIBABA, qwen38?.provider)
+    }
+
+    @Test
+    fun providerSectionsMatchHomeNavigation() {
+        assertEquals("Modelos do Google", ModelProvider.GOOGLE.sectionLabel)
+        assertEquals("Modelos da Alibaba", ModelProvider.ALIBABA.sectionLabel)
+        assertEquals("Modelos da Meta", ModelProvider.META.sectionLabel)
+        assertTrue(ModelCatalog.entries.all { it.provider == ModelProvider.ALIBABA })
     }
 }
