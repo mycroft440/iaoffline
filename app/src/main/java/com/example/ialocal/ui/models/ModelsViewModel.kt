@@ -18,6 +18,7 @@ import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.RuntimeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -108,8 +109,33 @@ class ModelsViewModel(
         }
     }
 
-    fun cancelDownload() {
+    /** Pausing intentionally keeps the partial file so the next install resumes with HTTP Range. */
+    fun pauseDownload() {
         downloadJob?.cancel()
+    }
+
+    fun cancelDownload() = pauseDownload()
+
+    /**
+     * Stops the current catalog operation and clears its visible state. A partial network file is
+     * preserved internally, so installing the same model later can continue instead of redownloading.
+     * If the catalog model is already installed, it is removed from the private model library.
+     */
+    fun stopOrUninstallCatalogModel(catalogId: String) {
+        viewModelScope.launch {
+            downloadJob?.cancelAndJoin()
+            downloadJob = null
+            manager.resetDownloadState()
+
+            val prefix = catalog.firstOrNull { it.id == catalogId }?.apiIdPrefix ?: return@launch
+            runCatching {
+                repository.getModels()
+                    .filter { it.apiModelId.startsWith(prefix) }
+                    .forEach { manager.delete(it.id) }
+            }.onFailure {
+                _error.value = it.message ?: "Falha ao encerrar ou desinstalar a I.A."
+            }
+        }
     }
 
     fun clearDownloadState() {
