@@ -92,7 +92,22 @@ private fun LocalAiApp(container: AppContainer) {
                     modelRepository = container.modelRepository,
                 ),
             )
-            ChatScreen(viewModel = vm, onBack = { navController.popBackStack() })
+            ChatScreen(
+                viewModel = vm,
+                onOpenConversation = { targetId ->
+                    if (targetId != id) {
+                        navController.navigate("chat/$targetId") {
+                            popUpTo("home") { inclusive = false }
+                        }
+                    }
+                },
+                onOpenHistory = {
+                    if (!navController.popBackStack("home", inclusive = false)) {
+                        navController.navigate("home")
+                    }
+                },
+                onOpenModels = { navController.navigate("models") },
+            )
         }
 
         composable("models") {

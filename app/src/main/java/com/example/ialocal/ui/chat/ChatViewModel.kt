@@ -9,8 +9,10 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.ai.AiChatRequest
 import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.data.AgentEntity
+import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ChatRepository
 import com.example.ialocal.data.ConversationEntity
+import com.example.ialocal.data.ConversationListItem
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
@@ -36,13 +38,17 @@ class ChatViewModel(
     private val aiGateway: AiGateway,
     private val attachmentImporter: AttachmentImporter,
     private val attachmentProcessor: AttachmentContentProcessor,
-    modelRepository: ModelRepository,
+    private val modelRepository: ModelRepository,
 ) : ViewModel() {
     val conversation: StateFlow<ConversationEntity?> = repository.observeConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val messages: StateFlow<List<MessageWithAttachments>> = repository.observeMessages(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val conversations: StateFlow<List<ConversationListItem>> = repository.conversations
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val agents: StateFlow<List<AgentEntity>> = modelRepository.agents
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val models: StateFlow<List<AiModelEntity>> = modelRepository.models
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _draft = MutableStateFlow(""); val draft: StateFlow<String> = _draft.asStateFlow()
@@ -55,7 +61,35 @@ class ChatViewModel(
 
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
-    fun selectAgent(agentId: String?) { _selectedAgentId.value = agentId; viewModelScope.launch { repository.setConversationAgent(conversationId, agentId) } }
+
+    fun selectAgent(agentId: String?) {
+        _selectedAgentId.value = agentId
+        viewModelScope.launch { repository.setConversationAgent(conversationId, agentId) }
+    }
+
+    fun selectModel(modelId: String) {
+        val agent = agents.value.firstOrNull { it.modelId == modelId }
+        if (agent == null) {
+            _error.value = "Este modelo não possui um agente configurado."
+            return
+        }
+        selectAgent(agent.id)
+    }
+
+    fun updateAgent(agent: AgentEntity) {
+        viewModelScope.launch {
+            runCatching { modelRepository.updateAgent(agent) }
+                .onFailure { _error.value = it.message ?: "Não foi possível salvar as configurações do agente." }
+        }
+    }
+
+    fun createConversation(onCreated: (String) -> Unit) {
+        viewModelScope.launch {
+            runCatching { repository.createConversation() }
+                .onSuccess(onCreated)
+                .onFailure { _error.value = it.message ?: "Não foi possível criar uma nova conversa." }
+        }
+    }
 
     fun importFile(uri: Uri) {
         viewModelScope.launch {
