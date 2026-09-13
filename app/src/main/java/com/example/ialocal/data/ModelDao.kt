@@ -12,13 +12,13 @@ interface ModelDao {
     @Query("SELECT * FROM ai_models ORDER BY isActive DESC, importedAt DESC")
     fun observeModels(): Flow<List<AiModelEntity>>
 
-    @Query("SELECT * FROM agents ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, updatedAt DESC")
+    @Query("SELECT * FROM agents ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, createdAt ASC")
     fun observeAgents(): Flow<List<AgentEntity>>
 
     @Query("SELECT * FROM ai_models ORDER BY isActive DESC, importedAt DESC")
     suspend fun getModels(): List<AiModelEntity>
 
-    @Query("SELECT * FROM agents ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, updatedAt DESC")
+    @Query("SELECT * FROM agents ORDER BY usageCount DESC, COALESCE(lastUsedAt, 0) DESC, isDefault DESC, createdAt ASC")
     suspend fun getAgents(): List<AgentEntity>
 
     @Query("SELECT * FROM ai_models WHERE id = :id LIMIT 1")
