@@ -10,6 +10,7 @@ data class AiChatRequest(
     val conversationId: String,
     val messages: List<AiChatMessage>,
     val attachments: List<PendingAttachment> = emptyList(),
+    val model: String? = null,
     val agentId: String? = null,
 )
 
