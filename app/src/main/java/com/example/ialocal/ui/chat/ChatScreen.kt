@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,20 +24,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +49,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -74,21 +79,28 @@ import com.example.ialocal.data.PendingAttachment
 fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
+    onOpenConversation: (String) -> Unit,
+    onOpenModels: () -> Unit,
 ) {
     val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
+    val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val attachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val isProcessingAttachments by viewModel.isProcessingAttachments.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
-    val agents by viewModel.agents.collectAsStateWithLifecycle()
+    val models by viewModel.availableModels.collectAsStateWithLifecycle()
+    val selectedModelId by viewModel.selectedModelId.collectAsStateWithLifecycle()
+    val selectedModel = models.firstOrNull { it.id == selectedModelId }
+
     val snackbar = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
     val audioRecorder = remember { AudioRecorder(context) }
     var isRecording by remember { mutableStateOf(false) }
-    var agentMenuOpen by remember { mutableStateOf(false) }
+    var modelMenuOpen by remember { mutableStateOf(false) }
+    var historyMenuOpen by remember { mutableStateOf(false) }
     var pendingAudioImport by remember { mutableStateOf<android.net.Uri?>(null) }
 
     val micPermission = rememberLauncherForActivityResult(
@@ -116,7 +128,8 @@ fun ChatScreen(
         if (uri != null) {
             val isAudio = context.contentResolver.getType(uri)?.startsWith("audio/") == true
             val granted = ContextCompat.checkSelfPermission(
-                context, Manifest.permission.RECORD_AUDIO,
+                context,
+                Manifest.permission.RECORD_AUDIO,
             ) == PackageManager.PERMISSION_GRANTED
             if (isAudio && !granted) {
                 pendingAudioImport = uri
@@ -149,11 +162,76 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        conversation?.title ?: "Conversa",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Box {
+                        Column(
+                            modifier = Modifier.clickable { modelMenuOpen = true },
+                        ) {
+                            Text(
+                                conversation?.title ?: "Conversa",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.SmartToy,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    selectedModel?.name ?: "Nenhum modelo disponível",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selectedModel == null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = modelMenuOpen,
+                            onDismissRequest = { modelMenuOpen = false },
+                        ) {
+                            if (models.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Nenhum modelo disponível") },
+                                    onClick = {},
+                                    enabled = false,
+                                )
+                            } else {
+                                models.forEach { model ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                (if (model.id == selectedModelId) "✓ " else "") + model.name,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        },
+                                        onClick = {
+                                            viewModel.selectModel(model.id)
+                                            modelMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Gerenciar modelos") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.SmartToy, contentDescription = null)
+                                },
+                                onClick = {
+                                    modelMenuOpen = false
+                                    onOpenModels()
+                                },
+                            )
+                        }
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -161,32 +239,57 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { agentMenuOpen = true }) {
-                        Icon(Icons.Default.SmartToy, contentDescription = "Selecionar agente")
-                    }
-                    DropdownMenu(
-                        expanded = agentMenuOpen,
-                        onDismissRequest = { agentMenuOpen = false },
-                    ) {
-                        if (agents.isEmpty()) {
+                    Box {
+                        IconButton(onClick = { historyMenuOpen = true }) {
+                            Icon(Icons.Default.History, contentDescription = "Histórico de conversas")
+                        }
+                        DropdownMenu(
+                            expanded = historyMenuOpen,
+                            onDismissRequest = { historyMenuOpen = false },
+                        ) {
                             DropdownMenuItem(
-                                text = { Text("Importe uma IA primeiro") },
-                                onClick = { agentMenuOpen = false },
-                                enabled = false,
+                                text = { Text("Nova conversa") },
+                                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                                onClick = {
+                                    historyMenuOpen = false
+                                    viewModel.createConversation(onOpenConversation)
+                                },
                             )
-                        } else {
-                            agents.forEach { agent ->
-                                val selected = conversation?.agentId == agent.id ||
-                                    (conversation?.agentId == null && agent.isDefault)
+                            HorizontalDivider()
+                            if (conversations.isEmpty()) {
                                 DropdownMenuItem(
-                                    text = {
-                                        Text((if (selected) "✓ " else "") + agent.name)
-                                    },
-                                    onClick = {
-                                        viewModel.selectAgent(agent.id)
-                                        agentMenuOpen = false
-                                    },
+                                    text = { Text("Nenhuma conversa no histórico") },
+                                    onClick = {},
+                                    enabled = false,
                                 )
+                            } else {
+                                conversations.take(MAX_HISTORY_MENU_ITEMS).forEach { item ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                (if (item.id == conversation?.id) "✓ " else "") + item.title,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        },
+                                        onClick = {
+                                            historyMenuOpen = false
+                                            if (item.id != conversation?.id) {
+                                                onOpenConversation(item.id)
+                                            }
+                                        },
+                                    )
+                                }
+                                if (conversations.size > MAX_HISTORY_MENU_ITEMS) {
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("Ver todo o histórico") },
+                                        onClick = {
+                                            historyMenuOpen = false
+                                            onBack()
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
@@ -199,6 +302,7 @@ fun ChatScreen(
                 onDraftChange = viewModel::setDraft,
                 attachments = attachments,
                 onRemoveAttachment = viewModel::removePendingAttachment,
+                modelAvailable = selectedModel != null,
                 isGenerating = isGenerating,
                 isProcessingAttachments = isProcessingAttachments,
                 isRecording = isRecording,
@@ -245,13 +349,32 @@ fun ChatScreen(
                     .padding(padding),
                 contentAlignment = Alignment.Center,
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Comece uma conversa", style = MaterialTheme.typography.headlineSmall)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Você pode escrever, anexar um arquivo ou gravar áudio.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                Column(
+                    modifier = Modifier.padding(horizontal = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    if (selectedModel == null) {
+                        Text(
+                            "Nenhum modelo disponível",
+                            style = MaterialTheme.typography.headlineSmall,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Importe e verifique um modelo para conversar com a IA.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = onOpenModels) {
+                            Text("Gerenciar modelos")
+                        }
+                    } else {
+                        Text("Comece uma conversa", style = MaterialTheme.typography.headlineSmall)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Escreva uma mensagem ou envie arquivos para ${selectedModel.name}.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         } else {
@@ -351,6 +474,7 @@ private fun ChatComposer(
     onDraftChange: (String) -> Unit,
     attachments: List<PendingAttachment>,
     onRemoveAttachment: (String) -> Unit,
+    modelAvailable: Boolean,
     isGenerating: Boolean,
     isProcessingAttachments: Boolean,
     isRecording: Boolean,
@@ -376,6 +500,15 @@ private fun ChatComposer(
                     }
                 }
                 Spacer(Modifier.height(6.dp))
+            }
+
+            if (!modelAvailable) {
+                Text(
+                    "Nenhum modelo disponível — você pode preparar a mensagem, mas precisa importar e verificar um modelo para enviar.",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             if (isProcessingAttachments) {
@@ -411,24 +544,38 @@ private fun ChatComposer(
             }
 
             Row(verticalAlignment = Alignment.Bottom) {
-                IconButton(onClick = onAttach, enabled = !isGenerating && !isRecording && !isProcessingAttachments) {
-                    Icon(Icons.Default.AttachFile, contentDescription = "Anexar arquivo")
+                IconButton(
+                    onClick = onAttach,
+                    enabled = !isGenerating && !isRecording && !isProcessingAttachments,
+                ) {
+                    Icon(Icons.Default.AttachFile, contentDescription = "Enviar arquivo")
                 }
 
                 TextField(
                     value = draft,
                     onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Digite uma mensagem") },
+                    placeholder = {
+                        Text(
+                            if (modelAvailable) "Digite uma mensagem" else "Digite sua mensagem"
+                        )
+                    },
                     maxLines = 5,
                     enabled = !isGenerating && !isProcessingAttachments,
                 )
 
-                IconButton(onClick = onMic, enabled = !isGenerating && !isProcessingAttachments) {
+                IconButton(
+                    onClick = onMic,
+                    enabled = !isGenerating && !isProcessingAttachments,
+                ) {
                     Icon(
                         if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
                         contentDescription = if (isRecording) "Parar gravação" else "Gravar áudio",
-                        tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        tint = if (isRecording) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
                     )
                 }
 
@@ -439,9 +586,12 @@ private fun ChatComposer(
                 } else {
                     IconButton(
                         onClick = onSend,
-                        enabled = !isProcessingAttachments && !isRecording && (draft.isNotBlank() || attachments.isNotEmpty()),
+                        enabled = modelAvailable &&
+                            !isProcessingAttachments &&
+                            !isRecording &&
+                            (draft.isNotBlank() || attachments.isNotEmpty()),
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Enviar")
+                        Icon(Icons.Default.Send, contentDescription = "Enviar mensagem")
                     }
                 }
             }
@@ -465,14 +615,22 @@ private fun PendingAttachmentChip(
         },
         leadingIcon = {
             Icon(
-                if (attachment.type == AttachmentType.AUDIO) Icons.Default.GraphicEq else Icons.Default.Description,
+                if (attachment.type == AttachmentType.AUDIO) {
+                    Icons.Default.GraphicEq
+                } else {
+                    Icons.Default.Description
+                },
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
         },
         trailingIcon = {
             IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Remover anexo", modifier = Modifier.size(16.dp))
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Remover anexo",
+                    modifier = Modifier.size(16.dp),
+                )
             }
         },
     )
@@ -483,3 +641,5 @@ private fun formatBytes(bytes: Long): String = when {
     bytes < 1_048_576 -> "${bytes / 1_024} KB"
     else -> String.format("%.1f MB", bytes / 1_048_576.0)
 }
+
+private const val MAX_HISTORY_MENU_ITEMS = 12
