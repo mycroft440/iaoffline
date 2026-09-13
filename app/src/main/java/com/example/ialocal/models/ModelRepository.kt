@@ -66,52 +66,113 @@ class ModelRepository(
                 )
             }
 
-            // Re-read the private copy. This catches truncation/provider issues before native loading.
-            val metadata = inspector.inspect(destination)
-            require(metadata.tensorCount > 0) { "O arquivo copiado não contém tensors válidos." }
-            val now = System.currentTimeMillis()
-            val cleanName = metadata.name?.trim().takeUnless { it.isNullOrBlank() } ?: preview.suggestedName
-            val apiId = buildApiId(cleanName, id)
-            val declaredContext = metadata.contextLength
-            val model = AiModelEntity(
+            registerPrivateGguf(
                 id = id,
-                name = cleanName,
-                apiModelId = apiId,
-                format = "GGUF",
-                architecture = metadata.architecture,
-                filePath = destination.absolutePath,
-                sizeBytes = destination.length(),
-                importedAt = now,
-                isActive = false,
-                contextLength = (declaredContext ?: ANDROID_RUNTIME_CONTEXT).coerceIn(1024, ANDROID_RUNTIME_CONTEXT),
-                sizeLabel = metadata.sizeLabel,
-                ggufVersion = metadata.version,
-                tensorCount = metadata.tensorCount,
-                declaredContextLength = declaredContext,
-                verificationStatus = ModelVerificationStatus.IMPORTED.name,
+                destination = destination,
+                fallbackName = preview.suggestedName,
+                preferredName = null,
+                apiIdPrefix = null,
             )
-            dao.insertModel(model)
-
-            val agent = AgentEntity(
-                id = UUID.randomUUID().toString(),
-                name = "$cleanName · Agente",
-                modelId = id,
-                systemPrompt = DEFAULT_SYSTEM_PROMPT,
-                temperature = 0.3f,
-                maxTokens = 1024,
-                isDefault = false,
-                createdAt = now,
-                updatedAt = now,
-            )
-            dao.insertAgent(agent)
-            logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
-            model
         } catch (t: Throwable) {
             logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
             runCatching { dao.deleteModel(id) }
             modelDir.deleteRecursively()
             throw t
         }
+    }
+
+    /**
+     * Registers a downloader-verified GGUF. The download already lives under filesDir, so rename is
+     * normally atomic and avoids temporarily requiring twice the model size in storage.
+     */
+    suspend fun importDownloadedGguf(download: File, catalog: CatalogModel): AiModelEntity = withContext(Dispatchers.IO) {
+        require(download.isFile && download.length() > 0) { "O download do modelo não está disponível." }
+        val id = UUID.randomUUID().toString()
+        val modelDir = File(context.filesDir, "models/$id").apply { mkdirs() }
+        val destination = File(modelDir, "model.gguf")
+
+        try {
+            logger?.info("MODEL_COPY", "Movendo ${catalog.displayName} para a biblioteca privada")
+            moveIntoLibrary(download, destination)
+            registerPrivateGguf(
+                id = id,
+                destination = destination,
+                fallbackName = catalog.displayName,
+                preferredName = catalog.displayName,
+                apiIdPrefix = catalog.apiIdPrefix,
+            )
+        } catch (t: Throwable) {
+            logger?.error("IMPORT", "Falha ao registrar ${catalog.displayName}", t)
+            runCatching { dao.deleteModel(id) }
+            modelDir.deleteRecursively()
+            throw t
+        }
+    }
+
+    private suspend fun registerPrivateGguf(
+        id: String,
+        destination: File,
+        fallbackName: String,
+        preferredName: String?,
+        apiIdPrefix: String?,
+    ): AiModelEntity {
+        // Re-read the private copy. This catches truncation/provider issues before native loading.
+        val metadata = inspector.inspect(destination)
+        require(metadata.tensorCount > 0) { "O arquivo copiado não contém tensors válidos." }
+        val compatibility = compatibilityChecker.check(destination.length())
+        require(compatibility.supportedAbi) {
+            "Este aparelho usa ${compatibility.primaryAbi}; o runtime atual exige arm64-v8a ou x86_64."
+        }
+
+        val now = System.currentTimeMillis()
+        val metadataName = metadata.name?.trim().takeUnless { it.isNullOrBlank() }
+        val cleanName = preferredName?.trim().takeUnless { it.isNullOrBlank() } ?: metadataName ?: fallbackName
+        val apiId = apiIdPrefix?.let { "$it${id.take(8)}" } ?: buildApiId(cleanName, id)
+        val declaredContext = metadata.contextLength
+        val model = AiModelEntity(
+            id = id,
+            name = cleanName,
+            apiModelId = apiId,
+            format = "GGUF",
+            architecture = metadata.architecture,
+            filePath = destination.absolutePath,
+            sizeBytes = destination.length(),
+            importedAt = now,
+            isActive = false,
+            contextLength = (declaredContext ?: ANDROID_RUNTIME_CONTEXT).coerceIn(1024, ANDROID_RUNTIME_CONTEXT),
+            sizeLabel = metadata.sizeLabel,
+            ggufVersion = metadata.version,
+            tensorCount = metadata.tensorCount,
+            declaredContextLength = declaredContext,
+            verificationStatus = ModelVerificationStatus.IMPORTED.name,
+        )
+        dao.insertModel(model)
+
+        val agent = AgentEntity(
+            id = UUID.randomUUID().toString(),
+            name = "$cleanName · Agente",
+            modelId = id,
+            systemPrompt = DEFAULT_SYSTEM_PROMPT,
+            temperature = 0.3f,
+            maxTokens = 1024,
+            isDefault = false,
+            createdAt = now,
+            updatedAt = now,
+        )
+        dao.insertAgent(agent)
+        logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
+        return model
+    }
+
+    private fun moveIntoLibrary(source: File, destination: File) {
+        if (source.renameTo(destination)) return
+
+        require(context.filesDir.usableSpace > source.length() + COPY_FALLBACK_HEADROOM) {
+            "O sistema não conseguiu mover o modelo e não há espaço para uma cópia de segurança."
+        }
+        source.copyTo(destination, overwrite = true)
+        require(destination.length() == source.length()) { "A cópia interna do modelo ficou incompleta." }
+        if (!source.delete()) logger?.info("MODEL_COPY", "Arquivo de download permaneceu após cópia interna")
     }
 
     suspend fun activateModel(id: String) {
@@ -208,5 +269,6 @@ class ModelRepository(
         const val DEFAULT_SYSTEM_PROMPT =
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
                 "Quando não souber algo, diga que não sabe em vez de inventar."
+        private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
     }
 }
