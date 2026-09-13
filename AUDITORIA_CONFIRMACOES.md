@@ -22,4 +22,19 @@ Não revisar novamente, salvo alteração futura desses arquivos/versões:
 - existência/assinatura da API pública do binding `llama.cpp v0.4.0` usada por `LlamaCppRuntime`;
 - correspondência textual atual do patch de `prepare_llama_android.sh` com o tag `v0.4.0`.
 
+## Rodada 2 — AAR metadata / API Android
+
+- **`minSdk = 33`:** não controla o nível de API usado para compilar dependências e não é a causa da falha `checkDebugAarMetadata` identificada nesta rodada.
+- **`targetSdk = 36`:** pode permanecer em 36 enquanto o projeto compila com API 37; ele não é a causa da exigência de AAR metadata observada.
+- **Trigger `push` do workflow no `main`:** está funcional. O merge da correção disparou automaticamente um novo run do workflow Android.
+- **Escopo da correção:** o diff revisado alterou somente `compileSdk` de 36 para 37 e a plataforma instalada pelo CI de `android-36` para `android-37`; nenhum outro parâmetro do app ou toolchain foi modificado.
+
+### Itens excluídos das próximas revisões
+
+Enquanto esses valores não forem alterados, não tratar como causa desta falha específica de AAR metadata:
+
+- `minSdk = 33`;
+- `targetSdk = 36`;
+- mecanismo de trigger `push` do workflow no `main`.
+
 > Observação: confirmar que esses pontos estão corretos não significa que todo o quadrante esteja correto. Apenas esses itens específicos foram encerrados e não serão reavaliados enquanto não houver mudança no código correspondente.
