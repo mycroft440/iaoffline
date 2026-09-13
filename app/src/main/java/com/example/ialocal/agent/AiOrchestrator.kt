@@ -61,7 +61,7 @@ class AiOrchestrator(
             ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
         requireVerified(model)
 
-        val working = messages.toMutableList()
+        val working = applyDeepThinking(agent, model, messages).toMutableList()
         val toolsUsed = mutableListOf<String>()
         val systemPrompt = agent.systemPrompt + tools.promptInstructions()
         repeat(MAX_TOOL_ROUNDS) {
@@ -108,6 +108,23 @@ class AiOrchestrator(
         id.isNullOrBlank() -> models.getDefaultAgent()
         else -> models.getAgent(id)
     } ?: throw IllegalStateException("Nenhum agente está configurado. Importe e verifique um modelo primeiro.")
+
+    private fun applyDeepThinking(
+        agent: AgentEntity,
+        model: AiModelEntity,
+        messages: List<AiChatMessage>,
+    ): List<AiChatMessage> {
+        if (!agent.deepThinking || !ModelRepository.supportsDeepThinking(model)) return messages
+        val lastUserIndex = messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
+        if (lastUserIndex < 0) return messages
+        return messages.mapIndexed { index, message ->
+            if (index != lastUserIndex || message.content.trimStart().startsWith("/think")) {
+                message
+            } else {
+                message.copy(content = "/think\n${message.content}")
+            }
+        }
+    }
 
     private fun requireVerified(model: AiModelEntity) {
         check(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
