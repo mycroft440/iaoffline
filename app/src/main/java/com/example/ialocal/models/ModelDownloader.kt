@@ -163,33 +163,49 @@ class ModelDownloader(
             code = connection.responseCode
         }
 
-        require(code == HttpURLConnection.HTTP_OK || code == HttpURLConnection.HTTP_PARTIAL) {
-            "Falha ao baixar ${model.displayName}: HTTP $code."
-        }
-        if (offset > 0) {
-            require(code == HttpURLConnection.HTTP_PARTIAL) {
-                "O servidor não permitiu continuar o download parcial. Tente novamente."
-            }
-        }
-
-        val totalBytes = responseTotalBytes(connection, offset)
-        if (totalBytes != null && offset > totalBytes) {
-            connection.disconnect()
-            partial.delete()
-            return downloadBody(model, partial, onState)
-        }
-
-        onState(
-            ModelDownloadState(
-                catalogId = model.id,
-                phase = ModelDownloadPhase.DOWNLOADING,
-                downloadedBytes = offset,
-                totalBytes = totalBytes ?: model.approximateSizeBytes,
-                message = if (offset > 0) "Continuando download…" else "Baixando modelo…",
-            )
-        )
-
         try {
+            require(code == HttpURLConnection.HTTP_OK || code == HttpURLConnection.HTTP_PARTIAL) {
+                "Falha ao baixar ${model.displayName}: HTTP $code."
+            }
+            if (offset > 0) {
+                require(code == HttpURLConnection.HTTP_PARTIAL) {
+                    "O servidor não permitiu continuar o download parcial. Tente novamente."
+                }
+                validateContentRangeStart(connection, offset)
+            }
+
+            val totalBytes = responseTotalBytes(connection, offset)
+            if (totalBytes != null && offset > totalBytes) {
+                partial.delete()
+                connection.disconnect()
+                return downloadBody(model, partial, onState)
+            }
+
+            val maxExpectedBytes = model.approximateSizeBytes + PARTIAL_SIZE_TOLERANCE
+            require(offset <= maxExpectedBytes) {
+                "O arquivo parcial excede o limite esperado para ${model.displayName}."
+            }
+            totalBytes?.let { total ->
+                require(total <= maxExpectedBytes) {
+                    "O servidor informou um tamanho inesperadamente grande para ${model.displayName}."
+                }
+            }
+            val storageBound = offset + (appContext.filesDir.usableSpace - STORAGE_HEADROOM).coerceAtLeast(0L)
+            val hardLimit = minOf(maxExpectedBytes, storageBound)
+            require(hardLimit > offset) {
+                "Espaço insuficiente para continuar o download mantendo margem de segurança."
+            }
+
+            onState(
+                ModelDownloadState(
+                    catalogId = model.id,
+                    phase = ModelDownloadPhase.DOWNLOADING,
+                    downloadedBytes = offset,
+                    totalBytes = totalBytes ?: model.approximateSizeBytes,
+                    message = if (offset > 0) "Continuando download…" else "Baixando modelo…",
+                )
+            )
+
             BufferedInputStream(connection.inputStream, BUFFER_SIZE).use { input ->
                 FileOutputStream(partial, offset > 0).use { output ->
                     val buffer = ByteArray(BUFFER_SIZE)
@@ -199,6 +215,9 @@ class ModelDownloader(
                         currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
+                        require(downloaded + read <= hardLimit) {
+                            "O download ultrapassou o tamanho ou o espaço de armazenamento permitido."
+                        }
                         output.write(buffer, 0, read)
                         downloaded += read
                         val now = SystemClock.elapsedRealtime()
@@ -218,14 +237,26 @@ class ModelDownloader(
                     output.fd.sync()
                 }
             }
+
+            if (totalBytes != null) {
+                require(partial.length() == totalBytes) {
+                    "O download terminou incompleto (${partial.length()} de $totalBytes bytes). Tente novamente para continuar."
+                }
+            }
         } finally {
             connection.disconnect()
         }
+    }
 
-        if (totalBytes != null) {
-            require(partial.length() == totalBytes) {
-                "O download terminou incompleto (${partial.length()} de $totalBytes bytes). Tente novamente para continuar."
-            }
+    private fun validateContentRangeStart(connection: HttpURLConnection, expectedOffset: Long) {
+        val range = connection.getHeaderField("Content-Range")
+            ?: throw IllegalStateException("Resposta parcial sem Content-Range.")
+        val start = range.substringAfter("bytes ", "")
+            .substringBefore('-')
+            .trim()
+            .toLongOrNull()
+        require(start == expectedOffset) {
+            "O servidor respondeu uma faixa diferente da solicitada; o download parcial não será corrompido."
         }
     }
 
@@ -272,6 +303,9 @@ class ModelDownloader(
             throw IllegalStateException("Não foi possível substituir um download antigo.")
         }
         if (!partial.renameTo(complete)) {
+            require(appContext.filesDir.usableSpace > partial.length() + STORAGE_HEADROOM) {
+                "Não há espaço suficiente para finalizar o download por cópia de segurança."
+            }
             partial.copyTo(complete, overwrite = true)
             require(complete.length() == partial.length()) { "A cópia final do download ficou incompleta." }
             if (!partial.delete()) logger?.info("MODEL_DOWNLOAD", "Não foi possível apagar o arquivo parcial após a cópia")
