@@ -50,8 +50,8 @@ jobs:
       - name: Prepare Gradle wrapper
         run: chmod +x ./gradlew
 
-      - name: Unit tests + debug APK + debug AAB
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
+      - name: Unit tests + lint + debug APK + debug AAB
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
 
       - name: Verify Android artifacts
         run: |

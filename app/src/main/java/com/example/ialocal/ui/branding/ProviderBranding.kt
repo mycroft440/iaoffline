@@ -54,7 +54,7 @@ fun ProviderLogo(
         Box(contentAlignment = Alignment.Center) {
             Image(
                 painter = painterResource(provider.logoRes()),
-                contentDescription = "Logo ${provider.brandName()}",
+                contentDescription = null,
                 modifier = Modifier.padding(6.dp),
                 contentScale = ContentScale.Fit,
             )
