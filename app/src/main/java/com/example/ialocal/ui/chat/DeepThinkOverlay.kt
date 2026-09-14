@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.DeepThinkLevel
@@ -49,7 +50,7 @@ fun DeepThinkOverlay(
             onDismissRequest = { open = false },
             title = { Text("DeepThink") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(androidx.compose.ui.unit.dp(10f))) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(model.name, style = MaterialTheme.typography.titleSmall)
                     Text(capability.description, style = MaterialTheme.typography.bodySmall)
                     Text("Nível: ${selected.label}")
