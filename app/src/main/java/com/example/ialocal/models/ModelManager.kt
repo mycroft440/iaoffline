@@ -48,16 +48,7 @@ class ModelManager(
                 message = "Registrando modelo no app…",
             )
             val imported = repository.importDownloadedGguf(file, catalogModel)
-            _downloadState.value = _downloadState.value.copy(
-                phase = ModelDownloadPhase.VERIFYING_MODEL,
-                message = "Executando teste real de inferência…",
-            )
-            val verified = verifyAndActivate(imported.id)
-            _downloadState.value = _downloadState.value.copy(
-                phase = ModelDownloadPhase.COMPLETE,
-                message = "${catalogModel.displayName} instalado e verificado.",
-            )
-            verified
+            verifyDownloadedModel(catalogModel, imported)
         } catch (cancel: CancellationException) {
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.CANCELLED,
@@ -67,10 +58,50 @@ class ModelManager(
         } catch (t: Throwable) {
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.ERROR,
-                message = t.message ?: "Falha ao baixar ou verificar o modelo.",
+                message = t.message ?: "Falha ao baixar ou instalar o modelo.",
             )
             logger?.error("MODEL_DOWNLOAD", "Falha no fluxo de catálogo para ${catalogModel.displayName}", t)
             throw t
+        }
+    }
+
+    private suspend fun verifyDownloadedModel(
+        catalogModel: CatalogModel,
+        imported: AiModelEntity,
+    ): AiModelEntity {
+        _downloadState.value = _downloadState.value.copy(
+            phase = ModelDownloadPhase.VERIFYING_MODEL,
+            message = "Executando teste real de inferência…",
+        )
+        return try {
+            val verified = verifyAndActivate(imported.id)
+            _downloadState.value = _downloadState.value.copy(
+                phase = ModelDownloadPhase.COMPLETE,
+                message = "${catalogModel.displayName} instalado e verificado.",
+            )
+            verified
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            // The GGUF has already been downloaded, hash-verified, inspected and registered. A runtime
+            // failure (most commonly RAM pressure on larger catalog entries) must not be reported as a
+            // download failure or cause the installed model to disappear. The user can retry later.
+            logger?.error(
+                "MODEL_VERIFY",
+                "${catalogModel.displayName} foi instalado, mas não passou na verificação de execução.",
+                t,
+            )
+            val retained = repository.getModel(imported.id) ?: throw t
+            _downloadState.value = _downloadState.value.copy(
+                phase = ModelDownloadPhase.COMPLETE,
+                message = buildString {
+                    append(catalogModel.displayName)
+                    append(" foi baixado e instalado. A ativação automática não foi concluída")
+                    t.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                    append(". Você pode tentar ativar novamente depois.")
+                },
+            )
+            retained
         }
     }
 
