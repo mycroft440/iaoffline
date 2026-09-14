@@ -117,6 +117,16 @@ class ModelManager(
         }
     }
 
+    internal fun markDownloadPausedBySystem(catalogId: String?) {
+        val current = _downloadState.value
+        if (catalogId == null || current.catalogId == catalogId) {
+            _downloadState.value = current.copy(
+                phase = ModelDownloadPhase.CANCELLED,
+                message = "O Android pausou o download por um limite do sistema. Toque em Continuar para retomar do ponto salvo.",
+            )
+        }
+    }
+
     /** Ends the pending transfer and discards only downloader-owned files, never an installed model. */
     internal fun discardDownload(catalogId: String) {
         val downloadDir = File(appContext.filesDir, "model-downloads")
