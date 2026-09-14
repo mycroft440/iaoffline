@@ -5,6 +5,9 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
+import com.example.ialocal.models.DeepThinkLevel
+import com.example.ialocal.models.DeepThinkStore
+import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.ModelRuntime
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +26,7 @@ class AiOrchestrator(
     private val models: ModelRepository,
     private val runtime: ModelRuntime,
     private val tools: AgentToolRegistry,
+    private val deepThinkStore: DeepThinkStore,
 ) {
     suspend fun chatCompletion(
         modelSelector: String?,
@@ -61,7 +65,29 @@ class AiOrchestrator(
             ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
         requireVerified(model)
 
+        val capability = DeepThinkSupport.capability(model)
+        val deepThinkLevel = if (capability.supported) {
+            deepThinkStore.getLevel(agent.id)
+        } else {
+            DeepThinkLevel.AUTO
+        }
+        val deepThinkInstruction = DeepThinkSupport.instruction(model, deepThinkLevel)
+        val effectiveMaxTokens = DeepThinkSupport.effectiveMaxTokens(
+            maxTokensOverride ?: agent.maxTokens,
+            deepThinkLevel,
+        )
+
         val working = messages.toMutableList()
+        if (deepThinkInstruction.isNotBlank()) {
+            val lastUserIndex = working.indexOfLast { it.role.equals("user", ignoreCase = true) }
+            if (lastUserIndex >= 0) {
+                val original = working[lastUserIndex]
+                working[lastUserIndex] = original.copy(
+                    content = original.content + "\n\n" + deepThinkInstruction,
+                )
+            }
+        }
+
         val toolsUsed = mutableListOf<String>()
         val systemPrompt = agent.systemPrompt + tools.promptInstructions()
         repeat(MAX_TOOL_ROUNDS) {
@@ -70,7 +96,7 @@ class AiOrchestrator(
                 systemPrompt = systemPrompt,
                 messages = working,
                 temperature = temperatureOverride ?: agent.temperature,
-                maxTokens = maxTokensOverride ?: agent.maxTokens,
+                maxTokens = effectiveMaxTokens,
             )
             val call = tools.parseCall(output) ?: return AgentRunResult(agent, model, output, toolsUsed)
             val result = tools.execute(call)
