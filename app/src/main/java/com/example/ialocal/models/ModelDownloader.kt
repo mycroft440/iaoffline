@@ -7,11 +7,14 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -50,8 +53,9 @@ data class ModelDownloadState(
 }
 
 /**
- * Downloads catalog GGUFs to resumable app-private storage, verifies their pinned SHA-256, then
- * publishes a verified copy in Downloads/modelos de I.A offline before the private copy is imported.
+ * Downloads catalog GGUFs to resumable app-private storage and verifies their pinned SHA-256.
+ * A user-visible Downloads copy is attempted only when there is enough spare storage; failure to
+ * create that optional mirror never invalidates an otherwise verified private download.
  */
 class ModelDownloader(
     context: Context,
@@ -66,7 +70,6 @@ class ModelDownloader(
         model: CatalogModel,
         onState: (ModelDownloadState) -> Unit,
     ): File = withContext(Dispatchers.IO) {
-        publicDownloads.ensureFolder()
         downloadDir.mkdirs()
         require(downloadDir.isDirectory) { "Não foi possível preparar a pasta privada de downloads." }
 
@@ -84,7 +87,7 @@ class ModelDownloader(
         if (complete.isFile) {
             onState(initial.copy(phase = ModelDownloadPhase.VERIFYING_FILE, message = "Verificando download existente…"))
             if (sha256(complete).equals(model.sha256, ignoreCase = true)) {
-                publishVerifiedDownload(model, complete, onState)
+                publishVerifiedDownloadBestEffort(model, complete, onState)
                 return@withContext complete
             }
             complete.delete()
@@ -94,8 +97,11 @@ class ModelDownloader(
         require(compatibility.supportedAbi) {
             "Este aparelho usa ${compatibility.primaryAbi}; o runtime exige arm64-v8a ou x86_64."
         }
-        require(compatibility.likelyFitsRam != false) {
-            "${model.displayName} é grande demais para a RAM estimada deste aparelho. Escolha um modelo menor para evitar travamentos durante a carga."
+        if (compatibility.likelyFitsRam == false) {
+            logger?.info(
+                "MODEL_DOWNLOAD",
+                "${model.displayName} pode não caber na RAM deste aparelho; o download continuará e a execução será validada depois.",
+            )
         }
 
         if (partial.length() > model.approximateSizeBytes + PARTIAL_SIZE_TOLERANCE) {
@@ -116,22 +122,20 @@ class ModelDownloader(
             )
             if (sha256(partial).equals(model.sha256, ignoreCase = true)) {
                 finalizeVerifiedDownload(partial, complete)
-                publishVerifiedDownload(model, complete, onState)
+                publishVerifiedDownloadBestEffort(model, complete, onState)
                 logger?.info("MODEL_DOWNLOAD", "Download interrompido já estava completo: ${model.displayName}")
                 return@withContext complete
             }
         }
 
         val estimatedRemaining = (model.approximateSizeBytes - partial.length()).coerceAtLeast(0L)
-        // During publication the device temporarily needs both the verified private file and the
-        // public Downloads copy. Reserve enough room up-front instead of failing after a huge transfer.
-        val requiredFreeBytes = estimatedRemaining + model.approximateSizeBytes + STORAGE_HEADROOM
+        val requiredFreeBytes = estimatedRemaining + STORAGE_HEADROOM
         require(compatibility.availableStorageBytes > requiredFreeBytes) {
-            "Espaço insuficiente. O app precisa de espaço para baixar e também publicar uma cópia em Downloads/${PublicModelDownloads.FOLDER_NAME}."
+            "Espaço insuficiente. Libere armazenamento antes de baixar ${model.displayName}."
         }
 
         logger?.info("MODEL_DOWNLOAD", "Iniciando ${model.displayName}; parcial=${partial.length()} bytes")
-        downloadBody(model, partial, onState)
+        downloadWithRetries(model, partial, onState)
 
         onState(
             ModelDownloadState(
@@ -151,30 +155,84 @@ class ModelDownloader(
         }
 
         finalizeVerifiedDownload(partial, complete)
-        publishVerifiedDownload(model, complete, onState)
+        publishVerifiedDownloadBestEffort(model, complete, onState)
         logger?.info("MODEL_DOWNLOAD", "Download verificado: ${model.displayName} (${complete.length()} bytes)")
         complete
     }
 
-    private suspend fun publishVerifiedDownload(
+    private suspend fun publishVerifiedDownloadBestEffort(
         model: CatalogModel,
         complete: File,
         onState: (ModelDownloadState) -> Unit,
     ) {
+        val requiredForPublicCopy = complete.length() + STORAGE_HEADROOM
+        if (appContext.filesDir.usableSpace <= requiredForPublicCopy) {
+            logger?.info(
+                "MODEL_DOWNLOAD",
+                "Cópia pública de ${model.displayName} ignorada: espaço livre reservado para a instalação privada.",
+            )
+            return
+        }
+
         onState(
             ModelDownloadState(
                 catalogId = model.id,
                 phase = ModelDownloadPhase.VERIFYING_FILE,
                 downloadedBytes = complete.length(),
                 totalBytes = complete.length(),
-                message = "Salvando cópia verificada em Downloads/${PublicModelDownloads.FOLDER_NAME}…",
+                message = "Download verificado. Salvando cópia opcional em Downloads/${PublicModelDownloads.FOLDER_NAME}…",
             )
         )
-        publicDownloads.publishVerifiedModel(model, complete)
-        logger?.info(
-            "MODEL_DOWNLOAD",
-            "Cópia pública salva em Downloads/${PublicModelDownloads.FOLDER_NAME}/${model.fileName}",
-        )
+        try {
+            publicDownloads.publishVerifiedModel(model, complete)
+            logger?.info(
+                "MODEL_DOWNLOAD",
+                "Cópia pública salva em Downloads/${PublicModelDownloads.FOLDER_NAME}/${model.fileName}",
+            )
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            logger?.error(
+                "MODEL_DOWNLOAD",
+                "Não foi possível criar a cópia pública de ${model.displayName}; a instalação privada continuará.",
+                t,
+            )
+        }
+    }
+
+    private suspend fun downloadWithRetries(
+        model: CatalogModel,
+        partial: File,
+        onState: (ModelDownloadState) -> Unit,
+    ) {
+        var failedAttempts = 0
+        while (true) {
+            try {
+                downloadBody(model, partial, onState)
+                return
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (io: IOException) {
+                failedAttempts += 1
+                if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) throw io
+
+                val nextAttempt = failedAttempts + 1
+                logger?.info(
+                    "MODEL_DOWNLOAD",
+                    "Falha temporária em ${model.displayName}: ${io.message}. Retomando tentativa $nextAttempt/$MAX_DOWNLOAD_ATTEMPTS.",
+                )
+                onState(
+                    ModelDownloadState(
+                        catalogId = model.id,
+                        phase = ModelDownloadPhase.DOWNLOADING,
+                        downloadedBytes = partial.length(),
+                        totalBytes = model.approximateSizeBytes,
+                        message = "Conexão interrompida. Retomando ($nextAttempt/$MAX_DOWNLOAD_ATTEMPTS)…",
+                    )
+                )
+                delay(RETRY_BASE_DELAY_MS * failedAttempts)
+            }
+        }
     }
 
     private suspend fun downloadBody(
@@ -195,13 +253,17 @@ class ModelDownloader(
             code = connection.responseCode
         }
 
-        require(code == HttpURLConnection.HTTP_OK || code == HttpURLConnection.HTTP_PARTIAL) {
-            "Falha ao baixar ${model.displayName}: HTTP $code."
+        if (isRetryableHttpCode(code)) {
+            connection.disconnect()
+            throw IOException("Falha temporária ao baixar ${model.displayName}: HTTP $code.")
         }
-        if (offset > 0) {
-            require(code == HttpURLConnection.HTTP_PARTIAL) {
-                "O servidor não permitiu continuar o download parcial. Tente novamente."
-            }
+        if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
+            connection.disconnect()
+            throw IllegalStateException("Falha ao baixar ${model.displayName}: HTTP $code.")
+        }
+        if (offset > 0 && code != HttpURLConnection.HTTP_PARTIAL) {
+            connection.disconnect()
+            throw IllegalStateException("O servidor não permitiu continuar o download parcial. Tente novamente.")
         }
 
         val totalBytes = responseTotalBytes(connection, offset)
@@ -254,10 +316,10 @@ class ModelDownloader(
             connection.disconnect()
         }
 
-        if (totalBytes != null) {
-            require(partial.length() == totalBytes) {
-                "O download terminou incompleto (${partial.length()} de $totalBytes bytes). Tente novamente para continuar."
-            }
+        if (totalBytes != null && partial.length() != totalBytes) {
+            throw IOException(
+                "O download terminou incompleto (${partial.length()} de $totalBytes bytes). A retomada será tentada.",
+            )
         }
     }
 
@@ -310,6 +372,9 @@ class ModelDownloader(
         }
     }
 
+    private fun isRetryableHttpCode(code: Int): Boolean =
+        code == 408 || code == 425 || code == 429 || code in 500..599
+
     private fun nearCompleteThreshold(approximateSizeBytes: Long): Long =
         (approximateSizeBytes * NEAR_COMPLETE_RATIO).toLong()
 
@@ -333,6 +398,8 @@ class ModelDownloader(
         private const val READ_TIMEOUT_MS = 60_000
         private const val PROGRESS_INTERVAL_MS = 300L
         private const val MAX_REDIRECTS = 8
+        private const val MAX_DOWNLOAD_ATTEMPTS = 4
+        private const val RETRY_BASE_DELAY_MS = 1_000L
         private const val HTTP_RANGE_NOT_SATISFIABLE = 416
         private const val STORAGE_HEADROOM = 256L * 1024 * 1024
         private const val PARTIAL_SIZE_TOLERANCE = 512L * 1024 * 1024
