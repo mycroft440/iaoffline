@@ -1,6 +1,8 @@
 package com.example.ialocal.models
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.SystemClock
 import com.example.ialocal.diagnostics.AiEventLogger
 import java.io.BufferedInputStream
@@ -30,6 +32,14 @@ internal fun downloadUrlCandidates(url: String): List<String> {
     val officialAlias = URL("https", "hf.co", parsed.port, parsed.file).toString()
     return listOf(officialAlias, url).distinct()
 }
+
+internal class NetworkUnavailableException(
+    val downloadedBytes: Long,
+    cause: Throwable? = null,
+) : IOException(
+    "Internet indisponível. O download foi pausado automaticamente e poderá continuar do ponto salvo.",
+    cause,
+)
 
 enum class ModelDownloadPhase {
     IDLE,
@@ -223,11 +233,15 @@ class ModelDownloader(
         var failedAttempts = 0
         while (true) {
             try {
+                pauseIfOffline(partial)
                 downloadBody(model, candidates[candidateIndex], partial, onState)
                 return
             } catch (cancel: CancellationException) {
                 throw cancel
+            } catch (offline: NetworkUnavailableException) {
+                throw offline
             } catch (dns: UnknownHostException) {
+                pauseIfOffline(partial, dns)
                 failedAttempts += 1
                 if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) {
                     throw IOException(
@@ -253,6 +267,7 @@ class ModelDownloader(
                 )
                 delay(RETRY_BASE_DELAY_MS * failedAttempts)
             } catch (io: IOException) {
+                pauseIfOffline(partial, io)
                 failedAttempts += 1
                 if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) throw io
 
@@ -272,6 +287,25 @@ class ModelDownloader(
                 )
                 delay(RETRY_BASE_DELAY_MS * failedAttempts)
             }
+        }
+    }
+
+    private fun pauseIfOffline(partial: File, cause: Throwable? = null) {
+        if (!hasValidatedInternetConnection()) {
+            throw NetworkUnavailableException(partial.length(), cause)
+        }
+    }
+
+    private fun hasValidatedInternetConnection(): Boolean {
+        val connectivity = appContext.getSystemService(ConnectivityManager::class.java) ?: return true
+        return try {
+            val activeNetwork = connectivity.activeNetwork ?: return false
+            val capabilities = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        } catch (_: SecurityException) {
+            // ACCESS_NETWORK_STATE is declared; if an OEM blocks this query, keep the old retry behavior.
+            true
         }
     }
 

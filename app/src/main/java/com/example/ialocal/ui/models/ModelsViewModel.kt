@@ -15,6 +15,7 @@ import com.example.ialocal.diagnostics.IntegrationTestState
 import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.models.NetworkUnavailableException
 import com.example.ialocal.runtime.RuntimeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -100,6 +101,8 @@ class ModelsViewModel(
         downloadJob = viewModelScope.launch {
             try {
                 manager.downloadAndVerify(catalogId)
+            } catch (_: NetworkUnavailableException) {
+                // The manager already exposes the resumable paused state; this is not a user-facing error.
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (t: Throwable) {
