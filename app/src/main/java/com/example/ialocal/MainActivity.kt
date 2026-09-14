@@ -14,8 +14,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.data.ThemeMode
-import com.example.ialocal.ui.chat.ChatScreen
 import com.example.ialocal.ui.chat.ChatViewModel
+import com.example.ialocal.ui.chat.ChatWithDeepThinkScreen
 import com.example.ialocal.ui.home.HomeScreen
 import com.example.ialocal.ui.home.HomeViewModel
 import com.example.ialocal.ui.models.AiHomeScreen
@@ -110,7 +110,7 @@ private fun LocalAiApp(
                     modelRepository = container.modelRepository,
                 ),
             )
-            ChatScreen(
+            ChatWithDeepThinkScreen(
                 viewModel = vm,
                 onOpenConversation = { targetId ->
                     if (targetId != id) {
