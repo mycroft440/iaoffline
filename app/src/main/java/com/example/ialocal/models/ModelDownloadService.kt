@@ -217,7 +217,7 @@ class ModelDownloadService : Service() {
         )
 
         val builder = Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.app_launcher)
+            .setSmallIcon(R.drawable.ic_download_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(openApp)
@@ -227,8 +227,8 @@ class ModelDownloadService : Service() {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
 
         if (ongoing) {
-            builder.addAction(Notification.Action.Builder(R.drawable.app_launcher, "Pausar", pauseIntent).build())
-            builder.addAction(Notification.Action.Builder(R.drawable.app_launcher, "Encerrar", endIntent).build())
+            builder.addAction(Notification.Action.Builder(R.drawable.ic_download_notification, "Pausar", pauseIntent).build())
+            builder.addAction(Notification.Action.Builder(R.drawable.ic_download_notification, "Encerrar", endIntent).build())
         }
 
         when {
