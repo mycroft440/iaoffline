@@ -203,6 +203,9 @@ private fun HomeContent(
         item { NavigationCard(ModelProvider.GOOGLE.sectionLabel) { onSelectProvider(ModelProvider.GOOGLE) } }
         item { NavigationCard(ModelProvider.ALIBABA.sectionLabel) { onSelectProvider(ModelProvider.ALIBABA) } }
         item { NavigationCard(ModelProvider.META.sectionLabel) { onSelectProvider(ModelProvider.META) } }
+        item { NavigationCard(ModelProvider.MISTRAL.sectionLabel) { onSelectProvider(ModelProvider.MISTRAL) } }
+        item { NavigationCard(ModelProvider.DEEPSEEK.sectionLabel) { onSelectProvider(ModelProvider.DEEPSEEK) } }
+        item { NavigationCard(ModelProvider.MICROSOFT.sectionLabel) { onSelectProvider(ModelProvider.MICROSOFT) } }
         item { NavigationCard("Utilizar API", onOpenApi) }
         item { Spacer(Modifier.height(18.dp)) }
     }
@@ -322,6 +325,7 @@ private fun CatalogInstallCard(
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             Text(model.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Parâmetros: ${formatParameters(model.totalParametersBillions)}${model.activeParametersBillions?.let { " · ${formatParameters(it)} ativos" } ?: ""}")
             Text("Tamanho: ${formatBytes(model.approximateSizeBytes)}")
             Text("Requisitos mínimos: ${formatBytes(model.recommendedRamBytes)} RAM")
             Text(
@@ -392,6 +396,9 @@ private fun downloadStatus(state: ModelDownloadState, progress: String?): String
     ModelDownloadPhase.ERROR -> state.message ?: "Falha na instalação"
     ModelDownloadPhase.CANCELLED -> "Instalação pausada"
 }
+
+private fun formatParameters(value: Double): String =
+    if (value % 1.0 == 0.0) "${value.toInt()}B" else "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
 
 private fun formatBytes(bytes: Long): String {
     val gb = bytes / (1024.0 * 1024.0 * 1024.0)
