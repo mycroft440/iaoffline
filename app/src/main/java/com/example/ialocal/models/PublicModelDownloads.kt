@@ -21,7 +21,7 @@ class PublicModelDownloads(context: Context) {
      */
     fun ensureFolder() {
         synchronized(folderLock) {
-            if (findByDisplayName(README_FILE_NAME) != null) return
+            if (findOwnedByDisplayName(README_FILE_NAME) != null) return
 
             val values = baseValues(README_FILE_NAME, "text/plain").apply {
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -50,7 +50,9 @@ class PublicModelDownloads(context: Context) {
         ensureFolder()
 
         synchronized(folderLock) {
-            findByDisplayName(model.fileName)?.let { resolver.delete(it, null, null) }
+            // Only replace a MediaStore item owned by this package. Never delete a same-named file
+            // that the user or another application placed in this folder.
+            findOwnedByDisplayName(model.fileName)?.let { resolver.delete(it, null, null) }
 
             val values = baseValues(model.fileName, "application/octet-stream").apply {
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -86,13 +88,15 @@ class PublicModelDownloads(context: Context) {
         resolver.update(uri, ready, null, null)
     }
 
-    private fun findByDisplayName(displayName: String): Uri? {
+    private fun findOwnedByDisplayName(displayName: String): Uri? {
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         resolver.query(
             collection,
             arrayOf(MediaStore.MediaColumns._ID),
-            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
-            arrayOf(RELATIVE_PATH, displayName),
+            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND " +
+                "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND " +
+                "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME}=?",
+            arrayOf(RELATIVE_PATH, displayName, appContext.packageName),
             null,
         )?.use { cursor ->
             if (cursor.moveToFirst()) {
