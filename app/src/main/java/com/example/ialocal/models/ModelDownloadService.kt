@@ -155,6 +155,9 @@ class ModelDownloadService : Service() {
                 }
             } catch (cancel: CancellationException) {
                 throw cancel
+            } catch (_: Throwable) {
+                // ModelManager already records the terminal ERROR state and message. Do not let a
+                // handled network/storage/model error crash the application process from this root job.
             } finally {
                 val stoppedByUserOrSystem = userStopInProgress.get()
                 activeJob = null
