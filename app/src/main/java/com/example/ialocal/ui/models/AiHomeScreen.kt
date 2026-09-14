@@ -1,5 +1,6 @@
 package com.example.ialocal.ui.models
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
@@ -54,17 +58,27 @@ fun AiHomeScreen(
     onOpenChats: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
+    onExitApp: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
     val download by viewModel.downloadState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
+    var showExitDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(error) {
         error?.let {
             snackbar.showSnackbar(it)
             viewModel.clearError()
+        }
+    }
+
+    BackHandler {
+        if (selectedProvider != null) {
+            selectedProvider = null
+        } else {
+            showExitDialog = true
         }
     }
 
@@ -112,6 +126,24 @@ fun AiHomeScreen(
                 onDeleteModel = viewModel::delete,
             )
         }
+    }
+
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = onExitApp,
+            title = { Text("Deseja sair do app?") },
+            confirmButton = {
+                TextButton(onClick = onExitApp) {
+                    Text("Sim")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitDialog = false }) {
+                    Text("Não")
+                }
+            },
+            properties = DialogProperties(dismissOnClickOutside = false),
+        )
     }
 }
 

@@ -33,13 +33,21 @@ class MainActivity : ComponentActivity() {
             val themeMode by container.themeRepository.themeMode.collectAsStateWithLifecycle(
                 initialValue = ThemeMode.SYSTEM,
             )
-            LocalAiTheme(themeMode = themeMode) { LocalAiApp(container) }
+            LocalAiTheme(themeMode = themeMode) {
+                LocalAiApp(
+                    container = container,
+                    onExitApp = { finish() },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun LocalAiApp(container: AppContainer) {
+private fun LocalAiApp(
+    container: AppContainer,
+    onExitApp: () -> Unit,
+) {
     val navController = rememberNavController()
 
     NavHost(navController = navController, startDestination = "ai-home") {
@@ -59,6 +67,7 @@ private fun LocalAiApp(container: AppContainer) {
                 onOpenChats = { navController.navigate("home") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
+                onExitApp = onExitApp,
             )
         }
 
