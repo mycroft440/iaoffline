@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -72,6 +73,9 @@ import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.runtime.RuntimeStatus
+import com.example.ialocal.ui.branding.ProviderLogo
+import com.example.ialocal.ui.branding.brandName
+import com.example.ialocal.ui.branding.catalogProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -243,7 +247,14 @@ private fun CatalogModelCard(
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                ProviderLogo(provider = model.provider, size = 42.dp)
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
+                    Text(
+                        model.provider.brandName(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text(model.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
                         "${model.quantization} · ~${formatBytes(model.approximateSizeBytes)}",
@@ -466,10 +477,23 @@ private fun ModelCard(
     onEditAgent: () -> Unit,
     onDefaultAgent: () -> Unit,
 ) {
+    val provider = model.catalogProvider()
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                provider?.let {
+                    ProviderLogo(provider = it, size = 42.dp)
+                    Spacer(Modifier.width(12.dp))
+                }
                 Column(Modifier.weight(1f)) {
+                    provider?.let {
+                        Text(
+                            it.brandName(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(model.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
                         listOfNotNull(model.architecture, model.sizeLabel, formatBytes(model.sizeBytes)).joinToString(" · "),

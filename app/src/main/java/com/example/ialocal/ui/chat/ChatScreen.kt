@@ -29,6 +29,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.audio.AudioRecorder
 import com.example.ialocal.data.*
+import com.example.ialocal.ui.branding.ProviderLogo
+import com.example.ialocal.ui.branding.brandName
+import com.example.ialocal.ui.branding.catalogProvider
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,6 +72,7 @@ fun ChatScreen(
     val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
         ?: readyModels.firstOrNull { it.isActive }
         ?: readyModels.firstOrNull()
+    val selectedProvider = selectedModel?.catalogProvider()
 
     val micPermission = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -174,6 +178,10 @@ fun ChatScreen(
                             TextButton(onClick = { modelMenuOpen = true }) {
                                 Column(horizontalAlignment = Alignment.Start) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        selectedProvider?.let {
+                                            ProviderLogo(provider = it, size = 28.dp)
+                                            Spacer(Modifier.width(8.dp))
+                                        }
                                         Text(
                                             selectedModel?.name ?: "Selecionar modelo",
                                             maxLines = 1,
@@ -191,7 +199,11 @@ fun ChatScreen(
                                         )
                                     }
                                     Text(
-                                        if (selectedModel != null) "Offline" else "Nenhum modelo pronto",
+                                        if (selectedModel != null) {
+                                            selectedProvider?.let { "${it.brandName()} · Offline" } ?: "Offline"
+                                        } else {
+                                            "Nenhum modelo pronto"
+                                        },
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -217,15 +229,23 @@ fun ChatScreen(
                                     )
                                 } else {
                                     readyModels.forEach { model ->
+                                        val provider = model.catalogProvider()
                                         DropdownMenuItem(
                                             text = {
-                                                Column {
-                                                    Text(model.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                    Text(
-                                                        "Disponível offline",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    )
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    provider?.let {
+                                                        ProviderLogo(provider = it, size = 32.dp)
+                                                        Spacer(Modifier.width(10.dp))
+                                                    }
+                                                    Column {
+                                                        Text(model.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                        Text(
+                                                            provider?.let { "${it.brandName()} · Disponível offline" }
+                                                                ?: "Disponível offline",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        )
+                                                    }
                                                 }
                                             },
                                             leadingIcon = {

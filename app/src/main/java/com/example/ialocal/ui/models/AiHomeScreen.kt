@@ -1,6 +1,7 @@
 package com.example.ialocal.ui.models
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -40,15 +42,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.R
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelProvider
+import com.example.ialocal.ui.branding.ProviderLogo
+import com.example.ialocal.ui.branding.brandName
+import com.example.ialocal.ui.branding.catalogProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,7 +93,10 @@ fun AiHomeScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(selectedProvider?.sectionLabel ?: "I.A Off-line") },
+                title = {
+                    selectedProvider?.let { ProviderSectionTitle(it) }
+                        ?: Text("I.A Off-line")
+                },
                 navigationIcon = {
                     if (selectedProvider != null) {
                         IconButton(onClick = { selectedProvider = null }) {
@@ -147,6 +158,48 @@ fun AiHomeScreen(
 }
 
 @Composable
+private fun ProviderSectionTitle(provider: ModelProvider) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        ProviderLogo(provider = provider, size = 30.dp)
+        Text(provider.sectionLabel)
+    }
+}
+
+@Composable
+private fun AppBrandHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp, bottom = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.app_launcher),
+            contentDescription = "Logo IA Offline",
+            modifier = Modifier.size(72.dp),
+            contentScale = ContentScale.Fit,
+        )
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text(
+                text = "IA Offline",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "Inteligência artificial no aparelho",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun HomeContent(
     modifier: Modifier,
     installedModels: List<AiModelEntity>,
@@ -159,13 +212,15 @@ private fun HomeContent(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item { AppBrandHeader() }
+
         item {
             Text(
                 text = "Minhas I.As >>",
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(enabled = installedModels.isNotEmpty(), onClick = onOpenChats)
-                    .padding(top = 14.dp, bottom = 4.dp),
+                    .padding(top = 4.dp, bottom = 4.dp),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -199,28 +254,38 @@ private fun HomeContent(
             )
         }
 
-        item { NavigationCard(ModelProvider.GOOGLE.sectionLabel) { onSelectProvider(ModelProvider.GOOGLE) } }
-        item { NavigationCard(ModelProvider.ALIBABA.sectionLabel) { onSelectProvider(ModelProvider.ALIBABA) } }
-        item { NavigationCard(ModelProvider.META.sectionLabel) { onSelectProvider(ModelProvider.META) } }
-        item { NavigationCard(ModelProvider.MISTRAL.sectionLabel) { onSelectProvider(ModelProvider.MISTRAL) } }
-        item { NavigationCard(ModelProvider.DEEPSEEK.sectionLabel) { onSelectProvider(ModelProvider.DEEPSEEK) } }
-        item { NavigationCard(ModelProvider.MICROSOFT.sectionLabel) { onSelectProvider(ModelProvider.MICROSOFT) } }
-        item { NavigationCard("Utilizar API", onOpenApi) }
+        item { NavigationCard(ModelProvider.GOOGLE.sectionLabel, ModelProvider.GOOGLE) { onSelectProvider(ModelProvider.GOOGLE) } }
+        item { NavigationCard(ModelProvider.ALIBABA.sectionLabel, ModelProvider.ALIBABA) { onSelectProvider(ModelProvider.ALIBABA) } }
+        item { NavigationCard(ModelProvider.META.sectionLabel, ModelProvider.META) { onSelectProvider(ModelProvider.META) } }
+        item { NavigationCard(ModelProvider.MISTRAL.sectionLabel, ModelProvider.MISTRAL) { onSelectProvider(ModelProvider.MISTRAL) } }
+        item { NavigationCard(ModelProvider.DEEPSEEK.sectionLabel, ModelProvider.DEEPSEEK) { onSelectProvider(ModelProvider.DEEPSEEK) } }
+        item { NavigationCard(ModelProvider.MICROSOFT.sectionLabel, ModelProvider.MICROSOFT) { onSelectProvider(ModelProvider.MICROSOFT) } }
+        item { NavigationCard("Utilizar API", null, onOpenApi) }
         item { Spacer(Modifier.height(18.dp)) }
     }
 }
 
 @Composable
-private fun NavigationCard(label: String, onClick: () -> Unit) {
+private fun NavigationCard(
+    label: String,
+    provider: ModelProvider?,
+    onClick: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
     ) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 20.dp),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            provider?.let { ProviderLogo(provider = it, size = 42.dp) }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
@@ -230,13 +295,26 @@ private fun InstalledModelCard(
     onOpenChats: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val provider = model.catalogProvider()
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                provider?.let {
+                    ProviderLogo(provider = it, size = 42.dp)
+                    Spacer(Modifier.width(12.dp))
+                }
                 Column(Modifier.weight(1f)) {
+                    provider?.let {
+                        Text(
+                            it.brandName(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(model.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
                         "${formatBytes(model.sizeBytes)} · ${if (model.isActive) "I.A ativa" else "I.A instalada"}",
@@ -323,7 +401,18 @@ private fun CatalogInstallCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            Text(model.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ProviderLogo(provider = model.provider, size = 46.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        model.provider.brandName(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(model.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
+            }
             Text("Parâmetros: ${formatParameters(model.totalParametersBillions)}${model.activeParametersBillions?.let { " · ${formatParameters(it)} ativos" } ?: ""}")
             Text("Tamanho: ${formatBytes(model.approximateSizeBytes)}")
             Text("Requisitos mínimos: ${formatBytes(model.recommendedRamBytes)} RAM")
