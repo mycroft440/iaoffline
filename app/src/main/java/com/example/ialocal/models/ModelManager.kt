@@ -49,6 +49,17 @@ class ModelManager(
             )
             val imported = repository.importDownloadedGguf(file, catalogModel)
             verifyDownloadedModel(catalogModel, imported)
+        } catch (offline: NetworkUnavailableException) {
+            _downloadState.value = _downloadState.value.copy(
+                phase = ModelDownloadPhase.CANCELLED,
+                downloadedBytes = offline.downloadedBytes,
+                message = "Internet indisponível. O download foi pausado automaticamente. Reconecte-se e toque em Continuar download para retomar do ponto salvo.",
+            )
+            logger?.info(
+                "MODEL_DOWNLOAD",
+                "Internet indisponível; download pausado automaticamente para ${catalogModel.displayName} em ${offline.downloadedBytes} bytes.",
+            )
+            throw offline
         } catch (cancel: CancellationException) {
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.CANCELLED,
