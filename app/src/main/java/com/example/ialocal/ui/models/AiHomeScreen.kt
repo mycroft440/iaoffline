@@ -62,6 +62,7 @@ import com.example.ialocal.ui.branding.catalogProvider
 @Composable
 fun AiHomeScreen(
     viewModel: ModelsViewModel,
+    onStartChat: () -> Unit,
     onOpenChats: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -118,6 +119,7 @@ fun AiHomeScreen(
             HomeContent(
                 modifier = Modifier.padding(padding),
                 installedModels = installedModels,
+                onStartChat = onStartChat,
                 onOpenChats = onOpenChats,
                 onDeleteModel = viewModel::delete,
                 onSelectProvider = { selectedProvider = it },
@@ -203,6 +205,7 @@ private fun AppBrandHeader() {
 private fun HomeContent(
     modifier: Modifier,
     installedModels: List<AiModelEntity>,
+    onStartChat: () -> Unit,
     onOpenChats: () -> Unit,
     onDeleteModel: (String) -> Unit,
     onSelectProvider: (ModelProvider) -> Unit,
@@ -216,7 +219,7 @@ private fun HomeContent(
 
         item {
             Button(
-                onClick = onOpenChats,
+                onClick = onStartChat,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Iniciar chat com IA")
@@ -489,7 +492,7 @@ private fun downloadStatus(state: ModelDownloadState, progress: String?): String
     ModelDownloadPhase.VERIFYING_FILE -> "Verificando arquivo"
     ModelDownloadPhase.IMPORTING -> "Registrando I.A"
     ModelDownloadPhase.VERIFYING_MODEL -> "Testando I.A no aparelho"
-    ModelDownloadPhase.COMPLETE -> "Instalação concluída"
+    ModelDownloadPhase.COMPLETE -> state.message ?: "Instalação concluída"
     ModelDownloadPhase.ERROR -> state.message ?: "Falha na instalação"
     ModelDownloadPhase.CANCELLED -> "Instalação pausada"
 }
