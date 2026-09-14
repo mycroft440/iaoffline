@@ -2,6 +2,7 @@ package com.example.ialocal.ui.chat
 
 import androidx.compose.runtime.Composable
 
+// Adds optional controls around the existing chat screen.
 @Composable
 fun ChatWithDeepThinkScreen(
     viewModel: ChatViewModel,
