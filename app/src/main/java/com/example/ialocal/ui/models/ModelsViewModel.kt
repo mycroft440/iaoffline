@@ -15,10 +15,7 @@ import com.example.ialocal.diagnostics.IntegrationTestState
 import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
-import com.example.ialocal.models.NetworkUnavailableException
 import com.example.ialocal.runtime.RuntimeState
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -60,8 +57,6 @@ class ModelsViewModel(
     private val _integrationTest = MutableStateFlow(IntegrationTestState())
     val integrationTest: StateFlow<IntegrationTestState> = _integrationTest.asStateFlow()
 
-    private var downloadJob: Job? = null
-
     val baseUrl: String get() = apiSettings.baseUrl
 
     fun inspectModel(uri: Uri) {
@@ -96,35 +91,20 @@ class ModelsViewModel(
     }
 
     fun downloadCatalogModel(catalogId: String) {
-        if (_isImporting.value || _operationText.value != null || downloadJob?.isActive == true) return
+        if (_isImporting.value || _operationText.value != null || manager.downloadState.value.isBusy) return
         _error.value = null
-        downloadJob = viewModelScope.launch {
-            try {
-                manager.downloadAndVerify(catalogId)
-            } catch (_: NetworkUnavailableException) {
-                // The manager already exposes the resumable paused state; this is not a user-facing error.
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (t: Throwable) {
-                _error.value = t.message ?: "Falha ao baixar ou verificar o modelo."
-            }
-        }
+        runCatching { manager.startBackgroundDownload(catalogId) }
+            .onFailure { _error.value = it.message ?: "Não foi possível iniciar o download em segundo plano." }
     }
 
-    /** Pauses the current installation while preserving the partial file for HTTP Range resume. */
+    /** Pauses the foreground-service transfer while preserving the partial file for HTTP Range resume. */
     fun cancelDownload() {
-        downloadJob?.cancel()
+        manager.pauseBackgroundDownload()
     }
 
-    /** Ends the current installation state. A future install may still reuse a safe partial file. */
+    /** Ends the foreground transfer and discards downloader-owned partial/complete staging files. */
     fun endDownload() {
-        val current = downloadJob
-        current?.cancel()
-        viewModelScope.launch {
-            current?.join()
-            manager.resetDownloadState()
-            if (downloadJob === current) downloadJob = null
-        }
+        manager.endBackgroundDownload()
     }
 
     fun clearDownloadState() {

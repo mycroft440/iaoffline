@@ -36,7 +36,7 @@ class AppContainer(context: Context) {
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
     val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics)
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
-    val modelManager = ModelManager(modelRepository, modelRuntime, modelDownloader, diagnostics)
+    val modelManager = ModelManager(appContext, modelRepository, modelRuntime, modelDownloader, diagnostics)
     val agentTools = AgentToolRegistry(chatRepository, diagnostics)
     val deepThinkStore = DeepThinkStore(appContext)
     val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools, deepThinkStore)

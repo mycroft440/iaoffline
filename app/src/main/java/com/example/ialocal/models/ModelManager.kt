@@ -1,11 +1,13 @@
 package com.example.ialocal.models
 
+import android.content.Context
 import android.net.Uri
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.RuntimeState
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,11 +15,14 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /** Coordinates persistence, downloads and native runtime so activation follows a successful real inference. */
 class ModelManager(
+    context: Context,
     private val repository: ModelRepository,
     private val runtime: ModelRuntime,
     private val downloader: ModelDownloader,
     private val logger: AiEventLogger? = null,
 ) {
+    private val appContext = context.applicationContext
+
     val runtimeState: StateFlow<RuntimeState> = runtime.state
     val catalog: List<CatalogModel> = ModelCatalog.entries
 
@@ -36,6 +41,20 @@ class ModelManager(
         }
     }
 
+    /** Starts a foreground-service-owned transfer so leaving the screen does not cancel it. */
+    fun startBackgroundDownload(catalogId: String) {
+        ModelCatalog.requireById(catalogId)
+        ModelDownloadService.start(appContext, catalogId)
+    }
+
+    fun pauseBackgroundDownload() {
+        ModelDownloadService.pause(appContext, _downloadState.value.catalogId)
+    }
+
+    fun endBackgroundDownload() {
+        ModelDownloadService.end(appContext, _downloadState.value.catalogId)
+    }
+
     suspend fun downloadAndVerify(catalogId: String): AiModelEntity {
         check(!_downloadState.value.isBusy) { "Já existe um download ou verificação de modelo em andamento." }
         val catalogModel = ModelCatalog.requireById(catalogId)
@@ -51,19 +70,19 @@ class ModelManager(
             verifyDownloadedModel(catalogModel, imported)
         } catch (offline: NetworkUnavailableException) {
             _downloadState.value = _downloadState.value.copy(
-                phase = ModelDownloadPhase.CANCELLED,
+                phase = ModelDownloadPhase.DOWNLOADING,
                 downloadedBytes = offline.downloadedBytes,
-                message = "Internet indisponível. O download foi pausado automaticamente. Reconecte-se e toque em Continuar download para retomar do ponto salvo.",
+                message = "Internet indisponível. Aguardando conexão; o download continuará automaticamente do ponto salvo.",
             )
             logger?.info(
                 "MODEL_DOWNLOAD",
-                "Internet indisponível; download pausado automaticamente para ${catalogModel.displayName} em ${offline.downloadedBytes} bytes.",
+                "Internet indisponível; download aguardando reconexão para ${catalogModel.displayName} em ${offline.downloadedBytes} bytes.",
             )
             throw offline
         } catch (cancel: CancellationException) {
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.CANCELLED,
-                message = "Download pausado. Ao tentar novamente, o app continua do arquivo parcial quando possível.",
+                message = "Download pausado. Ao continuar, o app retoma do arquivo parcial quando possível.",
             )
             throw cancel
         } catch (t: Throwable) {
@@ -74,6 +93,47 @@ class ModelManager(
             logger?.error("MODEL_DOWNLOAD", "Falha no fluxo de catálogo para ${catalogModel.displayName}", t)
             throw t
         }
+    }
+
+    /** Called by the service immediately before retrying an offline transfer. */
+    internal fun prepareNetworkRetry(catalogId: String) {
+        val current = _downloadState.value
+        if (
+            current.catalogId == catalogId &&
+            current.phase == ModelDownloadPhase.DOWNLOADING &&
+            current.message?.startsWith("Internet indisponível") == true
+        ) {
+            _downloadState.value = current.copy(phase = ModelDownloadPhase.CANCELLED)
+        }
+    }
+
+    internal fun markDownloadPausedByUser(catalogId: String?) {
+        val current = _downloadState.value
+        if (catalogId == null || current.catalogId == catalogId) {
+            _downloadState.value = current.copy(
+                phase = ModelDownloadPhase.CANCELLED,
+                message = "Download pausado pelo usuário. Toque em Continuar para retomar do ponto salvo.",
+            )
+        }
+    }
+
+    internal fun markDownloadPausedBySystem(catalogId: String?) {
+        val current = _downloadState.value
+        if (catalogId == null || current.catalogId == catalogId) {
+            _downloadState.value = current.copy(
+                phase = ModelDownloadPhase.CANCELLED,
+                message = "O Android pausou o download por um limite do sistema. Toque em Continuar para retomar do ponto salvo.",
+            )
+        }
+    }
+
+    /** Ends the pending transfer and discards only downloader-owned files, never an installed model. */
+    internal fun discardDownload(catalogId: String) {
+        val downloadDir = File(appContext.filesDir, "model-downloads")
+        File(downloadDir, "$catalogId.part").delete()
+        File(downloadDir, "$catalogId.gguf").delete()
+        _downloadState.value = ModelDownloadState()
+        logger?.info("MODEL_DOWNLOAD", "Download encerrado pelo usuário: $catalogId")
     }
 
     private suspend fun verifyDownloadedModel(
