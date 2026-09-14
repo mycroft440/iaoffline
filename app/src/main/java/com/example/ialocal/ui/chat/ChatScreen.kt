@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.audio.AudioRecorder
 import com.example.ialocal.data.*
+import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
@@ -53,6 +54,7 @@ fun ChatScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val models by viewModel.models.collectAsStateWithLifecycle()
+    val agentUsageCounts by viewModel.agentUsageCounts.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -62,6 +64,9 @@ fun ChatScreen(
     var isRecording by remember { mutableStateOf(false) }
     var modelMenuOpen by remember { mutableStateOf(false) }
     var agentSettingsOpen by remember { mutableStateOf(false) }
+    var agentProfilesOpen by remember { mutableStateOf(false) }
+    var createAgentOpen by remember { mutableStateOf(false) }
+    var pendingDefaultAgent by remember { mutableStateOf<AgentEntity?>(null) }
     var pendingAudioImport by remember { mutableStateOf<android.net.Uri?>(null) }
 
     val readyModels = remember(models) {
@@ -73,6 +78,10 @@ fun ChatScreen(
         ?: readyModels.firstOrNull { it.isActive }
         ?: readyModels.firstOrNull()
     val selectedProvider = selectedModel?.catalogProvider()
+    val modelAgents = remember(agents, selectedModel?.id) {
+        val modelId = selectedModel?.id
+        if (modelId == null) emptyList() else agents.filter { it.modelId == modelId }
+    }
 
     val micPermission = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -129,6 +138,9 @@ fun ChatScreen(
             ChatDrawer(
                 conversations = conversations,
                 currentConversationId = conversation?.id,
+                agents = modelAgents,
+                currentAgentId = selectedAgent?.id,
+                agentUsageCounts = agentUsageCounts,
                 agentSettingsEnabled = selectedAgent != null,
                 onNewConversation = {
                     scope.launch {
@@ -152,6 +164,17 @@ fun ChatScreen(
                     scope.launch {
                         drawerState.close()
                         if (selectedAgent != null) agentSettingsOpen = true
+                    }
+                },
+                onSelectAgent = { agent ->
+                    viewModel.selectAgent(agent.id)
+                    pendingDefaultAgent = agent
+                    scope.launch { drawerState.close() }
+                },
+                onOpenAgentProfiles = {
+                    scope.launch {
+                        drawerState.close()
+                        agentProfilesOpen = true
                     }
                 },
                 onOpenModels = {
@@ -356,19 +379,119 @@ fun ChatScreen(
             },
         )
     }
+
+    if (agentProfilesOpen) {
+        AgentProfilesDialog(
+            agents = modelAgents,
+            currentAgentId = selectedAgent?.id,
+            onDismiss = { agentProfilesOpen = false },
+            onSelect = { agent ->
+                agentProfilesOpen = false
+                viewModel.selectAgent(agent.id)
+                pendingDefaultAgent = agent
+            },
+            onAddTemplate = { template ->
+                val model = selectedModel
+                if (model == null) {
+                    scope.launch { snackbar.showSnackbar("Selecione um modelo offline verificado primeiro.") }
+                } else {
+                    viewModel.createAgentProfile(
+                        modelId = model.id,
+                        name = template.name,
+                        systemPrompt = template.prompt,
+                    ) { created ->
+                        agentProfilesOpen = false
+                        pendingDefaultAgent = created
+                    }
+                }
+            },
+            onCreateNew = {
+                agentProfilesOpen = false
+                createAgentOpen = true
+            },
+        )
+    }
+
+    if (createAgentOpen) {
+        CreateAgentDialog(
+            onDismiss = { createAgentOpen = false },
+            onSave = { name, prompt, temperature ->
+                val model = selectedModel
+                if (model == null) {
+                    scope.launch { snackbar.showSnackbar("Selecione um modelo offline verificado primeiro.") }
+                } else {
+                    viewModel.createAgentProfile(
+                        modelId = model.id,
+                        name = name,
+                        systemPrompt = prompt,
+                        temperature = temperature,
+                    ) { created ->
+                        createAgentOpen = false
+                        pendingDefaultAgent = created
+                    }
+                }
+            },
+        )
+    }
+
+    pendingDefaultAgent?.let { agent ->
+        AlertDialog(
+            onDismissRequest = { pendingDefaultAgent = null },
+            title = { Text("Agentes de I.A") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(agent.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Deseja usar esse perfil como padrão?")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.setDefaultAgent(agent.id)
+                        pendingDefaultAgent = null
+                        scope.launch {
+                            snackbar.showSnackbar("Concluído. O perfil foi definido como padrão.")
+                            drawerState.open()
+                        }
+                    },
+                ) { Text("Sim") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingDefaultAgent = null
+                        scope.launch { drawerState.open() }
+                    },
+                ) { Text("Não") }
+            },
+        )
+    }
 }
 
 @Composable
 private fun ChatDrawer(
     conversations: List<ConversationListItem>,
     currentConversationId: String?,
+    agents: List<AgentEntity>,
+    currentAgentId: String?,
+    agentUsageCounts: Map<String, Int>,
     agentSettingsEnabled: Boolean,
     onNewConversation: () -> Unit,
     onOpenConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenAgentSettings: () -> Unit,
+    onSelectAgent: (AgentEntity) -> Unit,
+    onOpenAgentProfiles: () -> Unit,
     onOpenModels: () -> Unit,
 ) {
+    val rankedAgents = remember(agents, agentUsageCounts) {
+        agents.sortedWith(
+            compareByDescending<AgentEntity> { agentUsageCounts[it.id] ?: 0 }
+                .thenByDescending { it.isDefault }
+                .thenByDescending { it.updatedAt }
+        )
+    }
+
     ModalDrawerSheet(modifier = Modifier.width(320.dp)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
             Spacer(Modifier.height(14.dp))
@@ -397,6 +520,62 @@ private fun ChatDrawer(
                 icon = { Icon(Icons.Default.SmartToy, null) },
                 onClick = onOpenModels,
             )
+
+            HorizontalDivider(Modifier.padding(top = 10.dp, bottom = 8.dp))
+            Text(
+                "Agentes de I.A",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            if (rankedAgents.isEmpty()) {
+                Text(
+                    "Nenhum perfil disponível para este modelo.",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 168.dp),
+                ) {
+                    items(rankedAgents, key = { "agent-${it.id}" }) { agent ->
+                        NavigationDrawerItem(
+                            label = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        agent.name,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (agent.id == currentAgentId) {
+                                        Text(
+                                            "perfil atual",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            },
+                            selected = agent.id == currentAgentId,
+                            icon = { Icon(Icons.Default.Psychology, null) },
+                            onClick = { onSelectAgent(agent) },
+                        )
+                    }
+                }
+            }
+
+            NavigationDrawerItem(
+                label = { Text("Adicionar mais") },
+                selected = false,
+                icon = { Icon(Icons.Default.Add, null) },
+                onClick = onOpenAgentProfiles,
+            )
+
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -431,6 +610,177 @@ private fun ChatDrawer(
             Spacer(Modifier.height(12.dp))
         }
     }
+}
+
+private data class AgentTemplate(
+    val name: String,
+    val description: String,
+    val prompt: String,
+)
+
+private val AGENT_TEMPLATES = listOf(
+    AgentTemplate(
+        ModelRepository.SOFTWARE_ENGINEER_NAME,
+        "Especialista em programação, arquitetura e depuração.",
+        ModelRepository.SOFTWARE_ENGINEER_PROMPT,
+    ),
+    AgentTemplate(
+        ModelRepository.SELF_DRIVEN_NAME,
+        "Foco em produtividade, disciplina e execução por etapas.",
+        ModelRepository.SELF_DRIVEN_PROMPT,
+    ),
+    AgentTemplate(
+        ModelRepository.UNCENSORED_NAME,
+        "Respostas diretas, francas e com menos filtros de estilo.",
+        ModelRepository.UNCENSORED_PROMPT,
+    ),
+    AgentTemplate(
+        "Assistente Geral",
+        "Equilibrado para tarefas cotidianas.",
+        ModelRepository.DEFAULT_SYSTEM_PROMPT,
+    ),
+    AgentTemplate(
+        "Tutor de Estudos",
+        "Explicações didáticas, exemplos e revisão de conhecimento.",
+        "Você é um tutor paciente e rigoroso. Explique conceitos por etapas, use exemplos concretos, faça perguntas de verificação quando útil e adapte a profundidade ao nível do usuário.",
+    ),
+    AgentTemplate(
+        "Criador de Conteúdo",
+        "Ajuda com textos, roteiros, ideias e revisão.",
+        "Você é um criador e editor de conteúdo. Produza textos claros, originais e adequados ao público e ao canal. Ofereça alternativas de tom e melhore estrutura, ritmo e precisão.",
+    ),
+    AgentTemplate(
+        "Analista de Dados",
+        "Análise, tabelas, métricas e interpretação de resultados.",
+        "Você é um analista de dados cuidadoso. Estruture hipóteses, verifique unidades e premissas, diferencie correlação de causalidade e apresente conclusões com limitações e próximos testes.",
+    ),
+)
+
+@Composable
+private fun AgentProfilesDialog(
+    agents: List<AgentEntity>,
+    currentAgentId: String?,
+    onDismiss: () -> Unit,
+    onSelect: (AgentEntity) -> Unit,
+    onAddTemplate: (AgentTemplate) -> Unit,
+    onCreateNew: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Adicionar agente de I.A") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Escolha uma personalidade ou crie a sua.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(AGENT_TEMPLATES, key = { it.name }) { template ->
+                        val existing = agents.firstOrNull { it.name.equals(template.name, ignoreCase = true) }
+                        ListItem(
+                            headlineContent = { Text(template.name) },
+                            supportingContent = { Text(template.description) },
+                            leadingContent = { Icon(Icons.Default.Psychology, null) },
+                            trailingContent = {
+                                when {
+                                    existing?.id == currentAgentId -> Icon(Icons.Default.Check, "Perfil atual")
+                                    existing != null -> Text("Adicionado", style = MaterialTheme.typography.labelSmall)
+                                    else -> Icon(Icons.Default.Add, "Adicionar")
+                                }
+                            },
+                            modifier = Modifier.clickable {
+                                if (existing != null) onSelect(existing) else onAddTemplate(template)
+                            },
+                        )
+                    }
+                }
+                HorizontalDivider()
+                TextButton(
+                    onClick = onCreateNew,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Criar novo agente")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
+}
+
+@Composable
+private fun CreateAgentDialog(
+    onDismiss: () -> Unit,
+    onSave: (name: String, prompt: String, temperature: Float) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf("") }
+    val temperature = 0.3f
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Criar novo agente") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(80) },
+                    label = { Text("Nome do agente") },
+                    placeholder = { Text("Ex.: Meu Assistente") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    label = { Text("Prompt do sistema") },
+                    placeholder = { Text("Descreva como a I.A deve se comportar...") },
+                    minLines = 6,
+                    maxLines = 10,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Temperatura: 0,3",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(
+                    value = temperature,
+                    onValueChange = {},
+                    valueRange = 0f..2f,
+                    enabled = false,
+                )
+                Text(
+                    "O runtime llama.cpp Android atual usa temperatura fixa em 0,3. A opção fica disponível quando o runtime suportar ajuste.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (DEEP_THINK_SUPPORTED) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("DeepThink", modifier = Modifier.weight(1f))
+                        Switch(checked = false, onCheckedChange = {})
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(name.trim(), prompt.trim(), temperature) },
+                enabled = name.isNotBlank() && prompt.isNotBlank(),
+            ) { Text("Salvar agente") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }
 
 @Composable
@@ -666,6 +1016,11 @@ private fun AgentSettingsDialog(
                     minLines = 5,
                     maxLines = 10,
                 )
+                Text(
+                    "Temperatura: 0,3 · fixa no runtime atual",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {
@@ -683,6 +1038,8 @@ private fun AgentSettingsDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
     )
 }
+
+private const val DEEP_THINK_SUPPORTED = false
 
 private fun formatBytes(bytes: Long): String = when {
     bytes < 1_024 -> "$bytes B"
