@@ -23,7 +23,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -52,8 +51,9 @@ class ModelDownloadService : Service() {
             manager.downloadState.collectLatest { state ->
                 val catalogId = activeCatalogId
                 if (catalogId != null && state.catalogId == catalogId) {
+                    val ongoing = activeJob?.isActive == true || state.isBusy
                     runCatching {
-                        notificationManager.notify(NOTIFICATION_ID, buildNotification(state, ongoing = state.isBusy))
+                        notificationManager.notify(NOTIFICATION_ID, buildNotification(state, ongoing = ongoing))
                     }
                 }
             }
@@ -77,7 +77,7 @@ class ModelDownloadService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Intentionally keep the service alive. Removing the app from Recents must not cancel a transfer.
+        // Removing the app from Recents must not cancel a user-started model transfer.
         super.onTaskRemoved(rootIntent)
     }
 
@@ -119,9 +119,10 @@ class ModelDownloadService : Service() {
                         break
                     } catch (offline: NetworkUnavailableException) {
                         if (!isActive) throw offline
-                        // Keep ownership of the transfer while offline. The .part file is preserved and
-                        // the next attempt resumes with HTTP Range as soon as connectivity returns.
+                        // Keep ownership while offline. The partial file is preserved and the next
+                        // attempt resumes with HTTP Range instead of requiring another user action.
                         delay(NETWORK_RETRY_DELAY_MS)
+                        manager.prepareNetworkRetry(catalogId)
                     }
                 }
             } catch (cancel: CancellationException) {
@@ -152,7 +153,7 @@ class ModelDownloadService : Service() {
         job?.cancel(CancellationException("Download pausado pelo usuário."))
         serviceScope.launch {
             job?.join()
-            manager.markDownloadPausedByUser(activeCatalogId)
+            manager.markDownloadPausedByUser(activeCatalogId ?: manager.downloadState.value.catalogId)
             withContext(Dispatchers.Main) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -166,7 +167,7 @@ class ModelDownloadService : Service() {
         val job = activeJob
         job?.cancel(CancellationException("Download encerrado pelo usuário."))
         serviceScope.launch {
-            listOfNotNull(job).joinAll()
+            job?.join()
             catalogId?.let { manager.discardDownload(it) }
             withContext(Dispatchers.Main) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -226,15 +227,15 @@ class ModelDownloadService : Service() {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
 
         if (ongoing) {
-            builder.addAction(Notification.Action.Builder(null, "Pausar", pauseIntent).build())
-            builder.addAction(Notification.Action.Builder(null, "Encerrar", endIntent).build())
+            builder.addAction(Notification.Action.Builder(R.drawable.app_launcher, "Pausar", pauseIntent).build())
+            builder.addAction(Notification.Action.Builder(R.drawable.app_launcher, "Encerrar", endIntent).build())
         }
 
         when {
             state.phase == ModelDownloadPhase.DOWNLOADING && state.progress != null -> {
                 builder.setProgress(100, (state.progress * 100f).roundToInt().coerceIn(0, 100), false)
             }
-            state.isBusy -> builder.setProgress(0, 0, true)
+            ongoing -> builder.setProgress(0, 0, true)
             else -> builder.setProgress(0, 0, false)
         }
         return builder.build()
@@ -244,7 +245,6 @@ class ModelDownloadService : Service() {
         ModelDownloadPhase.IDLE -> "Pronto"
         ModelDownloadPhase.CHECKING -> "Preparando download…"
         ModelDownloadPhase.DOWNLOADING -> "Baixando modelo…"
-        ModelDownloadPhase.WAITING_NETWORK -> "Sem internet. O download continuará automaticamente."
         ModelDownloadPhase.VERIFYING_FILE -> "Verificando arquivo…"
         ModelDownloadPhase.IMPORTING -> "Registrando modelo…"
         ModelDownloadPhase.VERIFYING_MODEL -> "Testando modelo no aparelho…"
