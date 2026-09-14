@@ -3,8 +3,6 @@ package com.example.ialocal.ui.chat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -39,12 +37,14 @@ fun ChatWithDeepThinkScreen(
             onOpenHistory = onOpenHistory,
             onOpenModels = onOpenModels,
         )
-        if (supported) {
-            AssistChip(
-                onClick = {},
-                label = { Text("DeepThink") },
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 72.dp, end = 12.dp),
-            )
+        if (supported && selectedAgent != null && selectedModel != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 72.dp, end = 12.dp),
+            ) {
+                DeepThinkOverlay(agent = selectedAgent, model = selectedModel)
+            }
         }
     }
 }
