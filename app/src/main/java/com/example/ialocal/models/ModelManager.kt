@@ -70,7 +70,7 @@ class ModelManager(
             verifyDownloadedModel(catalogModel, imported)
         } catch (offline: NetworkUnavailableException) {
             _downloadState.value = _downloadState.value.copy(
-                phase = ModelDownloadPhase.CHECKING,
+                phase = ModelDownloadPhase.DOWNLOADING,
                 downloadedBytes = offline.downloadedBytes,
                 message = "Internet indisponível. Aguardando conexão; o download continuará automaticamente do ponto salvo.",
             )
@@ -100,7 +100,7 @@ class ModelManager(
         val current = _downloadState.value
         if (
             current.catalogId == catalogId &&
-            current.phase == ModelDownloadPhase.CHECKING &&
+            current.phase == ModelDownloadPhase.DOWNLOADING &&
             current.message?.startsWith("Internet indisponível") == true
         ) {
             _downloadState.value = current.copy(phase = ModelDownloadPhase.CANCELLED)
