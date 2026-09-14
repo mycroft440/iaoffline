@@ -15,6 +15,7 @@ import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentContextBuilder
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.ModelDownloader
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
@@ -37,7 +38,8 @@ class AppContainer(context: Context) {
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
     val modelManager = ModelManager(modelRepository, modelRuntime, modelDownloader, diagnostics)
     val agentTools = AgentToolRegistry(chatRepository, diagnostics)
-    val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools)
+    val deepThinkStore = DeepThinkStore(appContext)
+    val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools, deepThinkStore)
 
     val apiSettings = ApiSettingsRepository(appContext)
     val apiServer = LocalApiServer(
