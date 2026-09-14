@@ -9,6 +9,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.UnknownHostException
 import java.net.URL
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
@@ -17,6 +18,18 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+
+internal fun downloadUrlCandidates(url: String): List<String> {
+    val parsed = runCatching { URL(url) }.getOrNull() ?: return listOf(url)
+    if (!parsed.protocol.equals("https", ignoreCase = true) ||
+        !parsed.host.equals("huggingface.co", ignoreCase = true)
+    ) {
+        return listOf(url)
+    }
+
+    val officialAlias = URL("https", "hf.co", parsed.port, parsed.file).toString()
+    return listOf(officialAlias, url).distinct()
+}
 
 enum class ModelDownloadPhase {
     IDLE,
@@ -205,13 +218,40 @@ class ModelDownloader(
         partial: File,
         onState: (ModelDownloadState) -> Unit,
     ) {
+        val candidates = downloadUrlCandidates(model.downloadUrl)
+        var candidateIndex = 0
         var failedAttempts = 0
         while (true) {
             try {
-                downloadBody(model, partial, onState)
+                downloadBody(model, candidates[candidateIndex], partial, onState)
                 return
             } catch (cancel: CancellationException) {
                 throw cancel
+            } catch (dns: UnknownHostException) {
+                failedAttempts += 1
+                if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) {
+                    throw IOException(
+                        "Não foi possível resolver os servidores de download da Hugging Face. Verifique sua conexão, DNS privado, VPN ou bloqueios de rede e tente novamente.",
+                        dns,
+                    )
+                }
+
+                candidateIndex = (candidateIndex + 1) % candidates.size
+                val nextAttempt = failedAttempts + 1
+                logger?.info(
+                    "MODEL_DOWNLOAD",
+                    "Falha de DNS em ${model.displayName}: ${dns.message}. Tentando rota alternativa $nextAttempt/$MAX_DOWNLOAD_ATTEMPTS.",
+                )
+                onState(
+                    ModelDownloadState(
+                        catalogId = model.id,
+                        phase = ModelDownloadPhase.DOWNLOADING,
+                        downloadedBytes = partial.length(),
+                        totalBytes = model.approximateSizeBytes,
+                        message = "Servidor de download indisponível. Tentando rota alternativa ($nextAttempt/$MAX_DOWNLOAD_ATTEMPTS)…",
+                    )
+                )
+                delay(RETRY_BASE_DELAY_MS * failedAttempts)
             } catch (io: IOException) {
                 failedAttempts += 1
                 if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) throw io
@@ -237,11 +277,12 @@ class ModelDownloader(
 
     private suspend fun downloadBody(
         model: CatalogModel,
+        downloadUrl: String,
         partial: File,
         onState: (ModelDownloadState) -> Unit,
     ) {
         var offset = partial.length()
-        var connection = openFollowingRedirects(model.downloadUrl, offset)
+        var connection = openFollowingRedirects(downloadUrl, offset)
         var code = connection.responseCode
 
         // Some CDNs ignore Range, and a stale partial can also produce 416. Restart safely in both cases.
@@ -249,7 +290,7 @@ class ModelDownloader(
             connection.disconnect()
             partial.delete()
             offset = 0L
-            connection = openFollowingRedirects(model.downloadUrl, 0L)
+            connection = openFollowingRedirects(downloadUrl, 0L)
             code = connection.responseCode
         }
 
@@ -270,7 +311,7 @@ class ModelDownloader(
         if (totalBytes != null && offset > totalBytes) {
             connection.disconnect()
             partial.delete()
-            return downloadBody(model, partial, onState)
+            return downloadBody(model, downloadUrl, partial, onState)
         }
 
         onState(
