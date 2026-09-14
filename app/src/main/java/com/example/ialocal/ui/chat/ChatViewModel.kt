@@ -16,6 +16,7 @@ import com.example.ialocal.data.ConversationListItem
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
+import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
@@ -50,6 +51,7 @@ class ChatViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val models: StateFlow<List<AiModelEntity>> = modelRepository.models
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val agentUsageCounts: StateFlow<Map<String, Int>> = modelRepository.agentUsageCounts
 
     private val _draft = MutableStateFlow(""); val draft: StateFlow<String> = _draft.asStateFlow()
     private val _pendingAttachments = MutableStateFlow<List<PendingAttachment>>(emptyList()); val pendingAttachments = _pendingAttachments.asStateFlow()
@@ -59,21 +61,78 @@ class ChatViewModel(
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     private var generationJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            runCatching {
+                val model = modelRepository.getActiveModel()
+                    ?: modelRepository.getModels().firstOrNull {
+                        it.verificationStatus == ModelVerificationStatus.VERIFIED.name
+                    }
+                model?.let { modelRepository.ensureStarterProfiles(it.id) }
+            }.onFailure {
+                _error.value = it.message ?: "Não foi possível preparar os perfis de I.A."
+            }
+        }
+    }
+
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
 
     fun selectAgent(agentId: String?) {
         _selectedAgentId.value = agentId
+        agentId?.let(modelRepository::recordAgentUse)
         viewModelScope.launch { repository.setConversationAgent(conversationId, agentId) }
     }
 
-    fun selectModel(modelId: String) {
-        val agent = agents.value.firstOrNull { it.modelId == modelId }
-        if (agent == null) {
-            _error.value = "Este modelo não possui um agente configurado."
-            return
+    fun setDefaultAgent(agentId: String) {
+        viewModelScope.launch {
+            runCatching { modelRepository.setDefaultAgent(agentId) }
+                .onFailure { _error.value = it.message ?: "Não foi possível definir o perfil padrão." }
         }
-        selectAgent(agent.id)
+    }
+
+    fun selectModel(modelId: String) {
+        viewModelScope.launch {
+            runCatching {
+                modelRepository.ensureStarterProfiles(modelId)
+                val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
+                val agent = modelAgents.firstOrNull { it.isDefault }
+                    ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
+                    ?: modelAgents.firstOrNull()
+                    ?: error("Este modelo não possui um agente configurado.")
+                _selectedAgentId.value = agent.id
+                modelRepository.recordAgentUse(agent.id)
+                repository.setConversationAgent(conversationId, agent.id)
+            }.onFailure {
+                _error.value = it.message ?: "Não foi possível selecionar o modelo."
+            }
+        }
+    }
+
+    fun createAgentProfile(
+        modelId: String,
+        name: String,
+        systemPrompt: String,
+        temperature: Float = 0.3f,
+        onCreated: (AgentEntity) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                modelRepository.createAgentProfile(
+                    modelId = modelId,
+                    name = name,
+                    systemPrompt = systemPrompt,
+                    temperature = temperature,
+                )
+            }.onSuccess { agent ->
+                _selectedAgentId.value = agent.id
+                modelRepository.recordAgentUse(agent.id)
+                repository.setConversationAgent(conversationId, agent.id)
+                onCreated(agent)
+            }.onFailure {
+                _error.value = it.message ?: "Não foi possível criar o perfil de I.A."
+            }
+        }
     }
 
     fun updateAgent(agent: AgentEntity) {
