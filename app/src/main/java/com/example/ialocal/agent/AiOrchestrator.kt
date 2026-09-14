@@ -71,23 +71,12 @@ class AiOrchestrator(
         } else {
             DeepThinkLevel.AUTO
         }
-        val deepThinkInstruction = DeepThinkSupport.instruction(model, deepThinkLevel)
         val effectiveMaxTokens = DeepThinkSupport.effectiveMaxTokens(
             maxTokensOverride ?: agent.maxTokens,
             deepThinkLevel,
         )
 
         val working = messages.toMutableList()
-        if (deepThinkInstruction.isNotBlank()) {
-            val lastUserIndex = working.indexOfLast { it.role.equals("user", ignoreCase = true) }
-            if (lastUserIndex >= 0) {
-                val original = working[lastUserIndex]
-                working[lastUserIndex] = original.copy(
-                    content = original.content + "\n\n" + deepThinkInstruction,
-                )
-            }
-        }
-
         val toolsUsed = mutableListOf<String>()
         val systemPrompt = agent.systemPrompt + tools.promptInstructions()
         repeat(MAX_TOOL_ROUNDS) {
