@@ -42,10 +42,25 @@ class ModelDownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val app = application as LocalAiApplication
-        manager = app.container.modelManager
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
+
+        // Enter foreground state before constructing the rest of the application graph. Android gives
+        // a newly-started foreground service only a short window to publish its notification.
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification(
+                ModelDownloadState(
+                    phase = ModelDownloadPhase.CHECKING,
+                    message = "Preparando download em segundo plano…",
+                ),
+                ongoing = true,
+            ),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
+
+        val app = application as LocalAiApplication
+        manager = app.container.modelManager
 
         notificationJob = serviceScope.launch {
             manager.downloadState.collectLatest { state ->
@@ -81,6 +96,18 @@ class ModelDownloadService : Service() {
         super.onTaskRemoved(rootIntent)
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // Android 15+ can enforce a platform time budget for data-sync foreground services. That
+        // limit cannot be bypassed by the app, so preserve the partial file and expose a resumable
+        // paused state instead of losing a multi-GB transfer.
+        userStopInProgress.set(true)
+        val catalogId = activeCatalogId ?: manager.downloadState.value.catalogId
+        activeJob?.cancel(CancellationException("Download pausado pelo limite do Android."))
+        manager.markDownloadPausedBySystem(catalogId)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
+    }
+
     override fun onDestroy() {
         notificationJob?.cancel()
         serviceScope.cancel()
@@ -91,6 +118,7 @@ class ModelDownloadService : Service() {
         if (activeJob?.isActive == true) return
 
         val catalog = runCatching { ModelCatalog.requireById(catalogId) }.getOrElse {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
@@ -128,9 +156,9 @@ class ModelDownloadService : Service() {
             } catch (cancel: CancellationException) {
                 throw cancel
             } finally {
-                val stoppedByUser = userStopInProgress.get()
+                val stoppedByUserOrSystem = userStopInProgress.get()
                 activeJob = null
-                if (!stoppedByUser) {
+                if (!stoppedByUserOrSystem) {
                     withContext(Dispatchers.Main) {
                         val finalState = manager.downloadState.value
                         runCatching {
