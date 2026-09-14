@@ -215,11 +215,20 @@ private fun HomeContent(
         item { AppBrandHeader() }
 
         item {
+            Button(
+                onClick = onOpenChats,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Iniciar chat com IA")
+            }
+        }
+
+        item {
             Text(
                 text = "Minhas I.As >>",
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = installedModels.isNotEmpty(), onClick = onOpenChats)
+                    .clickable(onClick = onOpenChats)
                     .padding(top = 4.dp, bottom = 4.dp),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
