@@ -49,7 +49,10 @@ data class ModelDownloadState(
         }
 }
 
-/** Downloads catalog GGUFs into app-private storage and verifies their pinned SHA-256. */
+/**
+ * Downloads catalog GGUFs to resumable app-private storage, verifies their pinned SHA-256, then
+ * publishes a verified copy in Downloads/modelos de I.A offline before the private copy is imported.
+ */
 class ModelDownloader(
     context: Context,
     private val compatibilityChecker: DeviceCompatibilityChecker = DeviceCompatibilityChecker(context),
@@ -57,11 +60,13 @@ class ModelDownloader(
 ) {
     private val appContext = context.applicationContext
     private val downloadDir = File(appContext.filesDir, "model-downloads")
+    private val publicDownloads = PublicModelDownloads(appContext)
 
     suspend fun download(
         model: CatalogModel,
         onState: (ModelDownloadState) -> Unit,
     ): File = withContext(Dispatchers.IO) {
+        publicDownloads.ensureFolder()
         downloadDir.mkdirs()
         require(downloadDir.isDirectory) { "Não foi possível preparar a pasta privada de downloads." }
 
@@ -79,6 +84,7 @@ class ModelDownloader(
         if (complete.isFile) {
             onState(initial.copy(phase = ModelDownloadPhase.VERIFYING_FILE, message = "Verificando download existente…"))
             if (sha256(complete).equals(model.sha256, ignoreCase = true)) {
+                publishVerifiedDownload(model, complete, onState)
                 return@withContext complete
             }
             complete.delete()
@@ -110,14 +116,18 @@ class ModelDownloader(
             )
             if (sha256(partial).equals(model.sha256, ignoreCase = true)) {
                 finalizeVerifiedDownload(partial, complete)
+                publishVerifiedDownload(model, complete, onState)
                 logger?.info("MODEL_DOWNLOAD", "Download interrompido já estava completo: ${model.displayName}")
                 return@withContext complete
             }
         }
 
         val estimatedRemaining = (model.approximateSizeBytes - partial.length()).coerceAtLeast(0L)
-        require(compatibility.availableStorageBytes > estimatedRemaining + STORAGE_HEADROOM) {
-            "Espaço insuficiente. Libere armazenamento antes de baixar ${model.displayName}."
+        // During publication the device temporarily needs both the verified private file and the
+        // public Downloads copy. Reserve enough room up-front instead of failing after a huge transfer.
+        val requiredFreeBytes = estimatedRemaining + model.approximateSizeBytes + STORAGE_HEADROOM
+        require(compatibility.availableStorageBytes > requiredFreeBytes) {
+            "Espaço insuficiente. O app precisa de espaço para baixar e também publicar uma cópia em Downloads/${PublicModelDownloads.FOLDER_NAME}."
         }
 
         logger?.info("MODEL_DOWNLOAD", "Iniciando ${model.displayName}; parcial=${partial.length()} bytes")
@@ -141,8 +151,30 @@ class ModelDownloader(
         }
 
         finalizeVerifiedDownload(partial, complete)
+        publishVerifiedDownload(model, complete, onState)
         logger?.info("MODEL_DOWNLOAD", "Download verificado: ${model.displayName} (${complete.length()} bytes)")
         complete
+    }
+
+    private suspend fun publishVerifiedDownload(
+        model: CatalogModel,
+        complete: File,
+        onState: (ModelDownloadState) -> Unit,
+    ) {
+        onState(
+            ModelDownloadState(
+                catalogId = model.id,
+                phase = ModelDownloadPhase.VERIFYING_FILE,
+                downloadedBytes = complete.length(),
+                totalBytes = complete.length(),
+                message = "Salvando cópia verificada em Downloads/${PublicModelDownloads.FOLDER_NAME}…",
+            )
+        )
+        publicDownloads.publishVerifiedModel(model, complete)
+        logger?.info(
+            "MODEL_DOWNLOAD",
+            "Cópia pública salva em Downloads/${PublicModelDownloads.FOLDER_NAME}/${model.fileName}",
+        )
     }
 
     private suspend fun downloadBody(
