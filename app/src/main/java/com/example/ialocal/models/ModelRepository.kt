@@ -13,6 +13,9 @@ import java.io.FileOutputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 class ModelRepository(
@@ -24,6 +27,10 @@ class ModelRepository(
 ) {
     val models: Flow<List<AiModelEntity>> = dao.observeModels()
     val agents: Flow<List<AgentEntity>> = dao.observeAgents()
+
+    private val agentUsagePreferences = context.getSharedPreferences(AGENT_USAGE_PREFS, Context.MODE_PRIVATE)
+    private val _agentUsageCounts = MutableStateFlow(loadAgentUsageCounts())
+    val agentUsageCounts: StateFlow<Map<String, Int>> = _agentUsageCounts.asStateFlow()
 
     suspend fun inspectForImport(uri: Uri): ModelImportPreview = withContext(Dispatchers.IO) {
         logger?.info("IMPORT", "Validando arquivo selecionado antes da cópia")
@@ -160,6 +167,7 @@ class ModelRepository(
             updatedAt = now,
         )
         dao.insertAgent(agent)
+        ensureStarterProfiles(id)
         logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
         return model
     }
@@ -204,6 +212,81 @@ class ModelRepository(
         dao.updateAgent(agent.copy(updatedAt = System.currentTimeMillis()))
     }
 
+    suspend fun createAgentProfile(
+        modelId: String,
+        name: String,
+        systemPrompt: String,
+        temperature: Float = 0.3f,
+        maxTokens: Int = 1024,
+    ): AgentEntity {
+        requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
+        val cleanName = name.trim().ifBlank { "Novo agente" }.take(80)
+        val cleanPrompt = systemPrompt.trim().ifBlank { DEFAULT_SYSTEM_PROMPT }
+        val existing = dao.getAgents().firstOrNull {
+            it.modelId == modelId && it.name.equals(cleanName, ignoreCase = true)
+        }
+        if (existing != null) return existing
+
+        val now = System.currentTimeMillis()
+        val agent = AgentEntity(
+            id = UUID.randomUUID().toString(),
+            name = cleanName,
+            modelId = modelId,
+            systemPrompt = cleanPrompt,
+            // The pinned llama.cpp Android binding currently exposes a fixed sampler temperature.
+            temperature = 0.3f,
+            maxTokens = maxTokens.coerceIn(16, 4096),
+            isDefault = false,
+            createdAt = now,
+            updatedAt = now,
+        )
+        dao.insertAgent(agent)
+        return agent
+    }
+
+    suspend fun ensureStarterProfiles(modelId: String) {
+        requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
+        var modelAgents = dao.getAgents().filter { it.modelId == modelId }
+
+        val generatedAgent = modelAgents.firstOrNull {
+            it.name.endsWith(" · Agente") && it.systemPrompt == DEFAULT_SYSTEM_PROMPT
+        }
+        val hasEngineer = modelAgents.any { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
+        if (generatedAgent != null && !hasEngineer) {
+            dao.updateAgent(
+                generatedAgent.copy(
+                    name = SOFTWARE_ENGINEER_NAME,
+                    systemPrompt = SOFTWARE_ENGINEER_PROMPT,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
+        }
+
+        modelAgents = dao.getAgents().filter { it.modelId == modelId }
+        STARTER_PROFILES.forEach { starter ->
+            if (modelAgents.none { it.name.equals(starter.name, ignoreCase = true) }) {
+                createAgentProfile(
+                    modelId = modelId,
+                    name = starter.name,
+                    systemPrompt = starter.prompt,
+                )
+                modelAgents = dao.getAgents().filter { it.modelId == modelId }
+            }
+        }
+
+        if (dao.getDefaultAgent() == null) {
+            val first = modelAgents.firstOrNull { it.name == SOFTWARE_ENGINEER_NAME }
+                ?: modelAgents.firstOrNull()
+            first?.let { setDefaultAgent(it.id) }
+        }
+    }
+
+    fun recordAgentUse(id: String) {
+        val next = (_agentUsageCounts.value[id] ?: 0) + 1
+        agentUsagePreferences.edit().putInt("count_$id", next).apply()
+        _agentUsageCounts.value = _agentUsageCounts.value.toMutableMap().apply { put(id, next) }
+    }
+
     suspend fun deleteModel(id: String) = withContext(Dispatchers.IO) {
         val model = dao.getModel(id) ?: return@withContext
         File(model.filePath).parentFile?.deleteRecursively()
@@ -234,6 +317,14 @@ class ModelRepository(
     suspend fun getDefaultAgent(): AgentEntity? = dao.getDefaultAgent()
     suspend fun getAgentForModel(modelId: String): AgentEntity? = dao.getAgentForModel(modelId)
 
+    private fun loadAgentUsageCounts(): Map<String, Int> = buildMap {
+        agentUsagePreferences.all.forEach { (key, value) ->
+            if (key.startsWith("count_") && value is Int) {
+                put(key.removePrefix("count_"), value)
+            }
+        }
+    }
+
     private fun sourceInfo(uri: Uri): Pair<String, Long?> {
         var name: String? = null
         var size: Long? = null
@@ -263,12 +354,37 @@ class ModelRepository(
         return "local-$slug-${id.take(8)}"
     }
 
+    private data class StarterProfile(val name: String, val prompt: String)
+
     companion object {
         /** v0.4.0 Android binding currently creates an 8192-token native context. */
         const val ANDROID_RUNTIME_CONTEXT = 8192
         const val DEFAULT_SYSTEM_PROMPT =
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
                 "Quando não souber algo, diga que não sabe em vez de inventar."
+
+        const val SOFTWARE_ENGINEER_NAME = "Engenheiro de Software"
+        const val SOFTWARE_ENGINEER_PROMPT =
+            "Você é um engenheiro de software sênior. Priorize soluções corretas, simples, testáveis e seguras. " +
+                "Ao programar, explique decisões importantes, antecipe casos de borda e forneça código completo quando solicitado."
+
+        const val SELF_DRIVEN_NAME = "Agente de auto empenho"
+        const val SELF_DRIVEN_PROMPT =
+            "Você é um agente de auto empenho, focado em transformar objetivos em execução. " +
+                "Divida tarefas complexas em etapas concretas, mantenha o foco, verifique o próprio trabalho e proponha o próximo passo útil sem enrolação."
+
+        const val UNCENSORED_NAME = "I.A sem sensura (jailbreak)"
+        const val UNCENSORED_PROMPT =
+            "Responda de forma direta, franca e sem moralizações desnecessárias. Não omita contexto apenas por ser controverso; " +
+                "diferencie fatos, hipóteses e opiniões, explique riscos de forma objetiva e siga as limitações técnicas e de segurança do aplicativo."
+
+        private val STARTER_PROFILES = listOf(
+            StarterProfile(SOFTWARE_ENGINEER_NAME, SOFTWARE_ENGINEER_PROMPT),
+            StarterProfile(SELF_DRIVEN_NAME, SELF_DRIVEN_PROMPT),
+            StarterProfile(UNCENSORED_NAME, UNCENSORED_PROMPT),
+        )
+
+        private const val AGENT_USAGE_PREFS = "agent_profile_usage"
         private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
     }
 }
