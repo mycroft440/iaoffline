@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -23,6 +24,7 @@ import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
 import com.example.ialocal.ui.theme.LocalAiTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,8 +64,15 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
+            val scope = rememberCoroutineScope()
             AiHomeScreen(
                 viewModel = vm,
+                onStartChat = {
+                    scope.launch {
+                        val conversationId = container.chatRepository.createConversation()
+                        navController.navigate("chat/$conversationId")
+                    }
+                },
                 onOpenChats = { navController.navigate("home") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
