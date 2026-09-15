@@ -23,6 +23,7 @@ class LocalCodeDiagnosticsTest {
 
         assertTrue(issues.any { it.title.contains("tag", ignoreCase = true) })
         assertTrue(issues.any { it.severity == CodeIssueSeverity.ERROR })
+        assertTrue(profile.deterministicSyntaxParser)
     }
 
     @Test
@@ -37,6 +38,7 @@ class LocalCodeDiagnosticsTest {
 
         val issues = LocalCodeDiagnostics.analyze(sql, profile)
 
+        assertTrue(profile.deterministicSyntaxParser)
         assertFalse(issues.any { it.category == CodeIssueCategory.SYNTAX && it.severity == CodeIssueSeverity.ERROR })
     }
 
@@ -87,5 +89,13 @@ class LocalCodeDiagnosticsTest {
         assertEquals("powershell", CodeLanguageRegistry.find("pwsh").id)
         assertEquals("bash", CodeLanguageRegistry.find("shell").id)
         assertFalse(CodeLanguageRegistry.supportedDisplayNames.isEmpty())
+    }
+
+    @Test
+    fun doesNotClaimDedicatedParserForLanguagesThatStillUseStructuralChecksAndAi() {
+        assertFalse(CodeLanguageRegistry.find("Python").deterministicSyntaxParser)
+        assertFalse(CodeLanguageRegistry.find("PowerShell").deterministicSyntaxParser)
+        assertFalse(CodeLanguageRegistry.find("Bash").deterministicSyntaxParser)
+        assertTrue(CodeLanguageRegistry.find("SQL").deterministicSyntaxParser)
     }
 }
