@@ -125,6 +125,7 @@ private fun LocalAiApp(
                     }
                 },
                 onOpenModels = { navController.navigate("models") },
+                onOpenSettings = { navController.navigate("settings") },
             )
         }
 
