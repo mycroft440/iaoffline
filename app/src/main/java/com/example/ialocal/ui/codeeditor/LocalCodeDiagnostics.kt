@@ -8,6 +8,7 @@ object LocalCodeDiagnostics {
         val issues = mutableListOf<CodeIssue>()
         issues += delimiterDiagnostics(code, language)
         if (language.id == "html") issues += htmlDiagnostics(code)
+        if (language.id == "sql") issues += SqlSyntaxDiagnostics.analyze(code)
         return issues.distinctBy { Triple(it.startLine, it.original, it.title) }
     }
 
