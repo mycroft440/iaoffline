@@ -59,6 +59,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
+    // Real SQL parser used by the offline code editor. JMH is benchmarking-only and is not
+    // required at runtime, so keep it out of the Android package.
+    implementation("com.github.jsqlparser:jsqlparser:5.3") {
+        exclude(group = "org.openjdk.jmh", module = "jmh-core")
+    }
+
     // Generated from the official ggml-org/llama.cpp Android binding.
     // Run scripts/prepare_llama_android.sh before building the app.
     implementation(files("libs/llama-android.aar"))
