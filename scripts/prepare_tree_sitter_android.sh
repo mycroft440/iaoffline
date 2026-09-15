@@ -38,6 +38,18 @@ else
   git -C "${TSLP_DIR}" clean -fdx
 fi
 
+# Install Android standard libraries for the exact Rust toolchain selected by the
+# upstream checkout. tree-sitter-language-pack pins its own toolchain in
+# rust-toolchain.toml; installing targets from the app repository would affect the
+# caller's default toolchain instead and cargo-ndk would later fail with E0463.
+pushd "${TSLP_DIR}" >/dev/null
+UPSTREAM_TOOLCHAIN="$(rustup show active-toolchain | awk '{print $1}')"
+echo "Tree-sitter Rust toolchain: ${UPSTREAM_TOOLCHAIN}"
+rustup target add aarch64-linux-android x86_64-linux-android --toolchain "${UPSTREAM_TOOLCHAIN}"
+rustc --version
+rustup target list --installed --toolchain "${UPSTREAM_TOOLCHAIN}"
+popd >/dev/null
+
 # Use the release's already-generated parser sources. This avoids executing hundreds of
 # third-party grammar.js files during the app build and keeps the build pinned to the exact
 # sources shipped by the selected tree-sitter-language-pack release.
