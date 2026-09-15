@@ -123,7 +123,6 @@ class ModelRepository(
         preferredName: String?,
         apiIdPrefix: String?,
     ): AiModelEntity {
-        // Re-read the private copy. This catches truncation/provider issues before native loading.
         val metadata = inspector.inspect(destination)
         require(metadata.tensorCount > 0) { "O arquivo copiado não contém tensors válidos." }
         val compatibility = compatibilityChecker.check(destination.length())
@@ -233,7 +232,6 @@ class ModelRepository(
             name = cleanName,
             modelId = modelId,
             systemPrompt = cleanPrompt,
-            // The pinned llama.cpp Android binding currently exposes a fixed sampler temperature.
             temperature = 0.3f,
             maxTokens = maxTokens.coerceIn(16, 4096),
             isDefault = false,
@@ -287,10 +285,42 @@ class ModelRepository(
         _agentUsageCounts.value = _agentUsageCounts.value.toMutableMap().apply { put(id, next) }
     }
 
+    suspend fun deleteAgent(id: String) = withContext(Dispatchers.IO) {
+        val agent = dao.getAgent(id) ?: return@withContext
+        dao.deleteAgent(id)
+        agentUsagePreferences.edit().remove("count_$id").apply()
+        _agentUsageCounts.value = _agentUsageCounts.value - id
+
+        if (agent.isDefault) {
+            val remaining = dao.getAgents()
+            dao.clearDefaultAgent()
+            val replacement = remaining.firstOrNull { it.modelId == agent.modelId }
+                ?: remaining.firstOrNull()
+            replacement?.let { dao.markAgentDefault(it.id, System.currentTimeMillis()) }
+        }
+    }
+
     suspend fun deleteModel(id: String) = withContext(Dispatchers.IO) {
         val model = dao.getModel(id) ?: return@withContext
-        File(model.filePath).parentFile?.deleteRecursively()
+        val agentIds = dao.getAgents().filter { it.modelId == id }.map { it.id }
+        val modelFile = File(model.filePath)
+        val modelDir = modelFile.parentFile
+        val deleted = when {
+            modelDir != null && modelDir.exists() -> modelDir.deleteRecursively()
+            modelFile.exists() -> modelFile.delete()
+            else -> true
+        }
+        check(deleted && !modelFile.exists()) {
+            "Não foi possível excluir o arquivo da I.A do armazenamento interno do Android."
+        }
+
         dao.deleteModel(id)
+        if (agentIds.isNotEmpty()) {
+            val editor = agentUsagePreferences.edit()
+            agentIds.forEach { editor.remove("count_$it") }
+            editor.apply()
+            _agentUsageCounts.value = _agentUsageCounts.value - agentIds.toSet()
+        }
 
         val remaining = dao.getModels()
         val verified = remaining.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
@@ -305,7 +335,7 @@ class ModelRepository(
             dao.clearDefaultAgent()
             dao.markAgentDefault(eligibleAgents.first().id, System.currentTimeMillis())
         }
-        logger?.info("IMPORT", "Modelo removido: ${model.apiModelId}")
+        logger?.info("IMPORT", "Modelo removido e arquivo interno excluído: ${model.apiModelId}")
     }
 
     suspend fun getModels(): List<AiModelEntity> = dao.getModels()
@@ -357,7 +387,6 @@ class ModelRepository(
     private data class StarterProfile(val name: String, val prompt: String)
 
     companion object {
-        /** v0.4.0 Android binding currently creates an 8192-token native context. */
         const val ANDROID_RUNTIME_CONTEXT = 8192
         const val DEFAULT_SYSTEM_PROMPT =
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
