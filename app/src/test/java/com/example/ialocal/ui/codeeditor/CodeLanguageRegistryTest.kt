@@ -28,7 +28,7 @@ class CodeLanguageRegistryTest {
 
     @Test
     fun sqlUsesDedicatedParserInsteadOfAiOrTreeSitter() {
-        val sql = CodeLanguageRegistry.find("SQL")
+        val sql = CodeLanguageRegistry.find("SQL") { "sql" }
 
         assertEquals(SyntaxBackend.SQL_JSQLPARSER, sql.syntaxBackend)
         assertTrue(sql.treeSitterCandidates.isEmpty())
@@ -48,7 +48,7 @@ class CodeLanguageRegistryTest {
         )
 
         expectedGrammarByLanguage.forEach { (name, expectedGrammar) ->
-            val profile = CodeLanguageRegistry.find(name)
+            val profile = CodeLanguageRegistry.find(name) { error("perfil curado não deveria consultar resolver dinâmico") }
             assertEquals("$name deveria usar Tree-sitter", SyntaxBackend.TREE_SITTER, profile.syntaxBackend)
             assertFalse("$name precisa de candidato de gramática", profile.treeSitterCandidates.isEmpty())
             assertTrue(
@@ -72,20 +72,69 @@ class CodeLanguageRegistryTest {
         )
 
         expectedProfileByAlias.forEach { (alias, expectedDisplayName) ->
-            assertEquals(expectedDisplayName, CodeLanguageRegistry.find(alias).displayName)
+            assertEquals(
+                expectedDisplayName,
+                CodeLanguageRegistry.find(alias) { error("alias curado não deveria consultar resolver dinâmico") }.displayName,
+            )
         }
     }
 
     @Test
+    fun grammarOutsideCuratedProfilesBecomesFormalTreeSitterProfile() {
+        val zig = CodeLanguageRegistry.find("zig") { candidate ->
+            candidate.removePrefix(".").takeIf { it == "zig" }
+        }
+
+        assertEquals(SyntaxBackend.TREE_SITTER, zig.syntaxBackend)
+        assertEquals("zig", zig.id)
+        assertEquals("Zig", zig.displayName)
+        assertEquals(listOf("zig"), zig.treeSitterCandidates)
+    }
+
+    @Test
+    fun extensionOutsideCuratedProfilesCanResolveDynamically() {
+        val profile = CodeLanguageRegistry.find(".nix") { candidate ->
+            candidate.removePrefix(".").takeIf { it == "nix" }
+        }
+
+        assertEquals(SyntaxBackend.TREE_SITTER, profile.syntaxBackend)
+        assertEquals("nix", profile.id)
+        assertEquals(listOf("nix"), profile.treeSitterCandidates)
+    }
+
+    @Test
+    fun filePathOutsideCuratedProfilesCanResolveDynamically() {
+        val profile = CodeLanguageRegistry.find("infra/main.tf") { candidate ->
+            when {
+                candidate.endsWith(".tf") -> "hcl"
+                candidate == "infra/main.tf" -> "hcl"
+                else -> null
+            }
+        }
+
+        assertEquals(SyntaxBackend.TREE_SITTER, profile.syntaxBackend)
+        assertEquals("hcl", profile.id)
+    }
+
+    @Test
+    fun curatedSqlAlwaysWinsOverDynamicTreeSitterCatalog() {
+        val sql = CodeLanguageRegistry.find("sql") { "sql" }
+
+        assertEquals("SQL", sql.displayName)
+        assertEquals(SyntaxBackend.SQL_JSQLPARSER, sql.syntaxBackend)
+        assertTrue(sql.treeSitterCandidates.isEmpty())
+    }
+
+    @Test
     fun unknownLanguageIsNeverReportedAsFormallySupported() {
-        val unknown = CodeLanguageRegistry.find("linguagem-que-nao-existe")
+        val unknown = CodeLanguageRegistry.find("linguagem-que-nao-existe") { null }
 
         assertEquals(SyntaxBackend.NONE, unknown.syntaxBackend)
     }
 
     @Test
     fun blankUnknownLanguageIsStillParserUnavailable() = runBlocking {
-        val unknown = CodeLanguageRegistry.find("linguagem-que-nao-existe")
+        val unknown = CodeLanguageRegistry.find("linguagem-que-nao-existe") { null }
         val result = FormalSyntaxDiagnostics.analyze("", unknown)
 
         assertEquals(SyntaxValidationState.PARSER_UNAVAILABLE, result.state)
