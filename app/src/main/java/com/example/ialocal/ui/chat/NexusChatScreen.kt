@@ -41,7 +41,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -141,6 +140,7 @@ fun NexusChatScreen(
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val models by viewModel.models.collectAsStateWithLifecycle()
     val agentUsageCounts by viewModel.agentUsageCounts.collectAsStateWithLifecycle()
+    val selectedAgentId by viewModel.selectedAgentId.collectAsStateWithLifecycle()
 
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -159,7 +159,8 @@ fun NexusChatScreen(
     val readyModels = remember(models) {
         models.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
     }
-    val selectedAgent = agents.firstOrNull { it.id == conversation?.agentId }
+    val selectedAgent = agents.firstOrNull { it.id == selectedAgentId }
+        ?: agents.firstOrNull { it.id == conversation?.agentId }
         ?: agents.firstOrNull { it.isDefault }
     val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
         ?: readyModels.firstOrNull { it.isActive }
@@ -543,7 +544,6 @@ private fun NexusSidebar(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             NexusSidebarAction(Icons.Default.Memory, "Modelos & API", onOpenModels)
-            NexusSidebarAction(Icons.Default.History, "Histórico completo", onOpenHistory)
             NexusSidebarAction(Icons.Default.Settings, "Configurações", onOpenSettings)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),

@@ -63,6 +63,9 @@ interface ModelDao {
     @Query("UPDATE agents SET isDefault = 1, updatedAt = :updatedAt WHERE id = :id")
     suspend fun markAgentDefault(id: String, updatedAt: Long)
 
+    @Query("DELETE FROM agents WHERE id = :id")
+    suspend fun deleteAgent(id: String)
+
     @Query("DELETE FROM ai_models WHERE id = :id")
     suspend fun deleteModel(id: String)
 }
