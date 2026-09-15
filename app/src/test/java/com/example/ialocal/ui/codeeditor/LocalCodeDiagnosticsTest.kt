@@ -25,6 +25,46 @@ class LocalCodeDiagnosticsTest {
     }
 
     @Test
+    fun validSqlPassesRealParserWithoutSyntaxError() {
+        val profile = CodeLanguageRegistry.find("SQL")
+        val sql = """
+            SELECT u.id, u.name
+            FROM users u
+            WHERE u.active = 1
+            ORDER BY u.name;
+        """.trimIndent()
+
+        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+
+        assertFalse(issues.any { it.category == CodeIssueCategory.SYNTAX && it.severity == CodeIssueSeverity.ERROR })
+    }
+
+    @Test
+    fun invalidSqlIsRejectedByRealParser() {
+        val profile = CodeLanguageRegistry.find("SQL")
+        val sql = "SELECT id, name FORM users WHERE active = 1;"
+
+        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+
+        assertTrue(issues.any { issue ->
+            issue.title == "Erro de sintaxe SQL" &&
+                issue.category == CodeIssueCategory.SYNTAX &&
+                issue.severity == CodeIssueSeverity.ERROR &&
+                issue.source == CodeIssueSource.LOCAL
+        })
+    }
+
+    @Test
+    fun incompleteSqlIsRejectedByRealParser() {
+        val profile = CodeLanguageRegistry.find("SQL")
+        val sql = "SELECT * FROM users WHERE (active = 1 AND"
+
+        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+
+        assertTrue(issues.any { it.title == "Erro de sintaxe SQL" || it.title.contains("não fechado") })
+    }
+
+    @Test
     fun recognizesRequestedScriptLanguages() {
         assertEquals("python", CodeLanguageRegistry.find("py").id)
         assertEquals("html", CodeLanguageRegistry.find("HTML5").id)
