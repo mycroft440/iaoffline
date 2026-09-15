@@ -1,4 +1,4 @@
-name: Android APK + AAB
+name: Android CI + Signed Release
 
 on:
   workflow_dispatch:
@@ -6,6 +6,9 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
+permissions:
+  contents: write
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +18,9 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
+    env:
+      IA_VERSION_CODE: ${{ github.run_number }}
+      IA_VERSION_NAME: 0.1.${{ github.run_number }}
 
     steps:
       - name: Checkout
@@ -66,28 +72,110 @@ jobs:
       - name: Prepare Gradle wrapper
         run: chmod +x ./gradlew
 
-      - name: Unit tests + lint + debug APK + debug AAB
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
+      - name: Unit tests + lint + debug build
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify Android artifacts
+      - name: Verify debug APK
         run: |
           test -f app/build/outputs/apk/debug/app-debug.apk
-          test -f app/build/outputs/bundle/debug/app-debug.aab
           ls -lh app/build/outputs/apk/debug/app-debug.apk
-          ls -lh app/build/outputs/bundle/debug/app-debug.aab
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v6
-        with:
-          name: IA-Local-debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+      - name: Check persistent release signing
+        id: signing
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Upload AAB
-        uses: actions/upload-artifact@v6
-        with:
-          name: IA-Local-debug-AAB
-          path: app/build/outputs/bundle/debug/app-debug.aab
-          if-no-files-found: error
-          retention-days: 14
+          missing=()
+          [[ -z "${ANDROID_KEYSTORE_BASE64}" ]] && missing+=(ANDROID_KEYSTORE_BASE64)
+          [[ -z "${ANDROID_KEY_ALIAS}" ]] && missing+=(ANDROID_KEY_ALIAS)
+          [[ -z "${ANDROID_KEYSTORE_PASSWORD}" ]] && missing+=(ANDROID_KEYSTORE_PASSWORD)
+          [[ -z "${ANDROID_KEY_PASSWORD}" ]] && missing+=(ANDROID_KEY_PASSWORD)
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Signed release skipped. Configure repository secrets: ${missing[*]}"
+            {
+              echo "### Signed release skipped"
+              echo
+              echo "Configure the four Android signing secrets documented in README.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/app/release.keystore"
+          test -s "$GITHUB_WORKSPACE/app/release.keystore"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed release APK + AAB
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/app/release.keystore
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
+
+      - name: Verify signed release
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          AAB="app/build/outputs/bundle/release/app-release.aab"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+
+          test -f "$APK"
+          test -f "$AAB"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/IA-Local.apk
+          cp "$AAB" dist/IA-Local.aab
+          sha256sum dist/IA-Local.apk > dist/IA-Local.apk.sha256
+          ls -lh dist/IA-Local.apk dist/IA-Local.aab dist/IA-Local.apk.sha256
+
+      - name: Publish direct-download GitHub Release
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${IA_VERSION_NAME}"
+          TITLE="IA Local ${IA_VERSION_NAME}"
+          NOTES="APK instalável para Android 13+ (arm64-v8a/x86_64). Baixe IA-Local.apk diretamente desta Release; o arquivo AAB é destinado a distribuição por loja e não deve ser instalado diretamente."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              dist/IA-Local.apk \
+              dist/IA-Local.aab \
+              dist/IA-Local.apk.sha256 \
+              --clobber
+          else
+            gh release create "$TAG" \
+              dist/IA-Local.apk \
+              dist/IA-Local.aab \
+              dist/IA-Local.apk.sha256 \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes "$NOTES"
+          fi
+
+          {
+            echo "### Signed release published"
+            echo
+            echo "Version: ${IA_VERSION_NAME}"
+            echo "Direct APK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/IA-Local.apk"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove release keystore
+        if: always() && steps.signing.outputs.ready == 'true'
+        run: rm -f app/release.keystore
