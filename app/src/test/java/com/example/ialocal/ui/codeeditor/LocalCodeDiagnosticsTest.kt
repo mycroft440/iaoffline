@@ -2,6 +2,7 @@ package com.example.ialocal.ui.codeeditor
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -45,12 +46,27 @@ class LocalCodeDiagnosticsTest {
         val sql = "SELECT id, name FORM users WHERE active = 1;"
 
         val issues = LocalCodeDiagnostics.analyze(sql, profile)
+        val syntaxError = issues.firstOrNull { it.title == "Erro de sintaxe SQL" }
+
+        assertNotNull(syntaxError)
+        assertEquals(CodeIssueCategory.SYNTAX, syntaxError?.category)
+        assertEquals(CodeIssueSeverity.ERROR, syntaxError?.severity)
+        assertEquals(CodeIssueSource.LOCAL, syntaxError?.source)
+        assertEquals(1, syntaxError?.startLine)
+    }
+
+    @Test
+    fun invalidSecondSqlStatementIsAlsoRejected() {
+        val profile = CodeLanguageRegistry.find("SQL")
+        val sql = """
+            SELECT 1;
+            SELECT * FORM users;
+        """.trimIndent()
+
+        val issues = LocalCodeDiagnostics.analyze(sql, profile)
 
         assertTrue(issues.any { issue ->
-            issue.title == "Erro de sintaxe SQL" &&
-                issue.category == CodeIssueCategory.SYNTAX &&
-                issue.severity == CodeIssueSeverity.ERROR &&
-                issue.source == CodeIssueSource.LOCAL
+            issue.title == "Erro de sintaxe SQL" && issue.startLine >= 2
         })
     }
 
