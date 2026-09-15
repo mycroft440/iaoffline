@@ -20,8 +20,22 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.
 - Teste end-to-end dentro do app.
+- Editor anatômico de código com parser formal de sintaxe e análise semântica complementar por IA offline.
+- SQL usa JSqlParser 5.3; o restante da cobertura formal usa o catálogo Tree-sitter, inclusive gramáticas reconhecidas dinamicamente por nome, extensão ou caminho.
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
+
+## Editor de código e diagnósticos
+
+O editor separa sintaxe de análise por IA. Uma linguagem só recebe o estado **Sintaxe válida** depois que o parser formal correspondente conclui sem erros. Se a gramática não puder ser carregada, o estado é **Parser formal indisponível** — o app não presume que o código está correto.
+
+SQL passa pelo JSqlParser. Os perfis comuns mantêm nomes e aliases próprios, mas o registro não fica limitado à lista manual: qualquer gramática reconhecida pelo catálogo da versão instalada do `tree-sitter-language-pack` pode gerar dinamicamente um perfil Tree-sitter. Isso permite reconhecer também linguagens e formatos fora da lista original, inclusive por extensão ou caminho de arquivo.
+
+Para a distribuição Android, `scripts/prepare_tree_sitter_android.sh` recompila o AAR do Tree-sitter com `TSLP_LANGUAGES=all` por padrão, usando as fontes de parsers publicadas e verificadas pela mesma release. O objetivo é embutir no aplicativo o maior conjunto de gramáticas que a versão consegue compilar para Android, em vez de depender apenas do subconjunto reduzido do AAR Maven. Se um build precisar deliberadamente de um conjunto menor, `TREE_SITTER_LANGUAGES` pode receber uma lista separada por vírgulas.
+
+A IA local só é chamada depois que a sintaxe é aceita e não pode retornar diagnósticos da categoria `SYNTAX`; ela complementa com erros de tipo, referência, lógica, segurança e compatibilidade. Ao editar o texto ou trocar a linguagem, a aprovação sintática anterior é invalidada imediatamente.
+
+Para SQL, o parser valida gramática, não existência de tabelas, colunas ou objetos de um banco específico; validação semântica de schema exige conexão ou importação do schema correspondente.
 
 ## Instalação
 
@@ -46,11 +60,22 @@ As pastas de modelos e downloads são excluídas do backup e da transferência d
 
 ## Build
 
-O AAR do binding Android do llama.cpp é gerado antes do build do aplicativo:
+Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 
 ```bash
+export ANDROID_NDK_HOME=/caminho/para/o/ndk
+rustup target add aarch64-linux-android x86_64-linux-android
+cargo install cargo-ndk --locked
+./scripts/prepare_tree_sitter_android.sh
 ./scripts/prepare_llama_android.sh
-gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
+./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
+```
+
+O script Tree-sitter usa `all` por padrão. Um conjunto menor pode ser solicitado, por exemplo:
+
+```bash
+TREE_SITTER_LANGUAGES=python,html,bash,powershell,php,c,cpp,csharp \
+  ./scripts/prepare_tree_sitter_android.sh
 ```
 
 O workflow de CI executa essas etapas automaticamente. O `versionCode` e o `versionName` dos builds de CI são derivados do número da execução do GitHub Actions, evitando que versões novas continuem usando `versionCode = 1`.
@@ -93,5 +118,7 @@ Se os Secrets ainda não estiverem configurados, o CI continua executando testes
 - O Qwen3.8 é multimodal na origem, mas esta integração usa apenas texto; suporte a imagem exigiria integrar o projetor multimodal correspondente.
 - PDF escaneado sem OCR.
 - Áudio dependente de reconhecimento on-device.
+- Parser sintático não substitui compilador, type checker ou schema real. Um arquivo pode ter sintaxe válida e ainda conter erro de tipo, símbolo inexistente, erro de link, dependência ausente ou erro semântico.
+- O modo `TSLP_LANGUAGES=all` maximiza a cobertura, mas aumenta tempo de CI e tamanho do AAR/APK. O build é estrito: se uma gramática anunciada pela release não compilar para Android, a CI deve falhar em vez de publicar silenciosamente um APK que prometa suporte offline inexistente.
 
 Pronto para uso = CI verde + teste físico com pelo menos um GGUF real no aparelho-alvo.
