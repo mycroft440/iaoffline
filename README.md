@@ -64,6 +64,7 @@ Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o 
 
 ```bash
 export ANDROID_NDK_HOME=/caminho/para/o/ndk
+rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk --locked
 ./scripts/prepare_tree_sitter_android.sh
 ./scripts/prepare_llama_android.sh
@@ -118,6 +119,6 @@ Se os Secrets ainda não estiverem configurados, o CI continua executando testes
 - PDF escaneado sem OCR.
 - Áudio dependente de reconhecimento on-device.
 - Parser sintático não substitui compilador, type checker ou schema real. Um arquivo pode ter sintaxe válida e ainda conter erro de tipo, símbolo inexistente, erro de link, dependência ausente ou erro semântico.
-- O modo `TSLP_LANGUAGES=all` maximiza a cobertura, mas aumenta tempo de CI e tamanho do AAR/APK; uma gramática que não compile para Android deve fazer o build falhar, não ser anunciada silenciosamente como disponível offline.
+- O modo `TSLP_LANGUAGES=all` maximiza a cobertura, mas aumenta tempo de CI e tamanho do AAR/APK. O build é estrito: se uma gramática anunciada pela release não compilar para Android, a CI deve falhar em vez de publicar silenciosamente um APK que prometa suporte offline inexistente.
 
 Pronto para uso = CI verde + teste físico com pelo menos um GGUF real no aparelho-alvo.
