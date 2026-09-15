@@ -134,7 +134,7 @@ fun CodeEditorScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "A sintaxe é decidida por parser formal local, não pela IA. A IA offline só complementa com erros de tipo, referência, lógica, segurança e compatibilidade depois que a sintaxe é aceita.",
+                "A sintaxe é decidida por parser formal local, não pela IA. Perfis comuns usam configuração dedicada e outras gramáticas do catálogo Tree-sitter são reconhecidas dinamicamente. A IA offline só complementa com erros de tipo, referência, lógica, segurança e compatibilidade depois que a sintaxe é aceita.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -142,11 +142,11 @@ fun CodeEditorScreen(
             OutlinedTextField(
                 value = state.language,
                 onValueChange = viewModel::updateLanguage,
-                label = { Text("Linguagem") },
+                label = { Text("Linguagem, extensão ou caminho") },
                 supportingText = {
                     Text(
                         "Perfil: ${profile.displayName} · parser: ${backendLabel(profile.syntaxBackend)} · " +
-                            "${CodeLanguageRegistry.profiles.size} linguagens catalogadas",
+                            "${CodeLanguageRegistry.catalogEntryCount} nomes/aliases formais reconhecidos",
                     )
                 },
                 singleLine = true,
