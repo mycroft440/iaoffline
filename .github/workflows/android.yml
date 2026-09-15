@@ -51,19 +51,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Unit tests + lint + debug APK + debug AAB
-        shell: bash
-        run: |
-          set -o pipefail
-          ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace 2>&1 | tee gradle-ci.log
-
-      - name: Upload Gradle diagnostic log
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: gradle-ci-log
-          path: gradle-ci.log
-          if-no-files-found: warn
-          retention-days: 1
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleDebug --no-daemon --stacktrace
 
       - name: Verify Android artifacts
         run: |
