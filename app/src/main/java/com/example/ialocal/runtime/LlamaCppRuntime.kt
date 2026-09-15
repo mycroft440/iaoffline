@@ -149,9 +149,10 @@ class LlamaCppRuntime(
         } catch (t: Throwable) {
             loadedModelId = null
             requestSessionConsumed = false
-            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
-            logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}", t)
-            throw IllegalStateException(humanize(t), t)
+            val message = humanize(t)
+            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
+            logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}: $message", t)
+            throw IllegalStateException(message, t)
         }
     }
 
@@ -188,10 +189,12 @@ class LlamaCppRuntime(
     private fun humanize(t: Throwable): String {
         val raw = t.message.orEmpty()
         return when {
+            raw.contains("após as tentativas de compatibilidade", ignoreCase = true) ->
+                "O runtime não conseguiu carregar este GGUF nem no modo otimizado nem no modo de compatibilidade em CPU. Feche outros apps para liberar RAM e tente novamente; se persistir, o arquivo pode ser incompatível com este build do llama.cpp."
             t::class.java.simpleName.contains("UnsupportedArchitecture", ignoreCase = true) ->
-                "A arquitetura deste GGUF não é suportada pelo runtime llama.cpp Android atual."
+                "O runtime nativo recusou o GGUF durante o carregamento. Essa exceção não identifica, por si só, uma arquitetura incompatível; tente liberar RAM e carregar novamente."
             raw.contains("Failed to prepare resources", ignoreCase = true) ->
-                "O modelo foi lido, mas o runtime não conseguiu criar o contexto nativo. Verifique RAM disponível e compatibilidade."
+                "O modelo foi carregado, mas o aparelho não conseguiu criar nem o contexto reduzido de inferência. Libere RAM fechando outros apps e tente novamente."
             raw.contains("Cannot load model", ignoreCase = true) ->
                 "O runtime ainda não estava pronto para carregar o modelo."
             raw.isNotBlank() -> raw
