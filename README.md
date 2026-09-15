@@ -23,6 +23,21 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
+## Instalação
+
+A distribuição para aparelhos deve ser feita pelo APK assinado publicado em **GitHub Releases**, não pelo arquivo ZIP de artefatos do GitHub Actions e não pelo AAB.
+
+Quando a assinatura de release estiver configurada, o APK mais recente ficará disponível diretamente em:
+
+`https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
+
+Requisitos do APK atual:
+
+- Android 13 ou superior (`minSdk 33`).
+- CPU `arm64-v8a` ou `x86_64` para o runtime completo do llama.cpp.
+
+Se uma versão debug antiga do aplicativo já estiver instalada, desinstale-a uma única vez antes de instalar a primeira Release assinada. Depois disso, as Releases futuras usam a mesma chave e podem atualizar a instalação normalmente.
+
 ## Segurança e armazenamento
 
 Os downloads são gravados no armazenamento privado do aplicativo. Arquivos incompletos usam a extensão `.part`, podem ser retomados e não são registrados como modelo. Ao concluir, o app confere o SHA-256 esperado, relê o GGUF e só então executa o teste de inferência.
@@ -38,7 +53,37 @@ O AAR do binding Android do llama.cpp é gerado antes do build do aplicativo:
 gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
 ```
 
-O workflow de CI executa essas etapas automaticamente.
+O workflow de CI executa essas etapas automaticamente. O `versionCode` e o `versionName` dos builds de CI são derivados do número da execução do GitHub Actions, evitando que versões novas continuem usando `versionCode = 1`.
+
+### Assinatura persistente das Releases
+
+O APK público é construído como `release` e só é publicado quando estes quatro GitHub Actions Secrets estão configurados no repositório:
+
+- `ANDROID_KEYSTORE_BASE64`: conteúdo Base64 do arquivo de keystore.
+- `ANDROID_KEY_ALIAS`: alias da chave.
+- `ANDROID_KEYSTORE_PASSWORD`: senha do keystore.
+- `ANDROID_KEY_PASSWORD`: senha da chave.
+
+Uma chave pode ser criada localmente com o `keytool` do JDK, por exemplo:
+
+```bash
+keytool -genkeypair -v \
+  -keystore ia-local-release.jks \
+  -alias ia-local \
+  -keyalg RSA \
+  -keysize 4096 \
+  -validity 10000
+```
+
+Depois, converta o arquivo para Base64 e salve o resultado em `ANDROID_KEYSTORE_BASE64`. Em Linux/GNU:
+
+```bash
+base64 -w 0 ia-local-release.jks
+```
+
+A chave privada não deve ser adicionada ao Git. O `.gitignore` bloqueia extensões comuns de keystore.
+
+Se os Secrets ainda não estiverem configurados, o CI continua executando testes e o build debug, mas **não publica** uma Release com assinatura efêmera. Isso evita voltar ao problema de cada execução produzir um APK incompatível com a atualização anterior.
 
 ## Limitações atuais
 
