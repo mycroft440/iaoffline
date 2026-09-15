@@ -8,6 +8,20 @@ enum class CodeIssueSeverity {
     INFO,
 }
 
+enum class CodeIssueCategory {
+    SYNTAX,
+    TYPE,
+    REFERENCE,
+    LOGIC,
+    SECURITY,
+    COMPATIBILITY,
+}
+
+enum class CodeIssueSource {
+    LOCAL,
+    AI,
+}
+
 data class CodeIssue(
     val id: String,
     val title: String,
@@ -17,6 +31,10 @@ data class CodeIssue(
     val original: String,
     val replacement: String,
     val severity: CodeIssueSeverity,
+    val category: CodeIssueCategory = CodeIssueCategory.SYNTAX,
+    val column: Int? = null,
+    val canAutoFix: Boolean = original.isNotEmpty(),
+    val source: CodeIssueSource = CodeIssueSource.AI,
 )
 
 object CodePatchEngine {
@@ -33,6 +51,7 @@ object CodePatchEngine {
     }
 
     fun applyIssue(code: String, issue: CodeIssue): String? {
+        if (!issue.canAutoFix || issue.original.isEmpty()) return null
         val range = findExactRange(code, issue) ?: return null
         return code.replaceRange(range.start, range.end, issue.replacement)
     }
@@ -41,7 +60,7 @@ object CodePatchEngine {
         var updated = code
         var applied = 0
 
-        issues.forEach { issue ->
+        issues.filter { it.canAutoFix }.forEach { issue ->
             applyIssue(updated, issue)?.let { next ->
                 updated = next
                 applied += 1
