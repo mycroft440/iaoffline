@@ -19,6 +19,9 @@ interface ChatDao {
                 ORDER BY m.createdAt DESC
                 LIMIT 1) AS lastMessage
         FROM conversations c
+        WHERE EXISTS (
+            SELECT 1 FROM messages existing WHERE existing.conversationId = c.id
+        )
         ORDER BY c.isPinned DESC, c.updatedAt DESC
         """
     )
@@ -34,7 +37,6 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     fun observeMessages(conversationId: String): Flow<List<MessageWithAttachments>>
 
-
     @Transaction
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     suspend fun getMessages(conversationId: String): List<MessageWithAttachments>
@@ -44,8 +46,12 @@ interface ChatDao {
         SELECT c.id, c.title, c.createdAt, c.updatedAt, c.isPinned,
                (SELECT m.content FROM messages m WHERE m.conversationId = c.id ORDER BY m.createdAt DESC LIMIT 1) AS lastMessage
         FROM conversations c
-        WHERE c.title LIKE :query OR EXISTS (
-            SELECT 1 FROM messages m WHERE m.conversationId = c.id AND m.content LIKE :query
+        WHERE EXISTS (
+            SELECT 1 FROM messages existing WHERE existing.conversationId = c.id
+        ) AND (
+            c.title LIKE :query OR EXISTS (
+                SELECT 1 FROM messages m WHERE m.conversationId = c.id AND m.content LIKE :query
+            )
         )
         ORDER BY c.updatedAt DESC
         LIMIT :limit
@@ -58,6 +64,9 @@ interface ChatDao {
         SELECT c.id, c.title, c.createdAt, c.updatedAt, c.isPinned,
                (SELECT m.content FROM messages m WHERE m.conversationId = c.id ORDER BY m.createdAt DESC LIMIT 1) AS lastMessage
         FROM conversations c
+        WHERE EXISTS (
+            SELECT 1 FROM messages existing WHERE existing.conversationId = c.id
+        )
         ORDER BY c.updatedAt DESC
         LIMIT :limit
         """
