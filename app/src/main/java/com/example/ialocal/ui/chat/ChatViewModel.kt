@@ -58,6 +58,7 @@ class ChatViewModel(
     private val _isProcessingAttachments = MutableStateFlow(false); val isProcessingAttachments = _isProcessingAttachments.asStateFlow()
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()
     private val _selectedAgentId = MutableStateFlow<String?>(null)
+    val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
     private var generationJob: Job? = null
 
     fun setDraft(value: String) { _draft.value = value }
