@@ -16,7 +16,6 @@ import com.example.ialocal.data.ConversationListItem
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
-import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
@@ -61,20 +60,6 @@ class ChatViewModel(
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     private var generationJob: Job? = null
 
-    init {
-        viewModelScope.launch {
-            runCatching {
-                val model = modelRepository.getActiveModel()
-                    ?: modelRepository.getModels().firstOrNull {
-                        it.verificationStatus == ModelVerificationStatus.VERIFIED.name
-                    }
-                model?.let { modelRepository.ensureStarterProfiles(it.id) }
-            }.onFailure {
-                _error.value = it.message ?: "Não foi possível preparar os perfis de I.A."
-            }
-        }
-    }
-
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
 
@@ -94,15 +79,13 @@ class ChatViewModel(
     fun selectModel(modelId: String) {
         viewModelScope.launch {
             runCatching {
-                modelRepository.ensureStarterProfiles(modelId)
                 val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
                 val agent = modelAgents.firstOrNull { it.isDefault }
                     ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
                     ?: modelAgents.firstOrNull()
-                    ?: error("Este modelo não possui um agente configurado.")
-                _selectedAgentId.value = agent.id
-                modelRepository.recordAgentUse(agent.id)
-                repository.setConversationAgent(conversationId, agent.id)
+                _selectedAgentId.value = agent?.id
+                agent?.let { modelRepository.recordAgentUse(it.id) }
+                repository.setConversationAgent(conversationId, agent?.id)
             }.onFailure {
                 _error.value = it.message ?: "Não foi possível selecionar o modelo."
             }
@@ -139,6 +122,26 @@ class ChatViewModel(
         viewModelScope.launch {
             runCatching { modelRepository.updateAgent(agent) }
                 .onFailure { _error.value = it.message ?: "Não foi possível salvar as configurações do agente." }
+        }
+    }
+
+    fun deleteAgent(agentId: String) {
+        viewModelScope.launch {
+            runCatching {
+                val deleted = modelRepository.getAgent(agentId) ?: return@runCatching
+                val wasSelected = _selectedAgentId.value == agentId || conversation.value?.agentId == agentId
+                modelRepository.deleteAgent(agentId)
+                if (wasSelected) {
+                    val remaining = modelRepository.getAgents().filter { it.modelId == deleted.modelId }
+                    val replacement = remaining.firstOrNull { it.isDefault }
+                        ?: remaining.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
+                        ?: remaining.firstOrNull()
+                    _selectedAgentId.value = replacement?.id
+                    repository.setConversationAgent(conversationId, replacement?.id)
+                }
+            }.onFailure {
+                _error.value = it.message ?: "Não foi possível excluir o perfil de I.A."
+            }
         }
     }
 
@@ -203,6 +206,11 @@ class ChatViewModel(
             var assistantId: String? = null
             try {
                 repository.addMessage(conversationId, MessageRole.USER, content, attachments)
+                val agentId = _selectedAgentId.value
+                    ?: conversation.value?.agentId
+                    ?: modelRepository.getDefaultAgent()?.id
+                if (agentId != null) repository.setConversationAgent(conversationId, agentId)
+
                 val history = historyBeforeSend + AiChatMessage("user", content)
                 val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
                 assistantId = replyId
@@ -211,7 +219,7 @@ class ChatViewModel(
                     conversationId = conversationId,
                     messages = history,
                     attachments = attachments,
-                    agentId = _selectedAgentId.value ?: conversation.value?.agentId,
+                    agentId = agentId,
                 )).collect { chunk ->
                     accumulated += chunk
                     repository.updateMessageContent(replyId, accumulated)
