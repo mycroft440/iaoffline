@@ -134,6 +134,31 @@ replace_once(
     "    }",
 )
 
+# When prepare() falls back to a smaller context, all overflow/truncation logic
+# must use that actual context size rather than the original 8192-token constant.
+replace_once(
+    "        if (start_pos + i + cur_batch_size >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {",
+    "        if (start_pos + i + cur_batch_size >= (int) llama_n_ctx(context) - OVERFLOW_HEADROOM) {",
+)
+replace_once(
+    "    // Handle context overflow\n"
+    "    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;\n"
+    "    if ((int) system_tokens.size() > max_batch_size) {",
+    "    // Handle context overflow using the context actually allocated on this device.\n"
+    "    const int max_batch_size = (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM;\n"
+    "    if ((int) system_tokens.size() > max_batch_size) {",
+)
+replace_once(
+    "    const int user_prompt_size = (int) user_tokens.size();\n"
+    "    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;",
+    "    const int user_prompt_size = (int) user_tokens.size();\n"
+    "    const int max_batch_size = (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM;",
+)
+replace_once(
+    "    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {",
+    "    if (current_position >= (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM) {",
+)
+
 path.write_text(text)
 print("Applied IA Offline Android model-load compatibility patch")
 PY
