@@ -100,11 +100,13 @@ fun NexusProfileLibraryAction(
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val models by viewModel.models.collectAsStateWithLifecycle()
     val agentUsageCounts by viewModel.agentUsageCounts.collectAsStateWithLifecycle()
+    val selectedAgentId by viewModel.selectedAgentId.collectAsStateWithLifecycle()
 
     val readyModels = remember(models) {
         models.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
     }
-    val selectedAgent = agents.firstOrNull { it.id == conversation?.agentId }
+    val selectedAgent = agents.firstOrNull { it.id == selectedAgentId }
+        ?: agents.firstOrNull { it.id == conversation?.agentId }
         ?: agents.firstOrNull { it.isDefault }
     val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
         ?: readyModels.firstOrNull { it.isActive }
@@ -125,6 +127,7 @@ fun NexusProfileLibraryAction(
     var libraryOpen by remember { mutableStateOf(false) }
     var customOpen by remember { mutableStateOf(false) }
     var pendingDefaultAgent by remember { mutableStateOf<AgentEntity?>(null) }
+    var pendingDeleteAgent by remember { mutableStateOf<AgentEntity?>(null) }
 
     if (selectedModel != null) {
         OutlinedButton(
@@ -177,7 +180,7 @@ fun NexusProfileLibraryAction(
                     if (modelAgents.isEmpty()) {
                         item {
                             Text(
-                                "Nenhum perfil disponível para este modelo.",
+                                "Nenhum perfil disponível para este modelo. Você pode adicionar um perfil pronto ou criar um personalizado.",
                                 modifier = Modifier.padding(vertical = 8.dp),
                                 fontSize = 12.sp,
                                 color = NexusColors.TextMuted,
@@ -195,6 +198,7 @@ fun NexusProfileLibraryAction(
                                     pendingDefaultAgent = agent
                                     libraryOpen = false
                                 },
+                                onDelete = { pendingDeleteAgent = agent },
                             )
                         }
                     }
@@ -281,6 +285,28 @@ fun NexusProfileLibraryAction(
         )
     }
 
+    pendingDeleteAgent?.let { agent ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteAgent = null },
+            containerColor = NexusColors.Surface850,
+            title = { Text("Excluir personalidade?") },
+            text = {
+                Text("Tem certeza que deseja excluir o perfil “${agent.name}”? Ele continuará disponível como modelo pronto para ser adicionado novamente, quando aplicável.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteAgent(agent.id)
+                        pendingDeleteAgent = null
+                    },
+                ) { Text("Excluir") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteAgent = null }) { Text("Cancelar") }
+            },
+        )
+    }
+
     pendingDefaultAgent?.let { agent ->
         AlertDialog(
             onDismissRequest = { pendingDefaultAgent = null },
@@ -311,6 +337,7 @@ private fun NexusProfileRow(
     selected: Boolean,
     actionLabel: String,
     onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
     Surface(
         modifier = Modifier
@@ -350,6 +377,11 @@ private fun NexusProfileRow(
                 )
             }
             Spacer(Modifier.width(8.dp))
+            if (onDelete != null) {
+                TextButton(onClick = onDelete) {
+                    Text("Excluir", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+                }
+            }
             Text(actionLabel, fontSize = 10.sp, color = NexusColors.Brand)
         }
     }
