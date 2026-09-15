@@ -48,7 +48,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
     implementation("androidx.navigation:navigation-compose:2.10.0")
 
     implementation("androidx.room:room-runtime:2.8.4")
@@ -59,11 +58,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
-    // Real SQL parser used by the offline code editor. JMH is benchmarking-only and is not
-    // required at runtime, so keep it out of the Android package.
+    // Formal syntax parsers used by the offline code editor.
+    // SQL uses JSqlParser; the remaining registered languages use Tree-sitter grammars.
     implementation("com.github.jsqlparser:jsqlparser:5.3") {
         exclude(group = "org.openjdk.jmh", module = "jmh-core")
     }
+    implementation("io.xberg.tslp.android:tree-sitter-language-pack-android:1.15.12")
 
     // Generated from the official ggml-org/llama.cpp Android binding.
     // Run scripts/prepare_llama_android.sh before building the app.
