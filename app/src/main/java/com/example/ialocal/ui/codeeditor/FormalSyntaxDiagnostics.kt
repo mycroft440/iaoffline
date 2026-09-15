@@ -1,6 +1,7 @@
 package com.example.ialocal.ui.codeeditor
 
 import io.xberg.tslp.android.DiagnosticSeverity
+import io.xberg.tslp.android.LanguageRegistry
 import io.xberg.tslp.android.ProcessConfig
 import io.xberg.tslp.android.TreeSitterLanguagePack
 
@@ -61,12 +62,21 @@ object FormalSyntaxDiagnostics {
         code: String,
         language: CodeLanguageProfile,
     ): FormalSyntaxResult {
-        val resolved = resolveTreeSitterLanguage(language)
-            ?: return FormalSyntaxResult(
+        val resolved = resolveLocalTreeSitterLanguage(language)
+        if (resolved == null) {
+            val knownGrammar = resolveKnownTreeSitterLanguage(language)
+            return FormalSyntaxResult(
                 state = SyntaxValidationState.PARSER_UNAVAILABLE,
-                parserName = "Tree-sitter",
-                message = "A gramática Tree-sitter de ${language.displayName} não está disponível neste build.",
+                parserName = knownGrammar?.let { "Tree-sitter ($it)" } ?: "Tree-sitter",
+                message = if (knownGrammar != null) {
+                    "A gramática Tree-sitter de ${language.displayName} é reconhecida como $knownGrammar, " +
+                        "mas o parser não está disponível localmente neste dispositivo. " +
+                        "A validação sintática offline não será simulada nem substituída pela IA."
+                } else {
+                    "Não há gramática Tree-sitter reconhecida para ${language.displayName} neste build."
+                },
             )
+        }
 
         return runCatching {
             TreeSitterLanguagePack.processAsync(
@@ -112,20 +122,24 @@ object FormalSyntaxDiagnostics {
         )
     }
 
-    private fun resolveTreeSitterLanguage(language: CodeLanguageProfile): String? {
-        val candidates = buildList {
-            addAll(language.treeSitterCandidates)
-            language.extensions.forEach { extension ->
-                runCatching { TreeSitterLanguagePack.detectLanguageFromExtension(extension) }
-                    .getOrNull()
-                    ?.let(::add)
-            }
-        }.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct()
+    private fun resolveLocalTreeSitterLanguage(language: CodeLanguageProfile): String? =
+        treeSitterCandidates(language).firstOrNull { candidate ->
+            runCatching { treeSitterRegistry.hasParser(candidate) }.getOrDefault(false)
+        }
 
-        return candidates.firstOrNull { candidate ->
+    private fun resolveKnownTreeSitterLanguage(language: CodeLanguageProfile): String? =
+        treeSitterCandidates(language).firstOrNull { candidate ->
             runCatching { TreeSitterLanguagePack.hasLanguage(candidate) }.getOrDefault(false)
         }
-    }
+
+    private fun treeSitterCandidates(language: CodeLanguageProfile): List<String> = buildList {
+        addAll(language.treeSitterCandidates)
+        language.extensions.forEach { extension ->
+            runCatching { TreeSitterLanguagePack.detectLanguageFromExtension(extension) }
+                .getOrNull()
+                ?.let(::add)
+        }
+    }.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct()
 
     private fun io.xberg.tslp.android.Diagnostic.toCodeIssue(
         code: String,
@@ -171,6 +185,8 @@ object FormalSyntaxDiagnostics {
         SyntaxBackend.TREE_SITTER -> "Tree-sitter"
         SyntaxBackend.NONE -> null
     }
+
+    private val treeSitterRegistry by lazy { LanguageRegistry.new() }
 
     private const val MAX_SOURCE_BYTES = 2_000_000L
     private const val PARSE_TIMEOUT_MS = 2_000L
