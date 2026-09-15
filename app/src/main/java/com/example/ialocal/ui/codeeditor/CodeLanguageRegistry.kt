@@ -8,6 +8,7 @@ data class CodeLanguageProfile(
     val analysisHint: String,
     val lineCommentTokens: Set<String> = setOf("//"),
     val supportsBlockComments: Boolean = true,
+    val deterministicSyntaxParser: Boolean = false,
 )
 
 object CodeLanguageRegistry {
@@ -19,6 +20,7 @@ object CodeLanguageRegistry {
         analysisHint: String,
         lineCommentTokens: Set<String> = setOf("//"),
         supportsBlockComments: Boolean = true,
+        deterministicSyntaxParser: Boolean = false,
     ) = CodeLanguageProfile(
         id = id,
         displayName = displayName,
@@ -27,6 +29,7 @@ object CodeLanguageRegistry {
         analysisHint = analysisHint,
         lineCommentTokens = lineCommentTokens,
         supportsBlockComments = supportsBlockComments,
+        deterministicSyntaxParser = deterministicSyntaxParser,
     )
 
     val profiles: List<CodeLanguageProfile> = listOf(
@@ -35,7 +38,7 @@ object CodeLanguageRegistry {
         profile("python", "Python", setOf("py", "python3"), setOf("py"), "Python 3.x: sintaxe, indentação, nomes, tipos óbvios, exceções e erros de execução previsíveis.", setOf("#"), false),
         profile("javascript", "JavaScript", setOf("js", "node", "ecmascript"), setOf("js", "mjs", "cjs"), "ECMAScript moderno: sintaxe, escopo, promises, módulos e APIs comuns."),
         profile("typescript", "TypeScript", setOf("ts"), setOf("ts", "tsx"), "TypeScript moderno: sintaxe, tipos, narrowing, generics, módulos e JSX/TSX quando presente."),
-        profile("html", "HTML", setOf("html5"), setOf("html", "htm"), "HTML5: estrutura, tags, atributos, nesting, acessibilidade estrutural e referências inválidas.", setOf(), false),
+        profile("html", "HTML", setOf("html5"), setOf("html", "htm"), "HTML5: estrutura, tags, atributos, nesting, acessibilidade estrutural e referências inválidas.", setOf(), false, deterministicSyntaxParser = true),
         profile("css", "CSS", setOf("css3"), setOf("css"), "CSS moderno: sintaxe, seletores, propriedades, valores e regras de cascata evidentes.", setOf(), true),
         profile("json", "JSON", setOf("jsonc"), setOf("json"), "JSON estrito: aspas, vírgulas, chaves, arrays, tipos e estrutura válida.", setOf(), false),
         profile("xml", "XML", setOf("xhtml"), setOf("xml", "xhtml"), "XML bem-formado: tags, atributos, entidades e hierarquia.", setOf(), false),
@@ -52,7 +55,7 @@ object CodeLanguageRegistry {
         profile("php", "PHP", setOf("php8"), setOf("php", "phtml"), "PHP 8+: sintaxe, tipos, namespaces, exceptions e APIs comuns."),
         profile("ruby", "Ruby", setOf("rb"), setOf("rb", "rake"), "Ruby moderno: sintaxe, blocos, escopo, exceptions e APIs comuns.", setOf("#"), false),
         profile("lua", "Lua", setOf("lua5"), setOf("lua"), "Lua 5.x: sintaxe, tabelas, escopo, closures e APIs padrão.", setOf("--"), false),
-        profile("sql", "SQL", setOf("postgresql", "mysql", "sqlite", "tsql"), setOf("sql"), "SQL: sintaxe, aliases, joins, agregações, escopo de colunas e dialeto declarado quando reconhecível.", setOf("--"), true),
+        profile("sql", "SQL", setOf("postgresql", "mysql", "sqlite", "tsql"), setOf("sql"), "SQL: sintaxe, aliases, joins, agregações, escopo de colunas e dialeto declarado quando reconhecível.", setOf("--"), true, deterministicSyntaxParser = true),
         profile("r", "R", setOf("rscript"), setOf("r"), "R moderno: sintaxe, vetorização, fatores/data frames, pacotes e erros de runtime previsíveis.", setOf("#"), false),
         profile("scala", "Scala", setOf("scala3"), setOf("scala", "sc"), "Scala 3: tipos, implicits/givens, collections, pattern matching e JVM."),
         profile("groovy", "Groovy", setOf("gradle groovy"), setOf("groovy", "gradle"), "Groovy/JVM e Gradle quando aplicável: sintaxe dinâmica, closures e DSLs."),
