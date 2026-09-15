@@ -54,6 +54,7 @@ jobs:
           sudo apt-get install -y zstd
           rustup toolchain install stable --profile minimal
           rustup default stable
+          rustup target add aarch64-linux-android x86_64-linux-android
           cargo install cargo-ndk --locked
           chmod +x ./scripts/prepare_tree_sitter_android.sh
           ANDROID_SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
