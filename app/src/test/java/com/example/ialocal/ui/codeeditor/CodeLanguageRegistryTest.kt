@@ -34,11 +34,44 @@ class CodeLanguageRegistryTest {
     }
 
     @Test
-    fun keyRequestedLanguagesUseFormalParsers() {
-        listOf("HTML", "Python", "PowerShell", "shell", "Java", "JavaScript", "C++", "Rust").forEach { name ->
+    fun firstAuditedLanguagesUseExpectedTreeSitterGrammars() {
+        val expectedGrammarByLanguage = linkedMapOf(
+            "Python" to "python",
+            "HTML" to "html",
+            "PowerShell" to "powershell",
+            "shell" to "bash",
+            "PHP" to "php",
+            "C++" to "cpp",
+            "C#" to "csharp",
+            "C" to "c",
+        )
+
+        expectedGrammarByLanguage.forEach { (name, expectedGrammar) ->
             val profile = CodeLanguageRegistry.find(name)
             assertEquals("$name deveria usar Tree-sitter", SyntaxBackend.TREE_SITTER, profile.syntaxBackend)
             assertFalse("$name precisa de candidato de gramática", profile.treeSitterCandidates.isEmpty())
+            assertTrue(
+                "$name deveria incluir a gramática canônica $expectedGrammar, mas possui ${profile.treeSitterCandidates}",
+                expectedGrammar in profile.treeSitterCandidates,
+            )
+        }
+    }
+
+    @Test
+    fun firstAuditedLanguageAliasesResolveToTheCorrectProfile() {
+        val expectedProfileByAlias = linkedMapOf(
+            "py" to "Python",
+            "html5" to "HTML",
+            "pwsh" to "PowerShell",
+            "bash shell" to "Bash",
+            "php8" to "PHP",
+            "cplusplus" to "C++",
+            "cs" to "C#",
+            "c11" to "C",
+        )
+
+        expectedProfileByAlias.forEach { (alias, expectedDisplayName) ->
+            assertEquals(expectedDisplayName, CodeLanguageRegistry.find(alias).displayName)
         }
     }
 
