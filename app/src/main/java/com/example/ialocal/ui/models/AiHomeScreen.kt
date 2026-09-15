@@ -283,7 +283,7 @@ private fun HomeContent(
             items(installedModels, key = { "installed-${it.id}" }) { model ->
                 InstalledModelCard(
                     model = model,
-                    onOpenChats = onOpenChats,
+                    onOpenChat = onStartChat,
                     onDelete = { onDeleteModel(model.id) },
                 )
             }
@@ -358,10 +358,11 @@ private fun NavigationCard(
 @Composable
 private fun InstalledModelCard(
     model: AiModelEntity,
-    onOpenChats: () -> Unit,
+    onOpenChat: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val provider = model.catalogProvider()
+    var confirmDelete by remember(model.id) { mutableStateOf(false) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -393,10 +394,21 @@ private fun InstalledModelCard(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onOpenChats, modifier = Modifier.weight(1f)) { Text("Abrir chat") }
-                OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) { Text("Desinstalar") }
+                Button(onClick = onOpenChat, modifier = Modifier.weight(1f)) { Text("Abrir chat") }
+                OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f)) { Text("Desinstalar") }
             }
         }
+    }
+
+    if (confirmDelete) {
+        ModelUninstallConfirmationDialog(
+            modelName = model.name,
+            onConfirm = {
+                confirmDelete = false
+                onDelete()
+            },
+            onDismiss = { confirmDelete = false },
+        )
     }
 }
 
@@ -461,6 +473,7 @@ private fun CatalogInstallCard(
     val paused = state?.phase == ModelDownloadPhase.CANCELLED
     val failed = state?.phase == ModelDownloadPhase.ERROR
     val progress = state?.progress?.let { "${(it * 100).toInt()}%" }
+    var confirmDelete by remember(installedModel?.id) { mutableStateOf(false) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -500,7 +513,7 @@ private fun CatalogInstallCard(
             when {
                 installed -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) { Text("Desinstalar") }
+                        OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f)) { Text("Desinstalar") }
                         Button(onClick = {}, enabled = false, modifier = Modifier.weight(1f)) { Text("Instalada") }
                     }
                 }
@@ -537,6 +550,38 @@ private fun CatalogInstallCard(
             }
         }
     }
+
+    if (confirmDelete && installedModel != null) {
+        ModelUninstallConfirmationDialog(
+            modelName = installedModel.name,
+            onConfirm = {
+                confirmDelete = false
+                onDelete()
+            },
+            onDismiss = { confirmDelete = false },
+        )
+    }
+}
+
+@Composable
+private fun ModelUninstallConfirmationDialog(
+    modelName: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Desinstalar I.A?") },
+        text = {
+            Text("Tem certeza que quer desinstalar essa I.A? O arquivo de $modelName será excluído do armazenamento interno do Android.")
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Sim, desinstalar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        },
+    )
 }
 
 private fun downloadStatus(state: ModelDownloadState, progress: String?): String = when (state.phase) {
