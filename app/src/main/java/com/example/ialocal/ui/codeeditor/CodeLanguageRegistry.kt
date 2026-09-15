@@ -1,5 +1,8 @@
 package com.example.ialocal.ui.codeeditor
 
+import io.xberg.tslp.android.TreeSitterLanguagePack
+import java.util.Locale
+
 enum class SyntaxBackend {
     TREE_SITTER,
     SQL_JSQLPARSER,
@@ -96,14 +99,42 @@ object CodeLanguageRegistry {
         profile("ini", "INI", setOf("cfg", "properties"), setOf("ini", "cfg", "properties"), "INI/properties: seções, chaves, valores, duplicações e estrutura.", setOf("#", ";"), false, treeSitterCandidates = listOf("ini", "properties")),
     )
 
-    fun find(nameOrAlias: String): CodeLanguageProfile {
-        val normalized = nameOrAlias.trim().lowercase().removePrefix(".")
-        return profiles.firstOrNull { profile ->
+    fun find(nameOrAlias: String): CodeLanguageProfile = find(nameOrAlias, ::resolveTreeSitterGrammar)
+
+    internal fun find(
+        nameOrAlias: String,
+        treeSitterResolver: (String) -> String?,
+    ): CodeLanguageProfile {
+        val raw = nameOrAlias.trim()
+        val normalized = raw.lowercase().removePrefix(".")
+
+        profiles.firstOrNull { profile ->
             normalized == profile.id ||
                 normalized == profile.displayName.lowercase() ||
                 normalized in profile.aliases ||
                 normalized in profile.extensions
-        } ?: CodeLanguageProfile(
+        }?.let { return it }
+
+        val resolvedGrammar = treeSitterResolver(raw)
+            ?: treeSitterResolver(normalized)
+
+        if (resolvedGrammar != null) {
+            val canonical = resolvedGrammar.trim().lowercase()
+            return CodeLanguageProfile(
+                id = canonical,
+                displayName = humanizeGrammarName(canonical),
+                aliases = setOf(normalized).filter { it.isNotBlank() }.toSet(),
+                extensions = emptySet(),
+                analysisHint = "Linguagem reconhecida dinamicamente pela gramática Tree-sitter '$canonical'. " +
+                    "Após a sintaxe formal ser aceita, reporte somente erros semânticos concretos.",
+                lineCommentTokens = emptySet(),
+                supportsBlockComments = false,
+                syntaxBackend = SyntaxBackend.TREE_SITTER,
+                treeSitterCandidates = listOf(canonical),
+            )
+        }
+
+        return CodeLanguageProfile(
             id = normalized.ifBlank { "unknown" },
             displayName = nameOrAlias.ifBlank { "Desconhecida" },
             aliases = emptySet(),
@@ -114,5 +145,58 @@ object CodeLanguageRegistry {
         )
     }
 
-    val supportedDisplayNames: List<String> get() = profiles.map { it.displayName }
+    /**
+     * Every name/alias reported by the Tree-sitter package is accepted dynamically. Curated
+     * profiles remain first so SQL keeps JSqlParser and common languages retain friendly names.
+     */
+    val supportedDisplayNames: List<String>
+        get() = (profiles.map { it.displayName } + treeSitterCatalog)
+            .distinctBy { it.lowercase() }
+            .sortedBy { it.lowercase() }
+
+    val catalogEntryCount: Int get() = supportedDisplayNames.size
+
+    private val treeSitterCatalog: List<String> by lazy {
+        runCatching { TreeSitterLanguagePack.availableLanguages() }
+            .getOrDefault(emptyList())
+            .filter { it.isNotBlank() }
+    }
+
+    private val treeSitterCatalogSet: Set<String> by lazy {
+        treeSitterCatalog.map { it.lowercase() }.toSet()
+    }
+
+    private fun resolveTreeSitterGrammar(input: String): String? {
+        val value = input.trim()
+        if (value.isBlank()) return null
+
+        val normalized = value.lowercase().removePrefix(".")
+        val extension = normalized.substringAfterLast('.', normalized)
+        val candidates = buildList {
+            runCatching { TreeSitterLanguagePack.detectLanguageFromPath(value) }
+                .getOrNull()
+                ?.let(::add)
+            runCatching { TreeSitterLanguagePack.detectLanguageFromExtension(extension) }
+                .getOrNull()
+                ?.let(::add)
+            add(normalized)
+        }.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct()
+
+        return candidates.firstOrNull { candidate ->
+            candidate in treeSitterCatalogSet ||
+                runCatching { TreeSitterLanguagePack.hasLanguage(candidate) }.getOrDefault(false)
+        }
+    }
+
+    private fun humanizeGrammarName(name: String): String = name
+        .replace('_', ' ')
+        .replace('-', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+            token.replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase(Locale.ROOT) else char.toString()
+            }
+        }
+        .ifBlank { name }
 }
