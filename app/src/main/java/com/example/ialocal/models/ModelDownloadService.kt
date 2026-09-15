@@ -84,7 +84,7 @@ class ModelDownloadService : Service() {
                 startDownload(catalogId)
             }
             ACTION_PAUSE -> pauseDownload()
-            ACTION_END -> endDownload(intent.getStringExtra(EXTRA_CATALOG_ID))
+            ACTION_END -> endDownload(intent?.getStringExtra(EXTRA_CATALOG_ID))
         }
         return START_REDELIVER_INTENT
     }
@@ -262,9 +262,10 @@ class ModelDownloadService : Service() {
             builder.addAction(Notification.Action.Builder(R.drawable.ic_download_notification, "Encerrar", endIntent).build())
         }
 
+        val progress = state.progress
         when {
-            state.phase == ModelDownloadPhase.DOWNLOADING && state.progress != null -> {
-                builder.setProgress(100, (state.progress * 100f).roundToInt().coerceIn(0, 100), false)
+            state.phase == ModelDownloadPhase.DOWNLOADING && progress != null -> {
+                builder.setProgress(100, (progress * 100f).roundToInt().coerceIn(0, 100), false)
             }
             ongoing -> builder.setProgress(0, 0, true)
             else -> builder.setProgress(0, 0, false)
