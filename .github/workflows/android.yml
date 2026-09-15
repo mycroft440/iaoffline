@@ -14,7 +14,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 300
 
     steps:
       - name: Checkout
@@ -41,6 +41,22 @@ jobs:
             "ndk;29.0.13113456" \
             "cmake;3.31.6"
           sdkmanager --list_installed
+
+      - name: Maximum offline Tree-sitter grammar bundle
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo install cargo-ndk --locked
+          chmod +x ./scripts/prepare_tree_sitter_android.sh
+          ANDROID_SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          export ANDROID_NDK_HOME="${ANDROID_SDK}/ndk/29.0.13113456"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          export TREE_SITTER_LANGUAGES="all"
+          ./scripts/prepare_tree_sitter_android.sh
+          test -f app/libs/tree-sitter-language-pack-android-max.aar
+          ls -lh app/libs/tree-sitter-language-pack-android-max.aar
 
       - name: Build llama.cpp Android binding
         env:
