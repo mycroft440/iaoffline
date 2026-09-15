@@ -6,6 +6,7 @@ LLAMA_TAG="${LLAMA_CPP_TAG:-v0.4.0}"
 LLAMA_DIR="${ROOT_DIR}/third_party/llama.cpp"
 AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
+AI_CHAT_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
 
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
 
@@ -20,6 +21,10 @@ fi
 # v0.4.0 resets State.Error without unloading a model that may already have
 # been allocated natively. Track native ownership and unload it on recovery so
 # retrying a failed request/model does not leak or overwrite the previous model.
+# The upstream binding also maps every native load failure to
+# UnsupportedArchitectureException, even when the actual cause is memory or an
+# Android backend/load-mode problem. Replace that with a neutral IOException;
+# the native patch below performs compatibility fallbacks before giving up.
 python3 - "${ENGINE_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -40,7 +45,7 @@ replace_once(
 )
 replace_once(
     "                load(pathToModel).let {\n                    // TODO-han.yin: find a better way to pass other error codes\n                    if (it != 0) throw UnsupportedArchitectureException()\n                }\n                prepare().let {",
-    "                load(pathToModel).let {\n                    // TODO-han.yin: find a better way to pass other error codes\n                    if (it != 0) throw UnsupportedArchitectureException()\n                }\n                _nativeModelLoaded = true\n                prepare().let {",
+    "                load(pathToModel).let {\n                    if (it != 0) {\n                        throw IOException(\"O backend nativo não conseguiu carregar o arquivo GGUF após as tentativas de compatibilidade.\")\n                    }\n                }\n                _nativeModelLoaded = true\n                prepare().let {",
 )
 replace_once(
     "                    unload()\n\n                    _state.value = InferenceEngine.State.Initialized",
@@ -56,7 +61,81 @@ replace_once(
 )
 
 path.write_text(text)
-print("Applied IA Offline native-model cleanup patch")
+print("Applied IA Offline inference-engine recovery patch")
+PY
+
+# Android compatibility patch for model loading:
+# 1. Keep model weights on CPU. The packaged Android binding ships CPU variants,
+#    and automatic layer offload can select a backend/buffer combination that a
+#    specific device cannot allocate.
+# 2. Try the normal mmap + optimized CPU buffers first.
+# 3. If that fails, retry using ordinary CPU buffers and regular file reads.
+# 4. If model loading succeeds but an 8K context cannot be allocated, retry with
+#    4K and 2K contexts. This keeps smaller-memory phones usable instead of
+#    reporting the model itself as incompatible.
+python3 - "${AI_CHAT_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp v0.4.0 native source shape: expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+replace_once(
+    "    llama_model_params model_params = llama_model_default_params();\n\n    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);",
+    "    llama_model_params model_params = llama_model_default_params();\n"
+    "    // Android app inference is CPU-first. Avoid accidental device offload\n"
+    "    // and keep the first attempt on the portable mmap path.\n"
+    "    model_params.n_gpu_layers = 0;\n"
+    "    model_params.split_mode = LLAMA_SPLIT_MODE_NONE;\n"
+    "    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;\n\n"
+    "    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);",
+)
+replace_once(
+    "    auto *model = llama_model_load_from_file(model_path, model_params);\n"
+    "    env->ReleaseStringUTFChars(jmodel_path, model_path);\n"
+    "    if (!model) {\n"
+    "        return 1;\n"
+    "    }",
+    "    auto *model = llama_model_load_from_file(model_path, model_params);\n"
+    "    if (!model) {\n"
+    "        LOGw(\"%s: optimized mmap load failed; retrying with conservative CPU buffers and regular I/O\", __func__);\n"
+    "        model_params.use_extra_bufts = false;\n"
+    "        model_params.load_mode = LLAMA_LOAD_MODE_NONE;\n"
+    "        model = llama_model_load_from_file(model_path, model_params);\n"
+    "    }\n"
+    "    env->ReleaseStringUTFChars(jmodel_path, model_path);\n"
+    "    if (!model) {\n"
+    "        LOGe(\"%s: model load failed in both Android compatibility modes\", __func__);\n"
+    "        return 1;\n"
+    "    }",
+)
+replace_once(
+    "    auto *context = init_context(g_model);\n"
+    "    if (!context) { return 1; }",
+    "    auto *context = init_context(g_model, DEFAULT_CONTEXT_SIZE);\n"
+    "    if (!context) {\n"
+    "        LOGw(\"%s: 8192-token context allocation failed; retrying with 4096\", __func__);\n"
+    "        context = init_context(g_model, 4096);\n"
+    "    }\n"
+    "    if (!context) {\n"
+    "        LOGw(\"%s: 4096-token context allocation failed; retrying with 2048\", __func__);\n"
+    "        context = init_context(g_model, 2048);\n"
+    "    }\n"
+    "    if (!context) {\n"
+    "        LOGe(\"%s: failed to allocate even the 2048-token context\", __func__);\n"
+    "        return 1;\n"
+    "    }",
+)
+
+path.write_text(text)
+print("Applied IA Offline Android model-load compatibility patch")
 PY
 
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
