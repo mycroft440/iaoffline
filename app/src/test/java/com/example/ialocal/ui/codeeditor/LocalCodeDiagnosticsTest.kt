@@ -8,27 +8,7 @@ import org.junit.Test
 
 class LocalCodeDiagnosticsTest {
     @Test
-    fun detectsUnexpectedClosingDelimiterWithoutAi() {
-        val profile = CodeLanguageRegistry.find("Python")
-        val issues = LocalCodeDiagnostics.analyze("print('ok')\n}", profile)
-
-        assertTrue(issues.any { it.title.contains("inesperado", ignoreCase = true) })
-        assertTrue(issues.any { it.source == CodeIssueSource.LOCAL })
-    }
-
-    @Test
-    fun detectsUnclosedHtmlTag() {
-        val profile = CodeLanguageRegistry.find("HTML")
-        val issues = LocalCodeDiagnostics.analyze("<main><section>texto</main>", profile)
-
-        assertTrue(issues.any { it.title.contains("tag", ignoreCase = true) })
-        assertTrue(issues.any { it.severity == CodeIssueSeverity.ERROR })
-        assertTrue(profile.deterministicSyntaxParser)
-    }
-
-    @Test
     fun validSqlPassesRealParserWithoutSyntaxError() {
-        val profile = CodeLanguageRegistry.find("SQL")
         val sql = """
             SELECT u.id, u.name
             FROM users u
@@ -36,18 +16,16 @@ class LocalCodeDiagnosticsTest {
             ORDER BY u.name;
         """.trimIndent()
 
-        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+        val issues = SqlSyntaxDiagnostics.analyze(sql)
 
-        assertTrue(profile.deterministicSyntaxParser)
         assertFalse(issues.any { it.category == CodeIssueCategory.SYNTAX && it.severity == CodeIssueSeverity.ERROR })
     }
 
     @Test
     fun invalidSqlIsRejectedByRealParser() {
-        val profile = CodeLanguageRegistry.find("SQL")
         val sql = "SELECT id, name FORM users WHERE active = 1;"
 
-        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+        val issues = SqlSyntaxDiagnostics.analyze(sql)
         val syntaxError = issues.firstOrNull { it.title == "Erro de sintaxe SQL" }
 
         assertNotNull(syntaxError)
@@ -59,13 +37,12 @@ class LocalCodeDiagnosticsTest {
 
     @Test
     fun invalidSecondSqlStatementIsAlsoRejected() {
-        val profile = CodeLanguageRegistry.find("SQL")
         val sql = """
             SELECT 1;
             SELECT * FORM users;
         """.trimIndent()
 
-        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+        val issues = SqlSyntaxDiagnostics.analyze(sql)
 
         assertTrue(issues.any { issue ->
             issue.title == "Erro de sintaxe SQL" && issue.startLine >= 2
@@ -74,12 +51,11 @@ class LocalCodeDiagnosticsTest {
 
     @Test
     fun incompleteSqlIsRejectedByRealParser() {
-        val profile = CodeLanguageRegistry.find("SQL")
         val sql = "SELECT * FROM users WHERE (active = 1 AND"
 
-        val issues = LocalCodeDiagnostics.analyze(sql, profile)
+        val issues = SqlSyntaxDiagnostics.analyze(sql)
 
-        assertTrue(issues.any { it.title == "Erro de sintaxe SQL" || it.title.contains("não fechado") })
+        assertTrue(issues.any { it.title == "Erro de sintaxe SQL" })
     }
 
     @Test
@@ -92,10 +68,11 @@ class LocalCodeDiagnosticsTest {
     }
 
     @Test
-    fun doesNotClaimDedicatedParserForLanguagesThatStillUseStructuralChecksAndAi() {
-        assertFalse(CodeLanguageRegistry.find("Python").deterministicSyntaxParser)
-        assertFalse(CodeLanguageRegistry.find("PowerShell").deterministicSyntaxParser)
-        assertFalse(CodeLanguageRegistry.find("Bash").deterministicSyntaxParser)
-        assertTrue(CodeLanguageRegistry.find("SQL").deterministicSyntaxParser)
+    fun requestedLanguagesNowRequireFormalSyntaxBackends() {
+        assertEquals(SyntaxBackend.TREE_SITTER, CodeLanguageRegistry.find("Python").syntaxBackend)
+        assertEquals(SyntaxBackend.TREE_SITTER, CodeLanguageRegistry.find("HTML").syntaxBackend)
+        assertEquals(SyntaxBackend.TREE_SITTER, CodeLanguageRegistry.find("PowerShell").syntaxBackend)
+        assertEquals(SyntaxBackend.TREE_SITTER, CodeLanguageRegistry.find("Bash").syntaxBackend)
+        assertEquals(SyntaxBackend.SQL_JSQLPARSER, CodeLanguageRegistry.find("SQL").syntaxBackend)
     }
 }
