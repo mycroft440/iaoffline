@@ -16,7 +16,13 @@ object SqlSyntaxDiagnostics {
         if (code.isBlank()) return emptyList()
 
         return try {
-            CCJSqlParserUtil.parseStatements(code)
+            // In JSqlParser 5.3, enabling complex parsing is important here: the simple
+            // parseStatements overload can otherwise swallow the first parse failure and return
+            // null. With complex parsing enabled, an invalid statement is retried and the final
+            // parser error is propagated deterministically.
+            CCJSqlParserUtil.parseStatements(code) { parser ->
+                parser.withAllowComplexParsing(true)
+            }
             emptyList()
         } catch (error: JSQLParserException) {
             listOf(toIssue(code, error))
