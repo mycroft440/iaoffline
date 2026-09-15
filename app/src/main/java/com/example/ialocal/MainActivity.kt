@@ -21,6 +21,7 @@ import com.example.ialocal.ui.home.HomeViewModel
 import com.example.ialocal.ui.models.AiHomeScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
+import com.example.ialocal.ui.models.OfflineModelsScreen
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
 import com.example.ialocal.ui.theme.LocalAiTheme
@@ -74,9 +75,27 @@ private fun LocalAiApp(
                     }
                 },
                 onOpenChats = { navController.navigate("home") },
+                onOpenOfflineModels = { navController.navigate("offline-models") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
                 onExitApp = onExitApp,
+            )
+        }
+
+        composable("offline-models") {
+            val vm: ModelsViewModel = viewModel(
+                key = "offline-models-catalog",
+                factory = ModelsViewModel.Factory(
+                    container.modelRepository,
+                    container.modelManager,
+                    container.apiServer,
+                    container.apiSettings,
+                    container.integrationSelfTest,
+                ),
+            )
+            OfflineModelsScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -124,7 +143,13 @@ private fun LocalAiApp(
                         navController.navigate("home")
                     }
                 },
-                onOpenModels = { navController.navigate("models") },
+                onOpenModels = {
+                    if (!navController.popBackStack("ai-home", inclusive = false)) {
+                        navController.navigate("ai-home") {
+                            launchSingleTop = true
+                        }
+                    }
+                },
                 onOpenSettings = { navController.navigate("settings") },
             )
         }
