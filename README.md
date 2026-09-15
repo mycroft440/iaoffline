@@ -21,7 +21,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - Servidor limitado a 8 conexões.
 - Teste end-to-end dentro do app.
 - Editor anatômico de código com parser formal de sintaxe e análise semântica complementar por IA offline.
-- SQL usa JSqlParser 5.3; os demais perfis conhecidos usam gramáticas Tree-sitter.
+- SQL usa JSqlParser 5.3; o restante da cobertura formal usa o catálogo Tree-sitter, inclusive gramáticas reconhecidas dinamicamente por nome, extensão ou caminho.
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
@@ -29,11 +29,28 @@ Depois que um modelo foi baixado e instalado, a inferência não depende da inte
 
 O editor separa sintaxe de análise por IA. Uma linguagem só recebe o estado **Sintaxe válida** depois que o parser formal correspondente conclui sem erros. Se a gramática não puder ser carregada, o estado é **Parser formal indisponível** — o app não presume que o código está correto.
 
-SQL passa pelo JSqlParser. Kotlin, Java, Python, JavaScript, TypeScript, HTML, CSS, JSON, XML, YAML, Bash, PowerShell, C, C++, C#, Go, Rust, Swift, Dart, PHP, Ruby, Lua, R, Scala, Groovy, Perl, Haskell, Elixir, Erlang, Clojure, F#, VB.NET, Solidity, Objective-C, Assembly, Dockerfile, Makefile, Gradle Kotlin DSL, Markdown, TOML e INI passam pelo backend Tree-sitter registrado no editor.
+SQL passa pelo JSqlParser. Os perfis comuns mantêm nomes e aliases próprios, mas o registro não fica limitado à lista manual: qualquer gramática reconhecida pelo catálogo da versão instalada do `tree-sitter-language-pack` pode gerar dinamicamente um perfil Tree-sitter. Isso permite reconhecer também linguagens e formatos fora da lista original, inclusive por extensão ou caminho de arquivo.
+
+Para a distribuição Android, `scripts/prepare_tree_sitter_android.sh` recompila o AAR do Tree-sitter com `TSLP_LANGUAGES=all` por padrão, usando as fontes de parsers publicadas e verificadas pela mesma release. O objetivo é embutir no aplicativo o maior conjunto de gramáticas que a versão consegue compilar para Android, em vez de depender apenas do subconjunto reduzido do AAR Maven. Se um build precisar deliberadamente de um conjunto menor, `TREE_SITTER_LANGUAGES` pode receber uma lista separada por vírgulas.
 
 A IA local só é chamada depois que a sintaxe é aceita e não pode retornar diagnósticos da categoria `SYNTAX`; ela complementa com erros de tipo, referência, lógica, segurança e compatibilidade. Ao editar o texto ou trocar a linguagem, a aprovação sintática anterior é invalidada imediatamente.
 
 Para SQL, o parser valida gramática, não existência de tabelas, colunas ou objetos de um banco específico; validação semântica de schema exige conexão ou importação do schema correspondente.
+
+## Instalação
+
+A distribuição para aparelhos deve ser feita pelo APK assinado publicado em **GitHub Releases**, não pelo arquivo ZIP de artefatos do GitHub Actions e não pelo AAB.
+
+Quando a assinatura de release estiver configurada, o APK mais recente ficará disponível diretamente em:
+
+`https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
+
+Requisitos do APK atual:
+
+- Android 13 ou superior (`minSdk 33`).
+- CPU `arm64-v8a` ou `x86_64` para o runtime completo do llama.cpp.
+
+Se uma versão debug antiga do aplicativo já estiver instalada, desinstale-a uma única vez antes de instalar a primeira Release assinada. Depois disso, as Releases futuras usam a mesma chave e podem atualizar a instalação normalmente.
 
 ## Segurança e armazenamento
 
@@ -43,14 +60,54 @@ As pastas de modelos e downloads são excluídas do backup e da transferência d
 
 ## Build
 
-O AAR do binding Android do llama.cpp é gerado antes do build do aplicativo:
+Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 
 ```bash
+export ANDROID_NDK_HOME=/caminho/para/o/ndk
+cargo install cargo-ndk --locked
+./scripts/prepare_tree_sitter_android.sh
 ./scripts/prepare_llama_android.sh
-gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
+./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
 ```
 
-O workflow de CI executa essas etapas automaticamente.
+O script Tree-sitter usa `all` por padrão. Um conjunto menor pode ser solicitado, por exemplo:
+
+```bash
+TREE_SITTER_LANGUAGES=python,html,bash,powershell,php,c,cpp,csharp \
+  ./scripts/prepare_tree_sitter_android.sh
+```
+
+O workflow de CI executa essas etapas automaticamente. O `versionCode` e o `versionName` dos builds de CI são derivados do número da execução do GitHub Actions, evitando que versões novas continuem usando `versionCode = 1`.
+
+### Assinatura persistente das Releases
+
+O APK público é construído como `release` e só é publicado quando estes quatro GitHub Actions Secrets estão configurados no repositório:
+
+- `ANDROID_KEYSTORE_BASE64`: conteúdo Base64 do arquivo de keystore.
+- `ANDROID_KEY_ALIAS`: alias da chave.
+- `ANDROID_KEYSTORE_PASSWORD`: senha do keystore.
+- `ANDROID_KEY_PASSWORD`: senha da chave.
+
+Uma chave pode ser criada localmente com o `keytool` do JDK, por exemplo:
+
+```bash
+keytool -genkeypair -v \
+  -keystore ia-local-release.jks \
+  -alias ia-local \
+  -keyalg RSA \
+  -keysize 4096 \
+  -validity 10000
+```
+
+Depois, converta o arquivo para Base64 e salve o resultado em `ANDROID_KEYSTORE_BASE64`. Em Linux/GNU:
+
+```bash
+base64 -w 0 ia-local-release.jks
+```
+
+A chave privada não deve ser adicionada ao Git. O `.gitignore` bloqueia extensões comuns de keystore.
+
+Se os Secrets ainda não estiverem configurados, o CI continua executando testes e o build debug, mas **não publica** uma Release com assinatura efêmera. Isso evita voltar ao problema de cada execução produzir um APK incompatível com a atualização anterior.
 
 ## Limitações atuais
 
@@ -61,5 +118,6 @@ O workflow de CI executa essas etapas automaticamente.
 - PDF escaneado sem OCR.
 - Áudio dependente de reconhecimento on-device.
 - Parser sintático não substitui compilador, type checker ou schema real. Um arquivo pode ter sintaxe válida e ainda conter erro de tipo, símbolo inexistente, erro de link, dependência ausente ou erro semântico.
+- O modo `TSLP_LANGUAGES=all` maximiza a cobertura, mas aumenta tempo de CI e tamanho do AAR/APK; uma gramática que não compile para Android deve fazer o build falhar, não ser anunciada silenciosamente como disponível offline.
 
 Pronto para uso = CI verde + teste físico com pelo menos um GGUF real no aparelho-alvo.
