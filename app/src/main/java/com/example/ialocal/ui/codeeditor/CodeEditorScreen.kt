@@ -134,7 +134,7 @@ fun CodeEditorScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "O editor procura erros concretos como um compilador/linter: primeiro faz verificações locais e depois usa a IA offline para tipos, referências, lógica e compatibilidade.",
+                "A sintaxe é decidida por parser formal local, não pela IA. A IA offline só complementa com erros de tipo, referência, lógica, segurança e compatibilidade depois que a sintaxe é aceita.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -144,10 +144,19 @@ fun CodeEditorScreen(
                 onValueChange = viewModel::updateLanguage,
                 label = { Text("Linguagem") },
                 supportingText = {
-                    Text("Perfil: ${profile.displayName} · ${CodeLanguageRegistry.profiles.size} linguagens catalogadas")
+                    Text(
+                        "Perfil: ${profile.displayName} · parser: ${backendLabel(profile.syntaxBackend)} · " +
+                            "${CodeLanguageRegistry.profiles.size} linguagens catalogadas",
+                    )
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+            )
+
+            SyntaxStatusCard(
+                state = state.syntaxState,
+                parserName = state.syntaxParserName,
+                message = state.syntaxMessage,
             )
 
             OutlinedTextField(
@@ -181,7 +190,7 @@ fun CodeEditorScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (state.analyzing) "Diagnosticando" else "Diagnosticar erros")
+                    Text(if (state.analyzing) "Validando" else "Validar código")
                 }
 
                 if (state.issues.any { it.canAutoFix }) {
@@ -197,7 +206,7 @@ fun CodeEditorScreen(
 
             if (state.lastAppliedCount > 0) {
                 Text(
-                    "${state.lastAppliedCount} correção(ões) aplicada(s). Execute o diagnóstico novamente para confirmar.",
+                    "${state.lastAppliedCount} correção(ões) aplicada(s). Execute a validação novamente para confirmar.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -226,6 +235,54 @@ fun CodeEditorScreen(
             }
 
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun SyntaxStatusCard(
+    state: SyntaxValidationState,
+    parserName: String?,
+    message: String?,
+) {
+    if (state == SyntaxValidationState.IDLE && message == null) return
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = when (state) {
+                    SyntaxValidationState.IDLE -> "Sintaxe precisa ser validada novamente"
+                    SyntaxValidationState.CHECKING -> "Validando sintaxe…"
+                    SyntaxValidationState.VALID -> "Sintaxe válida"
+                    SyntaxValidationState.INVALID -> "Sintaxe inválida"
+                    SyntaxValidationState.PARSER_UNAVAILABLE -> "Parser formal indisponível"
+                },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = when (state) {
+                    SyntaxValidationState.INVALID,
+                    SyntaxValidationState.PARSER_UNAVAILABLE -> MaterialTheme.colorScheme.error
+                    SyntaxValidationState.VALID -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+            )
+            parserName?.let {
+                Text(
+                    "Parser: $it",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            message?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -317,6 +374,12 @@ private fun PatchPreview(
     }
 }
 
+private fun backendLabel(backend: SyntaxBackend): String = when (backend) {
+    SyntaxBackend.TREE_SITTER -> "Tree-sitter"
+    SyntaxBackend.SQL_JSQLPARSER -> "JSqlParser"
+    SyntaxBackend.NONE -> "não disponível"
+}
+
 private fun severityLabel(severity: CodeIssueSeverity): String = when (severity) {
     CodeIssueSeverity.ERROR -> "Erro"
     CodeIssueSeverity.WARNING -> "Alerta"
@@ -333,6 +396,6 @@ private fun categoryLabel(category: CodeIssueCategory): String = when (category)
 }
 
 private fun sourceLabel(source: CodeIssueSource): String = when (source) {
-    CodeIssueSource.LOCAL -> "análise local"
+    CodeIssueSource.LOCAL -> "parser local"
     CodeIssueSource.AI -> "IA local"
 }
