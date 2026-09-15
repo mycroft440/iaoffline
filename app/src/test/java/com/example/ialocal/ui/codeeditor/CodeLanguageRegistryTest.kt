@@ -1,5 +1,6 @@
 package com.example.ialocal.ui.codeeditor
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -80,5 +81,13 @@ class CodeLanguageRegistryTest {
         val unknown = CodeLanguageRegistry.find("linguagem-que-nao-existe")
 
         assertEquals(SyntaxBackend.NONE, unknown.syntaxBackend)
+    }
+
+    @Test
+    fun blankUnknownLanguageIsStillParserUnavailable() = runBlocking {
+        val unknown = CodeLanguageRegistry.find("linguagem-que-nao-existe")
+        val result = FormalSyntaxDiagnostics.analyze("", unknown)
+
+        assertEquals(SyntaxValidationState.PARSER_UNAVAILABLE, result.state)
     }
 }
