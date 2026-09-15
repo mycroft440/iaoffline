@@ -64,15 +64,14 @@ fun AiHomeScreen(
     viewModel: ModelsViewModel,
     onStartChat: () -> Unit,
     onOpenChats: () -> Unit,
+    onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
-    val download by viewModel.downloadState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
     var showExitDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(error) {
@@ -83,61 +82,31 @@ fun AiHomeScreen(
     }
 
     BackHandler {
-        if (selectedProvider != null) {
-            selectedProvider = null
-        } else {
-            showExitDialog = true
-        }
+        showExitDialog = true
     }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = {
-                    selectedProvider?.let { ProviderSectionTitle(it) }
-                        ?: Text("I.A Off-line")
-                },
-                navigationIcon = {
-                    if (selectedProvider != null) {
-                        IconButton(onClick = { selectedProvider = null }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
-                        }
-                    }
-                },
+                title = { Text("I.A Off-line") },
                 actions = {
-                    if (selectedProvider == null) {
-                        IconButton(onClick = onOpenSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = "Configurações")
-                        }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Configurações")
                     }
                 },
             )
         },
     ) { padding ->
-        if (selectedProvider == null) {
-            HomeContent(
-                modifier = Modifier.padding(padding),
-                installedModels = installedModels,
-                onStartChat = onStartChat,
-                onOpenChats = onOpenChats,
-                onDeleteModel = viewModel::delete,
-                onSelectProvider = { selectedProvider = it },
-                onOpenApi = onOpenApi,
-            )
-        } else {
-            ProviderModelsContent(
-                modifier = Modifier.padding(padding),
-                provider = requireNotNull(selectedProvider),
-                catalog = viewModel.catalog,
-                installedModels = installedModels,
-                download = download,
-                onInstall = viewModel::downloadCatalogModel,
-                onPause = viewModel::cancelDownload,
-                onEnd = viewModel::endDownload,
-                onDeleteModel = viewModel::delete,
-            )
-        }
+        HomeContent(
+            modifier = Modifier.padding(padding),
+            installedModels = installedModels,
+            onStartChat = onStartChat,
+            onOpenChats = onOpenChats,
+            onDeleteModel = viewModel::delete,
+            onOpenOfflineModels = onOpenOfflineModels,
+            onOpenApi = onOpenApi,
+        )
     }
 
     if (showExitDialog) {
@@ -156,6 +125,70 @@ fun AiHomeScreen(
             },
             properties = DialogProperties(dismissOnClickOutside = false),
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OfflineModelsScreen(
+    viewModel: ModelsViewModel,
+    onBack: () -> Unit,
+) {
+    val installedModels by viewModel.models.collectAsStateWithLifecycle()
+    val download by viewModel.downloadState.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
+
+    LaunchedEffect(error) {
+        error?.let {
+            snackbar.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
+
+    BackHandler {
+        if (selectedProvider != null) selectedProvider = null else onBack()
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    selectedProvider?.let { ProviderSectionTitle(it) }
+                        ?: Text("Baixar I.As offline")
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            if (selectedProvider != null) selectedProvider = null else onBack()
+                        },
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        if (selectedProvider == null) {
+            OfflineProvidersContent(
+                modifier = Modifier.padding(padding),
+                onSelectProvider = { selectedProvider = it },
+            )
+        } else {
+            ProviderModelsContent(
+                modifier = Modifier.padding(padding),
+                provider = requireNotNull(selectedProvider),
+                catalog = viewModel.catalog,
+                installedModels = installedModels,
+                download = download,
+                onInstall = viewModel::downloadCatalogModel,
+                onPause = viewModel::cancelDownload,
+                onEnd = viewModel::endDownload,
+                onDeleteModel = viewModel::delete,
+            )
+        }
     }
 }
 
@@ -208,7 +241,7 @@ private fun HomeContent(
     onStartChat: () -> Unit,
     onOpenChats: () -> Unit,
     onDeleteModel: (String) -> Unit,
-    onSelectProvider: (ModelProvider) -> Unit,
+    onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
 ) {
     LazyColumn(
@@ -258,21 +291,42 @@ private fun HomeContent(
 
         item {
             Spacer(Modifier.height(6.dp))
-            Text(
-                "Instale modelos off-line",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(vertical = 6.dp),
-            )
+            Button(
+                onClick = onOpenOfflineModels,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Baixar I.As offline")
+            }
         }
 
+        item { NavigationCard("Utilizar API", null, onOpenApi) }
+        item { Spacer(Modifier.height(18.dp)) }
+    }
+}
+
+@Composable
+private fun OfflineProvidersContent(
+    modifier: Modifier,
+    onSelectProvider: (ModelProvider) -> Unit,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Text(
+                text = "Empresas com modelos offline",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+            )
+        }
         item { NavigationCard(ModelProvider.GOOGLE.sectionLabel, ModelProvider.GOOGLE) { onSelectProvider(ModelProvider.GOOGLE) } }
         item { NavigationCard(ModelProvider.ALIBABA.sectionLabel, ModelProvider.ALIBABA) { onSelectProvider(ModelProvider.ALIBABA) } }
         item { NavigationCard(ModelProvider.META.sectionLabel, ModelProvider.META) { onSelectProvider(ModelProvider.META) } }
         item { NavigationCard(ModelProvider.MISTRAL.sectionLabel, ModelProvider.MISTRAL) { onSelectProvider(ModelProvider.MISTRAL) } }
         item { NavigationCard(ModelProvider.DEEPSEEK.sectionLabel, ModelProvider.DEEPSEEK) { onSelectProvider(ModelProvider.DEEPSEEK) } }
         item { NavigationCard(ModelProvider.MICROSOFT.sectionLabel, ModelProvider.MICROSOFT) { onSelectProvider(ModelProvider.MICROSOFT) } }
-        item { NavigationCard("Utilizar API", null, onOpenApi) }
         item { Spacer(Modifier.height(18.dp)) }
     }
 }
