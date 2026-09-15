@@ -21,16 +21,8 @@ data class FormalSyntaxResult(
 )
 
 object FormalSyntaxDiagnostics {
-    suspend fun analyze(code: String, language: CodeLanguageProfile): FormalSyntaxResult {
-        if (code.isBlank()) {
-            return FormalSyntaxResult(
-                state = SyntaxValidationState.VALID,
-                parserName = parserLabel(language),
-                message = "Arquivo vazio: não há erro de sintaxe para validar.",
-            )
-        }
-
-        return when (language.syntaxBackend) {
+    suspend fun analyze(code: String, language: CodeLanguageProfile): FormalSyntaxResult =
+        when (language.syntaxBackend) {
             SyntaxBackend.SQL_JSQLPARSER -> analyzeSql(code)
             SyntaxBackend.TREE_SITTER -> analyzeTreeSitter(code, language)
             SyntaxBackend.NONE -> FormalSyntaxResult(
@@ -38,7 +30,6 @@ object FormalSyntaxDiagnostics {
                 message = "Não há parser formal registrado para ${language.displayName}.",
             )
         }
-    }
 
     private fun analyzeSql(code: String): FormalSyntaxResult {
         val issues = SqlSyntaxDiagnostics.analyze(code)
@@ -178,12 +169,6 @@ object FormalSyntaxDiagnostics {
         val end = endByte.coerceIn(start.toLong(), bytes.size.toLong()).toInt()
         if (end <= start) return ""
         return bytes.copyOfRange(start, end).toString(Charsets.UTF_8)
-    }
-
-    private fun parserLabel(language: CodeLanguageProfile): String? = when (language.syntaxBackend) {
-        SyntaxBackend.SQL_JSQLPARSER -> "JSqlParser 5.3"
-        SyntaxBackend.TREE_SITTER -> "Tree-sitter"
-        SyntaxBackend.NONE -> null
     }
 
     private val treeSitterRegistry by lazy { LanguageRegistry.new() }
