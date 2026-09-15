@@ -59,11 +59,18 @@ dependencies {
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // Formal syntax parsers used by the offline code editor.
-    // SQL uses JSqlParser; the remaining registered languages use Tree-sitter grammars.
+    // SQL uses JSqlParser. For Tree-sitter, CI builds a local AAR with the maximum static
+    // grammar set through scripts/prepare_tree_sitter_android.sh. The Maven artifact remains a
+    // development fallback so Gradle sync still works before the preparation script is run.
     implementation("com.github.jsqlparser:jsqlparser:5.3") {
         exclude(group = "org.openjdk.jmh", module = "jmh-core")
     }
-    implementation("io.xberg.tslp.android:tree-sitter-language-pack-android:1.15.12")
+    val maximumTreeSitterAar = file("libs/tree-sitter-language-pack-android-max.aar")
+    if (maximumTreeSitterAar.isFile) {
+        implementation(files(maximumTreeSitterAar))
+    } else {
+        implementation("io.xberg.tslp.android:tree-sitter-language-pack-android:1.15.12")
+    }
 
     // Generated from the official ggml-org/llama.cpp Android binding.
     // Run scripts/prepare_llama_android.sh before building the app.
