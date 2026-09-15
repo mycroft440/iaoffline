@@ -13,19 +13,11 @@ class ChatRepository(
     fun observeMessages(conversationId: String): Flow<List<MessageWithAttachments>> =
         dao.observeMessages(conversationId)
 
-    suspend fun createConversation(): String {
-        val now = System.currentTimeMillis()
-        val id = UUID.randomUUID().toString()
-        dao.insertConversation(
-            ConversationEntity(
-                id = id,
-                title = "Nova conversa",
-                createdAt = now,
-                updatedAt = now,
-            )
-        )
-        return id
-    }
+    /**
+     * Reserves an id for a new chat without persisting an empty conversation.
+     * The row is created lazily when the first message is actually sent.
+     */
+    suspend fun createConversation(): String = UUID.randomUUID().toString()
 
     suspend fun renameConversation(id: String, title: String) {
         val clean = title.trim().ifBlank { "Nova conversa" }
@@ -46,6 +38,8 @@ class ChatRepository(
         status: MessageStatus = MessageStatus.COMPLETE,
     ): String {
         val now = System.currentTimeMillis()
+        ensureConversationExists(conversationId, now)
+
         val messageId = UUID.randomUUID().toString()
         dao.insertMessage(
             MessageEntity(
@@ -98,6 +92,17 @@ class ChatRepository(
     suspend fun listRecentConversations(limit: Int = 10): List<ConversationListItem> =
         dao.listRecentConversations(limit)
 
+    private suspend fun ensureConversationExists(conversationId: String, now: Long) {
+        if (dao.getConversation(conversationId) != null) return
+        dao.insertConversation(
+            ConversationEntity(
+                id = conversationId,
+                title = "Nova conversa",
+                createdAt = now,
+                updatedAt = now,
+            )
+        )
+    }
 
     private suspend fun maybeCreateAutomaticTitle(
         conversationId: String,
@@ -108,11 +113,7 @@ class ChatRepository(
         val conversation = dao.getConversation(conversationId) ?: return
         if (conversation.title != "Nova conversa") return
 
-        val title = content
-            .replace("\n", " ")
-            .trim()
-            .take(42)
-            .ifBlank { "Conversa com IA" }
+        val title = content.trim().ifBlank { "Conversa com IA" }
         dao.renameConversation(conversationId, title)
     }
 }
