@@ -20,8 +20,14 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.
 - Teste end-to-end dentro do app.
+- Editor anatômico de código com diagnósticos locais e análise complementar por IA offline.
+- SQL usa parser real (JSqlParser) para rejeitar sintaxe inválida sem depender da IA.
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
+
+## Editor de código e diagnósticos
+
+O editor separa diagnóstico determinístico de análise por IA. Erros locais de sintaxe são exibidos mesmo se o modelo de IA estiver indisponível. Para SQL, o app executa parsing real da gramática e retorna erro com linha/coluna quando disponível. Esse parser valida sintaxe, não existência de tabelas, colunas ou objetos de um banco específico; validação semântica de schema exige conexão ou importação do schema correspondente.
 
 ## Segurança e armazenamento
 
@@ -48,5 +54,6 @@ O workflow de CI executa essas etapas automaticamente.
 - O Qwen3.8 é multimodal na origem, mas esta integração usa apenas texto; suporte a imagem exigiria integrar o projetor multimodal correspondente.
 - PDF escaneado sem OCR.
 - Áudio dependente de reconhecimento on-device.
+- Os perfis de linguagem do editor não significam que todas as linguagens têm parser/compilador local dedicado; linguagens sem parser específico usam verificações estruturais locais e análise complementar por IA.
 
 Pronto para uso = CI verde + teste físico com pelo menos um GGUF real no aparelho-alvo.
