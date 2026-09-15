@@ -63,6 +63,7 @@ fun CodeEditorScreen(
     val errorHighlight = MaterialTheme.colorScheme.errorContainer
     val warningHighlight = MaterialTheme.colorScheme.tertiaryContainer
     val infoHighlight = MaterialTheme.colorScheme.secondaryContainer
+    val profile = CodeLanguageRegistry.find(state.language)
 
     val issueTransformation = remember(
         state.issues,
@@ -115,7 +116,7 @@ fun CodeEditorScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("Editor anatômico") },
+                title = { Text("Diagnóstico de código") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
@@ -133,7 +134,7 @@ fun CodeEditorScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "A IA local marca somente o trecho problemático e propõe um patch mínimo. Nada é alterado até você aplicar a correção.",
+                "O editor procura erros concretos como um compilador/linter: primeiro faz verificações locais e depois usa a IA offline para tipos, referências, lógica e compatibilidade.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -142,6 +143,9 @@ fun CodeEditorScreen(
                 value = state.language,
                 onValueChange = viewModel::updateLanguage,
                 label = { Text("Linguagem") },
+                supportingText = {
+                    Text("Perfil: ${profile.displayName} · ${CodeLanguageRegistry.profiles.size} linguagens catalogadas")
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -177,23 +181,23 @@ fun CodeEditorScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (state.analyzing) "Analisando" else "Analisar código")
+                    Text(if (state.analyzing) "Diagnosticando" else "Diagnosticar erros")
                 }
 
-                if (state.issues.isNotEmpty()) {
+                if (state.issues.any { it.canAutoFix }) {
                     OutlinedButton(
                         onClick = viewModel::applyAll,
                         enabled = !state.analyzing,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Aplicar todas")
+                        Text("Aplicar correções")
                     }
                 }
             }
 
             if (state.lastAppliedCount > 0) {
                 Text(
-                    "${state.lastAppliedCount} correção(ões) aplicada(s). Analise novamente para validar o resultado.",
+                    "${state.lastAppliedCount} correção(ões) aplicada(s). Execute o diagnóstico novamente para confirmar.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -202,7 +206,7 @@ fun CodeEditorScreen(
             if (state.issues.isNotEmpty()) {
                 HorizontalDivider()
                 Text(
-                    "Partes que precisam de atenção (${state.issues.size})",
+                    "Erros e alertas encontrados (${state.issues.size})",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -237,37 +241,48 @@ private fun IssueCard(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        issue.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        severityLabel(issue.severity) + " · linhas ${issue.startLine}-${issue.endLine}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            Text(
+                issue.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            val position = buildString {
+                append("linha ${issue.startLine}")
+                issue.column?.let { append(":$it") }
+                if (issue.endLine > issue.startLine) append("-${issue.endLine}")
             }
+            Text(
+                "${severityLabel(issue.severity)} · ${categoryLabel(issue.category)} · $position · ${sourceLabel(issue.source)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             if (issue.explanation.isNotBlank()) {
                 Text(issue.explanation, style = MaterialTheme.typography.bodyMedium)
             }
 
-            PatchPreview(label = "Trecho atual", code = issue.original)
-            PatchPreview(label = "Correção proposta", code = issue.replacement)
+            if (issue.original.isNotEmpty()) {
+                PatchPreview(label = "Trecho atual", code = issue.original)
+            }
+            if (issue.canAutoFix) {
+                PatchPreview(label = "Correção proposta", code = issue.replacement)
+            } else {
+                Text(
+                    "Revisão manual necessária: não há alteração automática considerada segura para este diagnóstico.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onLocate, modifier = Modifier.weight(1f)) {
                     Text("Localizar")
                 }
-                Button(onClick = onApply, modifier = Modifier.weight(1f)) {
-                    Text("Aplicar só esta")
+                if (issue.canAutoFix) {
+                    Button(onClick = onApply, modifier = Modifier.weight(1f)) {
+                        Text("Corrigir")
+                    }
                 }
             }
         }
@@ -306,4 +321,18 @@ private fun severityLabel(severity: CodeIssueSeverity): String = when (severity)
     CodeIssueSeverity.ERROR -> "Erro"
     CodeIssueSeverity.WARNING -> "Alerta"
     CodeIssueSeverity.INFO -> "Informação"
+}
+
+private fun categoryLabel(category: CodeIssueCategory): String = when (category) {
+    CodeIssueCategory.SYNTAX -> "Sintaxe"
+    CodeIssueCategory.TYPE -> "Tipo"
+    CodeIssueCategory.REFERENCE -> "Referência"
+    CodeIssueCategory.LOGIC -> "Lógica"
+    CodeIssueCategory.SECURITY -> "Segurança"
+    CodeIssueCategory.COMPATIBILITY -> "Compatibilidade"
+}
+
+private fun sourceLabel(source: CodeIssueSource): String = when (source) {
+    CodeIssueSource.LOCAL -> "análise local"
+    CodeIssueSource.AI -> "IA local"
 }
