@@ -9,9 +9,33 @@ import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.RuntimeState
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+
+data class ModelRecoverySummary(
+    val restored: Int,
+    val alreadyInstalled: Int,
+    val verificationWarnings: List<String>,
+    val failures: List<String>,
+) {
+    fun toUserMessage(): String = buildString {
+        when {
+            restored > 0 -> append("$restored IA(s) restaurada(s) sem novo download.")
+            alreadyInstalled > 0 && failures.isEmpty() -> append("As IAs encontradas já estão instaladas.")
+            else -> append("Nenhuma IA foi restaurada.")
+        }
+        if (verificationWarnings.isNotEmpty()) {
+            append(" ").append(verificationWarnings.size)
+                .append(" modelo(s) foram recuperados, mas precisam de uma nova tentativa de ativação por causa da verificação de execução.")
+        }
+        if (failures.isNotEmpty()) {
+            append(" Falhas: ").append(failures.joinToString(" | "))
+        }
+    }
+}
 
 /** Coordinates persistence, downloads and native runtime so activation follows a successful real inference. */
 class ModelManager(
@@ -22,6 +46,7 @@ class ModelManager(
     private val logger: AiEventLogger? = null,
 ) {
     private val appContext = context.applicationContext
+    private val persistentDownloads = PublicModelDownloads(appContext)
 
     val runtimeState: StateFlow<RuntimeState> = runtime.state
     val catalog: List<CatalogModel> = ModelCatalog.entries
@@ -39,6 +64,84 @@ class ModelManager(
             // Keep the imported file so the user can retry after freeing RAM.
             throw t
         }
+    }
+
+    /** Metadata-only detection; Android may hide orphaned Downloads rows after a reinstall. */
+    suspend fun discoverPersistedCatalogModels(): List<CatalogModel> = withContext(Dispatchers.IO) {
+        persistentDownloads.discoverCatalogModels()
+    }
+
+    /**
+     * Restores catalog GGUFs from Downloads/IAs Offline without network access. The selected tree
+     * grants the new installation access to files that survived the previous app uninstall.
+     */
+    suspend fun restorePersistedModels(
+        treeUri: Uri,
+        onProgress: (String) -> Unit = {},
+    ): ModelRecoverySummary {
+        check(!_downloadState.value.isBusy) {
+            "Pause o download atual antes de restaurar IAs salvas."
+        }
+        val candidates = persistentDownloads.catalogFilesFromTree(treeUri)
+        require(candidates.isNotEmpty()) {
+            "Nenhum GGUF reconhecido do catálogo foi encontrado em Downloads/${PublicModelDownloads.FOLDER_NAME}."
+        }
+
+        val installedCatalogIds = repository.getModels()
+            .mapNotNull(::catalogIdForInstalledModel)
+            .toMutableSet()
+        var restored = 0
+        var alreadyInstalled = 0
+        val verificationWarnings = mutableListOf<String>()
+        val failures = mutableListOf<String>()
+        val stagingDir = File(appContext.filesDir, "model-downloads").apply { mkdirs() }
+
+        candidates.forEach { candidate ->
+            val catalogModel = candidate.model
+            if (!installedCatalogIds.add(catalogModel.id)) {
+                alreadyInstalled += 1
+                return@forEach
+            }
+
+            val staging = File(stagingDir, "${catalogModel.id}.gguf")
+            try {
+                onProgress("Validando ${catalogModel.displayName} salvo em Downloads…")
+                persistentDownloads.copyVerifiedModelToStaging(candidate, staging)
+
+                onProgress("Restaurando ${catalogModel.displayName} no app…")
+                val imported = repository.importDownloadedGguf(staging, catalogModel)
+                restored += 1
+
+                onProgress("Testando ${catalogModel.displayName} no aparelho…")
+                try {
+                    verifyAndActivate(imported.id)
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (t: Throwable) {
+                    verificationWarnings += catalogModel.displayName
+                    logger?.error(
+                        "MODEL_RECOVERY",
+                        "${catalogModel.displayName} foi restaurado, mas falhou na verificação de execução.",
+                        t,
+                    )
+                }
+            } catch (cancel: CancellationException) {
+                staging.delete()
+                throw cancel
+            } catch (t: Throwable) {
+                staging.delete()
+                installedCatalogIds.remove(catalogModel.id)
+                failures += "${catalogModel.displayName}: ${t.message ?: "falha desconhecida"}"
+                logger?.error("MODEL_RECOVERY", "Falha ao restaurar ${catalogModel.displayName}", t)
+            }
+        }
+
+        return ModelRecoverySummary(
+            restored = restored,
+            alreadyInstalled = alreadyInstalled,
+            verificationWarnings = verificationWarnings,
+            failures = failures,
+        )
     }
 
     /** Starts a foreground-service-owned transfer so leaving the screen does not cancel it. */
@@ -60,6 +163,14 @@ class ModelManager(
         val catalogModel = ModelCatalog.requireById(catalogId)
         return try {
             val file = downloader.download(catalogModel) { _downloadState.value = it }
+            _downloadState.value = _downloadState.value.copy(
+                phase = ModelDownloadPhase.VERIFYING_FILE,
+                downloadedBytes = file.length(),
+                totalBytes = file.length(),
+                message = "Salvando cópia permanente em Downloads/${PublicModelDownloads.FOLDER_NAME}…",
+            )
+            persistentDownloads.ensurePersistedVerifiedModel(catalogModel, file)
+
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.IMPORTING,
                 downloadedBytes = file.length(),
@@ -148,7 +259,7 @@ class ModelManager(
             val verified = verifyAndActivate(imported.id)
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.COMPLETE,
-                message = "${catalogModel.displayName} instalado e verificado.",
+                message = "${catalogModel.displayName} instalado, verificado e salvo em Downloads/${PublicModelDownloads.FOLDER_NAME}.",
             )
             verified
         } catch (cancel: CancellationException) {
@@ -167,7 +278,7 @@ class ModelManager(
                 phase = ModelDownloadPhase.COMPLETE,
                 message = buildString {
                     append(catalogModel.displayName)
-                    append(" foi baixado e instalado. A ativação automática não foi concluída")
+                    append(" foi baixado, salvo de forma persistente e instalado. A ativação automática não foi concluída")
                     t.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
                     append(". Você pode tentar ativar novamente depois.")
                 },
@@ -210,9 +321,17 @@ class ModelManager(
     suspend fun retryVerification(modelId: String): AiModelEntity = verifyAndActivate(modelId)
 
     suspend fun delete(modelId: String) {
+        val model = repository.getModel(modelId)
+        val catalogModel = model?.let { installed ->
+            ModelCatalog.entries.firstOrNull { installed.apiModelId.startsWith(it.apiIdPrefix) }
+        }
         if (runtime.state.value.modelId == modelId) runtime.unload()
+        if (catalogModel != null) persistentDownloads.deletePersistedModel(catalogModel)
         repository.deleteModel(modelId)
     }
 
     suspend fun unload() = runtime.unload()
+
+    private fun catalogIdForInstalledModel(model: AiModelEntity): String? =
+        ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }?.id
 }
