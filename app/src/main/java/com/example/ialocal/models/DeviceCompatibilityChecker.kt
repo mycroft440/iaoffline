@@ -18,7 +18,11 @@ class DeviceCompatibilityChecker(private val context: Context) {
         val likelyFitsRam: Boolean?,
         val warnings: List<String>,
     ) {
-        val canImport: Boolean get() = supportedAbi && canStore
+        /**
+         * CPU/ABI and RAM are advisory only. If the GGUF can be stored, the app must let the
+         * native runtime perform the real compatibility test instead of rejecting by heuristic.
+         */
+        val canImport: Boolean get() = canStore
     }
 
     fun check(modelSizeBytes: Long?): Result {
@@ -29,7 +33,7 @@ class DeviceCompatibilityChecker(private val context: Context) {
         val supportedAbi = Build.SUPPORTED_ABIS.any { it == "arm64-v8a" || it == "x86_64" }
 
         val estimate = modelSizeBytes?.takeIf { it > 0 }?.let {
-            // File weights are normally memory-mapped, but context/KV/native buffers add headroom.
+            // Advisory estimate only. The real decision is made by llama.cpp while loading.
             (it * 1.20).roundToLong() + 512L * 1024 * 1024
         }
         val canStore = modelSizeBytes?.takeIf { it > 0 }?.let {
@@ -38,10 +42,16 @@ class DeviceCompatibilityChecker(private val context: Context) {
         val likelyFits = estimate?.let { it < memoryInfo.totalMem * MAX_RAM_SHARE }
 
         val warnings = buildList {
-            if (!supportedAbi) add("ABI $primaryAbi não é suportada pelo runtime Android atual.")
+            if (!supportedAbi) {
+                add("ABI $primaryAbi não está entre as ABI validadas do runtime. O app ainda tentará carregar o GGUF e deixará o llama.cpp decidir a compatibilidade real.")
+            }
             if (!canStore) add("Não há espaço livre suficiente para copiar este modelo para o armazenamento privado do app.")
-            if (likelyFits == false) add("O modelo parece grande para a RAM total deste aparelho e pode falhar ao carregar.")
-            if (memoryInfo.availMem < 1L * 1024 * 1024 * 1024) add("Há menos de 1 GB de RAM disponível agora; feche outros apps antes de carregar o modelo.")
+            if (likelyFits == false) {
+                add("A estimativa indica alta pressão de RAM, mas ela não bloqueia o modelo; o app ainda executará o teste real de carregamento.")
+            }
+            if (memoryInfo.availMem < 1L * 1024 * 1024 * 1024) {
+                add("Há menos de 1 GB de RAM disponível agora. O app ainda tentará carregar o modelo, e o Android pode encerrar o processo se faltar memória.")
+            }
         }
 
         return Result(

@@ -43,9 +43,7 @@ class ModelRepository(
             ?: throw IllegalArgumentException("Não foi possível abrir o modelo selecionado.")
         require(metadata.tensorCount > 0) { "O GGUF não contém tensors de modelo." }
         val compatibility = compatibilityChecker.check(sourceSize)
-        require(compatibility.supportedAbi) {
-            "Este aparelho usa ${compatibility.primaryAbi}; o runtime atual exige arm64-v8a ou x86_64."
-        }
+        compatibility.warnings.forEach { logger?.info("MODEL_COMPATIBILITY", it) }
         require(compatibility.canStore) { "Não há espaço livre suficiente para importar este modelo." }
 
         logger?.info(
@@ -126,9 +124,7 @@ class ModelRepository(
         val metadata = inspector.inspect(destination)
         require(metadata.tensorCount > 0) { "O arquivo copiado não contém tensors válidos." }
         val compatibility = compatibilityChecker.check(destination.length())
-        require(compatibility.supportedAbi) {
-            "Este aparelho usa ${compatibility.primaryAbi}; o runtime atual exige arm64-v8a ou x86_64."
-        }
+        compatibility.warnings.forEach { logger?.info("MODEL_COMPATIBILITY", it) }
 
         val now = System.currentTimeMillis()
         val metadataName = metadata.name?.trim().takeUnless { it.isNullOrBlank() }
