@@ -1,7 +1,6 @@
 package com.example.ialocal.ui.codeeditor
 
 import io.xberg.tslp.android.DiagnosticSeverity
-import io.xberg.tslp.android.LanguageRegistry
 import io.xberg.tslp.android.ProcessConfig
 import io.xberg.tslp.android.TreeSitterLanguagePack
 
@@ -115,7 +114,10 @@ object FormalSyntaxDiagnostics {
 
     private fun resolveLocalTreeSitterLanguage(language: CodeLanguageProfile): String? =
         treeSitterCandidates(language).firstOrNull { candidate ->
-            runCatching { treeSitterRegistry.hasParser(candidate) }.getOrDefault(false)
+            runCatching {
+                TreeSitterLanguagePack.hasLanguage(candidate) &&
+                    TreeSitterLanguagePack.getParser(candidate) != null
+            }.getOrDefault(false)
         }
 
     private fun resolveKnownTreeSitterLanguage(language: CodeLanguageProfile): String? =
@@ -171,7 +173,6 @@ object FormalSyntaxDiagnostics {
         return bytes.copyOfRange(start, end).toString(Charsets.UTF_8)
     }
 
-    private val treeSitterRegistry by lazy { LanguageRegistry.new() }
 
     private const val MAX_SOURCE_BYTES = 2_000_000L
     private const val PARSE_TIMEOUT_MS = 2_000L
