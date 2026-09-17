@@ -13,6 +13,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
   - Qwen3 8B Q4_K_M
   - Qwen3.8 27B Q4_K_M (opção avançada, ~19 GB; texto no app atual)
 - Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
+- Modelos concluídos do catálogo são mantidos em `Downloads/IAs Offline` para sobreviver à desinstalação do aplicativo.
+- Após reinstalar, os GGUFs persistentes podem ser restaurados sem novo download, com nova validação SHA-256 e inferência real.
 - SHA-256 fixado no app para cada GGUF do catálogo antes de qualquer carregamento nativo.
 - Importação manual de outros arquivos `.gguf` continua disponível.
 - Validação do cabeçalho GGUF, ABI, espaço disponível e estimativa de RAM.
@@ -24,6 +26,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - SQL usa JSqlParser 5.3; o restante da cobertura formal usa o catálogo Tree-sitter, inclusive gramáticas reconhecidas dinamicamente por nome, extensão ou caminho.
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
+
+Os modelos baixados pelo catálogo ficam também em `Downloads/IAs Offline`. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Em uma nova instalação, o app tenta detectar esses modelos e oferece a restauração. Como o Android não devolve automaticamente à nova instalação a propriedade dos arquivos criados pela instalação anterior, pode ser necessário autorizar a pasta `Downloads/IAs Offline` uma única vez pelo seletor de pastas do sistema. Essa restauração é totalmente local e não baixa o GGUF novamente.
 
 ## Editor de código e diagnósticos
 
@@ -54,9 +58,13 @@ Se uma versão debug antiga do aplicativo já estiver instalada, desinstale-a um
 
 ## Segurança e armazenamento
 
-Os downloads são gravados no armazenamento privado do aplicativo. Arquivos incompletos usam a extensão `.part`, podem ser retomados e não são registrados como modelo. Ao concluir, o app confere o SHA-256 esperado, relê o GGUF e só então executa o teste de inferência.
+Arquivos incompletos continuam no armazenamento privado do aplicativo com extensão `.part`, podem ser retomados e nunca são registrados como modelo. Ao concluir um download do catálogo, o app confere o SHA-256 esperado e só então garante uma cópia persistente em `Downloads/IAs Offline` antes de registrar a cópia privada usada pelo runtime.
 
-As pastas de modelos e downloads são excluídas do backup e da transferência de dados do Android para evitar cópias de vários gigabytes.
+A desinstalação remove a biblioteca privada, o banco local e os arquivos parciais, mas não remove o GGUF concluído em `Downloads/IAs Offline`. Depois de reinstalar, a ação **Restaurar IAs** permite autorizar essa pasta pelo Storage Access Framework quando necessário. Cada arquivo recuperado precisa corresponder exatamente a um item do catálogo, passa novamente pelo SHA-256 fixado no app, é relido como GGUF e só volta a ser ativado depois de uma inferência real no aparelho.
+
+Quando o usuário exclui explicitamente uma IA do catálogo dentro do aplicativo, o app remove tanto a cópia privada quanto a cópia persistente acessível em `Downloads/IAs Offline`. Assim, a persistência protege contra desinstalação do aplicativo, não contra uma ordem explícita de excluir o modelo.
+
+A biblioteca privada e os downloads parciais são excluídos do backup e da transferência de dados do Android para evitar cópias de vários gigabytes. Enquanto uma IA do catálogo estiver instalada, existe uma cópia persistente em Downloads e uma cópia privada para o runtime, portanto é necessário espaço para ambas.
 
 ## Build
 
