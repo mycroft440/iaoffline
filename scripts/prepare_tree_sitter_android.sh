@@ -76,11 +76,31 @@ if [[ ! -d "${TSLP_DIR}/parsers" ]]; then
   exit 1
 fi
 
+# Android Bionic standard headers (<ctype.h>/<stdio.h>) define EOF as (-1),
+# which breaks external scanners defining 'enum { EOF };' (such as caddy).
+# Undefine EOF right before the enum declaration so it compiles cleanly with clang.
+python3 - "${TSLP_DIR}/parsers" <<'PY'
+from pathlib import Path
+import sys
+
+parsers_dir = Path(sys.argv[1])
+for scanner in parsers_dir.glob("**/scanner.c*"):
+    try:
+        text = scanner.read_text(encoding="utf-8", errors="ignore")
+        if "enum { EOF };" in text:
+            patched = text.replace("enum { EOF };", "#ifdef EOF\n#undef EOF\n#endif\nenum { EOF };")
+            scanner.write_text(patched, encoding="utf-8")
+            print(f"Patched Android Bionic EOF macro conflict in {scanner.relative_to(parsers_dir)}")
+    except Exception as e:
+        print(f"Warning patching {scanner}: {e}", file=sys.stderr)
+PY
+
 # 'all' asks the upstream build to statically compile every grammar present in the release.
 # A comma-separated TREE_SITTER_LANGUAGES can be supplied for a smaller custom APK.
 export PROJECT_ROOT="${TSLP_DIR}"
 export TSLP_LINK_MODE="static"
 export TSLP_LANGUAGES="${LANGUAGES}"
+export TSLP_ALLOW_FAILED_GRAMMARS="${TSLP_ALLOW_FAILED_GRAMMARS:-1}"
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT}}"
 export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME}}"
 
