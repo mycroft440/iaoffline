@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
@@ -85,7 +84,6 @@ private fun LocalAiApp(
     val installedModels by container.modelRepository.models.collectAsStateWithLifecycle(initialValue = emptyList())
     val appScope = rememberCoroutineScope()
     var discoveredModels by remember { mutableStateOf<List<CatalogModel>>(emptyList()) }
-    var discoveryCompleted by remember { mutableStateOf(false) }
     var showRecoveryPrompt by remember { mutableStateOf(false) }
     var recoveryRunning by remember { mutableStateOf(false) }
     var recoveryProgress by remember { mutableStateOf<String?>(null) }
@@ -113,14 +111,9 @@ private fun LocalAiApp(
         }
     }
 
-    LaunchedEffect(installedModels.isEmpty(), discoveryCompleted) {
-        if (installedModels.isNotEmpty()) {
-            showRecoveryPrompt = false
-            return@LaunchedEffect
-        }
-        if (!discoveryCompleted) {
+    LaunchedEffect(Unit) {
+        if (container.modelRepository.getModels().isEmpty()) {
             discoveredModels = container.modelManager.discoverPersistedCatalogModels()
-            discoveryCompleted = true
             showRecoveryPrompt = discoveredModels.isNotEmpty()
         }
     }
@@ -327,7 +320,7 @@ private fun LocalAiApp(
     recoveryMessage?.let { message ->
         AlertDialog(
             onDismissRequest = { recoveryMessage = null },
-            title = { Text("Restauração concluída") },
+            title = { Text("Restauração de IAs") },
             text = { Text(message) },
             confirmButton = {
                 TextButton(onClick = { recoveryMessage = null }) {
