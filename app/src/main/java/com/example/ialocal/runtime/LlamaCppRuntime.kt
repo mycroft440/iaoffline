@@ -211,11 +211,11 @@ class LlamaCppRuntime(
     private fun nativeDetail(raw: String): String? {
         val detail = raw.substringAfter("Detalhe nativo:", missingDelimiterValue = "")
             .lineSequence()
-            .map(String::trim)
-            .filter(String::isNotBlank)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
             .joinToString(" · ")
             .trim()
-        return detail.takeIf(String::isNotBlank)?.take(MAX_NATIVE_DETAIL_CHARS)
+        return detail.takeIf { it.isNotBlank() }?.take(MAX_NATIVE_DETAIL_CHARS)
     }
 
     companion object {
