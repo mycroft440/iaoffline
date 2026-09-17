@@ -6,18 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,7 +28,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.data.ThemeMode
@@ -80,8 +72,6 @@ private fun LocalAiApp(
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
-    val currentEntry by navController.currentBackStackEntryAsState()
-    val installedModels by container.modelRepository.models.collectAsStateWithLifecycle(initialValue = emptyList())
     val appScope = rememberCoroutineScope()
     var discoveredModels by remember { mutableStateOf<List<CatalogModel>>(emptyList()) }
     var showRecoveryPrompt by remember { mutableStateOf(false) }
@@ -118,8 +108,7 @@ private fun LocalAiApp(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        NavHost(navController = navController, startDestination = "ai-home") {
+    NavHost(navController = navController, startDestination = "ai-home") {
             composable("ai-home") {
                 val vm: ModelsViewModel = viewModel(
                     key = "ai-home-models",
@@ -144,6 +133,8 @@ private fun LocalAiApp(
                     onOpenOfflineModels = { navController.navigate("offline-models") },
                     onOpenApi = { navController.navigate("models") },
                     onOpenSettings = { navController.navigate("settings") },
+                    onRestoreModels = { recoveryPicker.launch(null) },
+                    onOpenCodeEditor = { navController.navigate("code-editor") },
                     onExitApp = onExitApp,
                 )
             }
@@ -251,27 +242,6 @@ private fun LocalAiApp(
             }
         }
 
-        if (currentEntry?.destination?.route == "ai-home") {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(20.dp),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (installedModels.isEmpty()) {
-                    ExtendedFloatingActionButton(
-                        onClick = { recoveryPicker.launch(null) },
-                        icon = { Icon(Icons.Default.Restore, contentDescription = null) },
-                        text = { Text("Restaurar IAs") },
-                    )
-                }
-                FloatingActionButton(onClick = { navController.navigate("code-editor") }) {
-                    Icon(Icons.Default.Code, contentDescription = "Abrir editor de código")
-                }
-            }
-        }
-    }
 
     if (showRecoveryPrompt && discoveredModels.isNotEmpty() && !recoveryRunning) {
         AlertDialog(

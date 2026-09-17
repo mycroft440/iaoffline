@@ -1,5 +1,30 @@
 package com.example.ialocal.ui.models
 
+import com.example.ialocal.BuildConfig
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import android.os.StatFs
+import android.os.BatteryManager
+import android.content.Context
+import android.app.ActivityManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -67,6 +92,8 @@ fun AiHomeScreen(
     onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
+    onRestoreModels: () -> Unit,
+    onOpenCodeEditor: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
@@ -86,17 +113,8 @@ fun AiHomeScreen(
     }
 
     Scaffold(
+        containerColor = HomeBackground,
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                title = { Text("I.A Off-line") },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Configurações")
-                    }
-                },
-            )
-        },
     ) { padding ->
         HomeContent(
             modifier = Modifier.padding(padding),
@@ -106,6 +124,9 @@ fun AiHomeScreen(
             onDeleteModel = viewModel::delete,
             onOpenOfflineModels = onOpenOfflineModels,
             onOpenApi = onOpenApi,
+            onOpenSettings = onOpenSettings,
+            onRestoreModels = onRestoreModels,
+            onOpenCodeEditor = onOpenCodeEditor,
         )
     }
 
@@ -203,35 +224,31 @@ private fun ProviderSectionTitle(provider: ModelProvider) {
     }
 }
 
-@Composable
-private fun AppBrandHeader() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 14.dp, bottom = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            painter = painterResource(R.drawable.app_launcher),
-            contentDescription = "Logo IA Offline",
-            modifier = Modifier.size(72.dp),
-            contentScale = ContentScale.Fit,
-        )
-        Spacer(Modifier.width(14.dp))
-        Column {
-            Text(
-                text = "IA Offline",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Inteligência artificial no aparelho",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
+private val HomeBackground = Color(0xFF020408)
+private val HomeCard = Color(0xFF050811)
+private val HomeCardAlt = Color(0xFF090E1F)
+private val HomeText = Color(0xFFF8FAFC)
+private val HomeMuted = Color(0xFF94A3B8)
+private val HomeIndigo = Color(0xFF6366F1)
+private val HomeIndigoStrong = Color(0xFF4F46E5)
+private val HomeIndigoLight = Color(0xFFA5B4FC)
+private val HomeCyan = Color(0xFF22D3EE)
+private val HomeEmerald = Color(0xFF34D399)
+private val HomeRose = Color(0xFFFB7185)
+
+private data class HomeHardwareSnapshot(
+    val freeStorageBytes: Long,
+    val totalStorageBytes: Long,
+    val availableRamBytes: Long,
+    val totalRamBytes: Long,
+    val batteryPercent: Int,
+) {
+    val storageUsedFraction: Float
+        get() = if (totalStorageBytes <= 0L) 0f
+        else ((totalStorageBytes - freeStorageBytes).toFloat() / totalStorageBytes.toFloat()).coerceIn(0f, 1f)
+
+    val usedRamBytes: Long
+        get() = (totalRamBytes - availableRamBytes).coerceAtLeast(0L)
 }
 
 @Composable
@@ -243,66 +260,585 @@ private fun HomeContent(
     onDeleteModel: (String) -> Unit,
     onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onRestoreModels: () -> Unit,
+    onOpenCodeEditor: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item { AppBrandHeader() }
+    val context = LocalContext.current
+    val hardware = remember(context) { readHomeHardwareSnapshot(context) }
 
-        item {
-            Button(
-                onClick = onStartChat,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Iniciar chat com IA")
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(HomeBackground),
+    ) {
+        HomeHeader(
+            batteryPercent = hardware.batteryPercent,
+            onOpenSettings = onOpenSettings,
+        )
+
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
+                NeuralHeroCard(onStartChat = onStartChat)
             }
+
+            item {
+                InstalledModelsSection(
+                    models = installedModels,
+                    onOpenChats = onOpenChats,
+                    onOpenChat = onStartChat,
+                    onDeleteModel = onDeleteModel,
+                )
+            }
+
+            item {
+                HardwareCard(snapshot = hardware)
+            }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HomeActionCard(
+                        title = "Baixar I.As offline",
+                        subtitle = "Modelos GGUF otimizados para uso local",
+                        icon = Icons.Default.Download,
+                        iconBackground = Color(0xFF4F46E5),
+                        borderColor = Color(0xFF818CF8),
+                        backgroundColor = Color(0xFF090E1F),
+                        onClick = onOpenOfflineModels,
+                    )
+                    HomeActionCard(
+                        title = "Utilizar API",
+                        subtitle = "Configure e controle a API local do aparelho",
+                        icon = Icons.Default.Memory,
+                        iconBackground = Color(0xFF1E293B),
+                        borderColor = Color(0xFF64748B),
+                        backgroundColor = Color(0xFF0A0D18),
+                        onClick = onOpenApi,
+                    )
+                }
+            }
+
+            item { Spacer(Modifier.height(2.dp)) }
         }
 
-        item {
+        HomeFooter(
+            onRestoreModels = onRestoreModels,
+            onOpenCodeEditor = onOpenCodeEditor,
+        )
+    }
+}
+
+@Composable
+private fun HomeHeader(
+    batteryPercent: Int,
+    onOpenSettings: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text = "Minhas I.As >>",
+                text = "LOCAL ACTIVE",
+                color = HomeEmerald,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenChats)
-                    .padding(top = 4.dp, bottom = 4.dp),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                    .background(Color(0xFF052E2B), RoundedCornerShape(6.dp))
+                    .border(1.dp, HomeEmerald, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "$batteryPercent%",
+                color = HomeText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.ExtraBold,
             )
         }
 
-        if (installedModels.isEmpty()) {
-            item {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .background(HomeEmerald, RoundedCornerShape(50)),
+                )
                 Text(
-                    "Nenhuma I.A instalada",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 12.dp),
+                    text = "I.A Off-line",
+                    color = HomeText,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    text = "v${BuildConfig.VERSION_NAME}",
+                    color = Color(0xFFC7D2FE),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier
+                        .background(Color(0xFF312E81), RoundedCornerShape(50))
+                        .border(1.dp, Color(0xFF818CF8), RoundedCornerShape(50))
+                        .padding(horizontal = 9.dp, vertical = 3.dp),
                 )
             }
+
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(Color(0xFF0D1222), RoundedCornerShape(16.dp))
+                    .border(2.dp, Color(0xFF64748B), RoundedCornerShape(16.dp))
+                    .clickable(onClick = onOpenSettings),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Configurações",
+                    tint = HomeText,
+                    modifier = Modifier.size(21.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NeuralHeroCard(
+    onStartChat: () -> Unit,
+) {
+    val cardShape = RoundedCornerShape(24.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(HomeCard, cardShape)
+            .border(2.dp, Color(0x666366F1), cardShape)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                modifier = Modifier.size(66.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .background(Color(0xFF090E1C), RoundedCornerShape(16.dp))
+                        .border(2.dp, Color(0xFF818CF8), RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Memory,
+                        contentDescription = null,
+                        tint = Color(0xFFC7D2FE),
+                        modifier = Modifier.size(34.dp),
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(24.dp)
+                        .background(Color.Black, RoundedCornerShape(50))
+                        .border(2.dp, HomeRose, RoundedCornerShape(50)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.WifiOff,
+                        contentDescription = null,
+                        tint = HomeRose,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "IA On-Device",
+                    color = HomeText,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Black,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Execução neural local de alta velocidade, segura e 100% privada.",
+                    color = Color(0xFFCBD5E1),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+
+        val buttonShape = RoundedCornerShape(16.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    brush = Brush.linearGradient(
+                        listOf(HomeIndigoStrong, HomeIndigo, Color(0xFF7C3AED)),
+                    ),
+                    shape = buttonShape,
+                )
+                .border(2.dp, HomeIndigoLight, buttonShape)
+                .clickable(onClick = onStartChat)
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Chat,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(21.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Iniciar chat com IA",
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Black,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InstalledModelsSection(
+    models: List<AiModelEntity>,
+    onOpenChats: () -> Unit,
+    onOpenChat: () -> Unit,
+    onDeleteModel: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenChats)
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Minhas I.As",
+                    color = HomeText,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = Color(0xFF818CF8),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Text(
+                text = "${models.size} instalada${if (models.size == 1) "" else "s"}",
+                color = Color(0xFFC7D2FE),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier
+                    .background(Color(0xFF0C1224), RoundedCornerShape(50))
+                    .border(1.dp, Color(0x806366F1), RoundedCornerShape(50))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+
+        if (models.isEmpty()) {
+            EmptyModelsCard()
         } else {
-            items(installedModels, key = { "installed-${it.id}" }) { model ->
+            models.forEach { model ->
                 InstalledModelCard(
                     model = model,
-                    onOpenChat = onStartChat,
+                    onOpenChat = onOpenChat,
                     onDelete = { onDeleteModel(model.id) },
                 )
             }
         }
+    }
+}
 
-        item {
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = onOpenOfflineModels,
-                modifier = Modifier.fillMaxWidth(),
+@Composable
+private fun EmptyModelsCard() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF04060C), RoundedCornerShape(16.dp))
+            .border(2.dp, Color(0xFF334155), RoundedCornerShape(16.dp))
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .background(Color(0xFF0F172A), RoundedCornerShape(50))
+                .border(2.dp, Color(0xFF475569), RoundedCornerShape(50)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Memory,
+                contentDescription = null,
+                tint = Color(0xFF818CF8),
+                modifier = Modifier.size(25.dp),
+            )
+        }
+        Text(
+            text = "Nenhum modelo baixado",
+            color = HomeText,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = "Baixe pesos quantizados em GGUF para uso sem internet.",
+            color = HomeMuted,
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun HardwareCard(snapshot: HomeHardwareSnapshot) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF040711), RoundedCornerShape(16.dp))
+            .border(2.dp, Color(0xFF1E293B), RoundedCornerShape(16.dp))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Color(0xFF083344), RoundedCornerShape(12.dp))
+                    .border(2.dp, HomeCyan, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
             ) {
-                Text("Baixar I.As offline")
+                Icon(
+                    imageVector = Icons.Default.Storage,
+                    contentDescription = null,
+                    tint = Color(0xFF67E8F9),
+                    modifier = Modifier.size(21.dp),
+                )
+            }
+            Column {
+                Text(
+                    text = "Armazenamento Local",
+                    color = HomeMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "${formatHomeGb(snapshot.freeStorageBytes)} GB Livres",
+                    color = HomeText,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Black,
+                )
             }
         }
 
-        item { NavigationCard("Utilizar API", null, onOpenApi) }
-        item { Spacer(Modifier.height(18.dp)) }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = "RAM: ${formatHomeGb(snapshot.usedRamBytes)} / ${formatHomeGb(snapshot.totalRamBytes)} GB",
+                color = Color(0xFFCBD5E1),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(5.dp))
+            Box(
+                modifier = Modifier
+                    .width(96.dp)
+                    .height(8.dp)
+                    .background(Color(0xFF1E293B), RoundedCornerShape(50))
+                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(50)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(snapshot.storageUsedFraction)
+                        .height(8.dp)
+                        .background(
+                            Brush.horizontalGradient(listOf(HomeIndigo, HomeCyan)),
+                            RoundedCornerShape(50),
+                        ),
+                )
+            }
+        }
     }
 }
+
+@Composable
+private fun HomeActionCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    iconBackground: Color,
+    borderColor: Color,
+    backgroundColor: Color,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(backgroundColor, shape)
+            .border(2.dp, borderColor, shape)
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(iconBackground, RoundedCornerShape(12.dp))
+                    .border(1.dp, borderColor, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp))
+            }
+            Column {
+                Text(
+                    text = title,
+                    color = HomeText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    text = subtitle,
+                    color = if (borderColor == Color(0xFF818CF8)) Color(0xFFC7D2FE) else HomeMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .background(Color(0xFF111827), RoundedCornerShape(9.dp))
+                .border(1.dp, borderColor.copy(alpha = 0.55f), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = null,
+                tint = borderColor,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeFooter(
+    onRestoreModels: () -> Unit,
+    onOpenCodeEditor: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, HomeBackground, Color.Black),
+                ),
+            )
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .background(Color(0xFF0F172E), RoundedCornerShape(16.dp))
+                .border(2.dp, Color(0xFF818CF8), RoundedCornerShape(16.dp))
+                .clickable(onClick = onRestoreModels)
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Restore,
+                contentDescription = null,
+                tint = Color(0xFFA5B4FC),
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                text = "Restaurar IAs",
+                color = Color(0xFFE0E7FF),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Black,
+            )
+        }
+
+        Spacer(Modifier.width(12.dp))
+
+        Box(
+            modifier = Modifier
+                .size(50.dp)
+                .background(Color(0xFF0A1424), RoundedCornerShape(16.dp))
+                .border(2.dp, HomeCyan, RoundedCornerShape(16.dp))
+                .clickable(onClick = onOpenCodeEditor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Code,
+                contentDescription = "Abrir editor de código",
+                tint = Color(0xFF67E8F9),
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+private fun readHomeHardwareSnapshot(context: Context): HomeHardwareSnapshot {
+    val activityManager = context.getSystemService(ActivityManager::class.java)
+    val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+    val storage = StatFs(context.filesDir.absolutePath)
+    val battery = context.getSystemService(BatteryManager::class.java)
+        .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        .coerceIn(0, 100)
+
+    return HomeHardwareSnapshot(
+        freeStorageBytes = storage.availableBytes,
+        totalStorageBytes = storage.totalBytes,
+        availableRamBytes = memory.availMem,
+        totalRamBytes = memory.totalMem,
+        batteryPercent = battery,
+    )
+}
+
+private fun formatHomeGb(bytes: Long): String =
+    "%.1f".format(bytes / (1024.0 * 1024.0 * 1024.0))
 
 @Composable
 private fun OfflineProvidersContent(
@@ -364,39 +900,79 @@ private fun InstalledModelCard(
     val provider = model.catalogProvider()
     var confirmDelete by remember(model.id) { mutableStateOf(false) }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(HomeCardAlt, RoundedCornerShape(16.dp))
+            .border(2.dp, Color(0x806366F1), RoundedCornerShape(16.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(HomeIndigoStrong, RoundedCornerShape(12.dp))
+                .border(1.dp, HomeIndigoLight, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                provider?.let {
-                    ProviderLogo(provider = it, size = 42.dp)
-                    Spacer(Modifier.width(12.dp))
-                }
-                Column(Modifier.weight(1f)) {
-                    provider?.let {
-                        Text(
-                            it.brandName(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Text(model.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        "${formatBytes(model.sizeBytes)} · ${if (model.isActive) "I.A ativa" else "I.A instalada"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (model.isActive) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = "I.A ativa", tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onOpenChat, modifier = Modifier.weight(1f)) { Text("Abrir chat") }
-                OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f)) { Text("Desinstalar") }
-            }
+            Text(
+                text = "AI",
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Black,
+            )
+        }
+
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = model.name,
+                color = HomeText,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Black,
+            )
+            Text(
+                text = buildString {
+                    provider?.let { append(it.brandName()).append(" · ") }
+                    append(formatBytes(model.sizeBytes))
+                    if (model.isActive) append(" · ativa")
+                },
+                color = Color(0xFFC7D2FE),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .background(Color(0xFF059669), RoundedCornerShape(12.dp))
+                .border(1.dp, Color(0xFF6EE7B7), RoundedCornerShape(12.dp))
+                .clickable(onClick = onOpenChat)
+                .padding(horizontal = 13.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Usar",
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Black,
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(Color(0x663F0B1A), RoundedCornerShape(12.dp))
+                .border(1.dp, HomeRose.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                .clickable { confirmDelete = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = "Remover ${model.name}",
+                tint = Color(0xFFFDA4AF),
+                modifier = Modifier.size(17.dp),
+            )
         }
     }
 
