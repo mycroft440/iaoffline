@@ -131,18 +131,18 @@ class PublicModelDownloads(context: Context) {
     }
 
     /** Saves a persistable SAF grant and returns catalog GGUFs found in the selected folder/tree. */
-    fun catalogFilesFromTree(treeUri: Uri): List<PersistedCatalogFile> {
+    suspend fun catalogFilesFromTree(treeUri: Uri): List<PersistedCatalogFile> = withContext(Dispatchers.IO) {
         rememberTreeAccess(treeUri)
         val files = linkedMapOf<String, PersistedCatalogFile>()
         modelFolders(treeUri).forEach { folder ->
-            folder.listFiles().forEach { document ->
-                if (!document.isFile) return@forEach
-                val model = catalogModelForFileName(document.name) ?: return@forEach
+            folder.listFiles().forEach documentLoop@{ document ->
+                if (!document.isFile) return@documentLoop
+                val model = catalogModelForFileName(document.name) ?: return@documentLoop
                 val size = document.length().takeIf { it > 0L }
                 files[model.id] = PersistedCatalogFile(model, document.uri, size)
             }
         }
-        return files.values.toList()
+        files.values.toList()
     }
 
     suspend fun copyVerifiedModelToStaging(candidate: PersistedCatalogFile, destination: File): File =
@@ -158,7 +158,8 @@ class PublicModelDownloads(context: Context) {
                 val digest = MessageDigest.getInstance("SHA-256")
                 var copied = 0L
                 resolver.openInputStream(candidate.uri)?.buffered(MODEL_COPY_BUFFER)?.use { input ->
-                    FileOutputStream(destination).buffered(MODEL_COPY_BUFFER).use { output ->
+                    FileOutputStream(destination).use { fileOutput ->
+                        val output = fileOutput.buffered(MODEL_COPY_BUFFER)
                         val buffer = ByteArray(MODEL_COPY_BUFFER)
                         while (true) {
                             val read = input.read(buffer)
@@ -168,6 +169,7 @@ class PublicModelDownloads(context: Context) {
                             copied += read
                         }
                         output.flush()
+                        fileOutput.fd.sync()
                     }
                 } ?: throw IllegalStateException("O Android não permitiu abrir ${candidate.model.fileName}.")
 
@@ -216,7 +218,14 @@ class PublicModelDownloads(context: Context) {
 
     private fun rememberTreeAccess(treeUri: Uri) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        runCatching { resolver.takePersistableUriPermission(treeUri, flags) }
+        try {
+            resolver.takePersistableUriPermission(treeUri, flags)
+        } catch (security: SecurityException) {
+            throw IllegalStateException(
+                "O Android não concedeu acesso persistente à pasta selecionada. Selecione Downloads/$FOLDER_NAME e tente novamente.",
+                security,
+            )
+        }
         preferences.edit().putString(PREF_TREE_URI, treeUri.toString()).apply()
     }
 
