@@ -189,12 +189,18 @@ class LlamaCppRuntime(
     private fun humanize(t: Throwable): String {
         val raw = t.message.orEmpty()
         return when {
-            raw.contains("após as tentativas de compatibilidade", ignoreCase = true) ->
-                "O runtime não conseguiu carregar este GGUF nem no modo otimizado nem no modo de compatibilidade em CPU. Feche outros apps para liberar RAM e tente novamente; se persistir, o arquivo pode ser incompatível com este build do llama.cpp."
+            raw.contains("após as tentativas de compatibilidade", ignoreCase = true) -> buildString {
+                append("O runtime não conseguiu carregar este GGUF nos modos otimizado, mmap conservador e compatibilidade em CPU.")
+                nativeDetail(raw)?.let { append(" Detalhe técnico: ").append(it) }
+                append(" Feche outros apps para liberar RAM e tente novamente; se persistir, o detalhe acima indica a causa reportada pelo llama.cpp.")
+            }
             t::class.java.simpleName.contains("UnsupportedArchitecture", ignoreCase = true) ->
                 "O runtime nativo recusou o GGUF durante o carregamento. Essa exceção não identifica, por si só, uma arquitetura incompatível; tente liberar RAM e carregar novamente."
-            raw.contains("Failed to prepare resources", ignoreCase = true) ->
-                "O modelo foi carregado, mas o aparelho não conseguiu criar nem o contexto reduzido de inferência. Libere RAM fechando outros apps e tente novamente."
+            raw.contains("Failed to prepare resources", ignoreCase = true) -> buildString {
+                append("O modelo foi carregado, mas o aparelho não conseguiu criar nem o contexto reduzido de inferência.")
+                nativeDetail(raw)?.let { append(" Detalhe técnico: ").append(it) }
+                append(" Libere RAM fechando outros apps e tente novamente.")
+            }
             raw.contains("Cannot load model", ignoreCase = true) ->
                 "O runtime ainda não estava pronto para carregar o modelo."
             raw.isNotBlank() -> raw
@@ -202,7 +208,18 @@ class LlamaCppRuntime(
         }
     }
 
+    private fun nativeDetail(raw: String): String? {
+        val detail = raw.substringAfter("Detalhe nativo:", missingDelimiterValue = "")
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .joinToString(" · ")
+            .trim()
+        return detail.takeIf(String::isNotBlank)?.take(MAX_NATIVE_DETAIL_CHARS)
+    }
+
     companion object {
         const val FIXED_TEMPERATURE = 0.3f
+        private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
 }
