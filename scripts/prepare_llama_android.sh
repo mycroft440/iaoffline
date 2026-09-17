@@ -24,7 +24,8 @@ fi
 # The upstream binding also maps every native load failure to
 # UnsupportedArchitectureException, even when the actual cause is memory or an
 # Android backend/load-mode problem. Replace that with a neutral IOException;
-# the native patch below performs compatibility fallbacks before giving up.
+# the native patch below performs compatibility fallbacks before giving up and
+# exposes the relevant native llama.cpp diagnostics to Kotlin.
 python3 - "${ENGINE_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -40,12 +41,20 @@ def replace_once(old: str, new: str) -> None:
     text = text.replace(old, new, 1)
 
 replace_once(
+    "    @FastNative\n    private external fun load(modelPath: String): Int\n\n    @FastNative\n    private external fun prepare(): Int",
+    "    @FastNative\n    private external fun load(modelPath: String): Int\n\n    private external fun lastError(): String\n\n    @FastNative\n    private external fun prepare(): Int",
+)
+replace_once(
     "    @Volatile\n    private var _cancelGeneration = false\n",
     "    @Volatile\n    private var _cancelGeneration = false\n    private var _nativeModelLoaded = false\n",
 )
 replace_once(
     "                load(pathToModel).let {\n                    // TODO-han.yin: find a better way to pass other error codes\n                    if (it != 0) throw UnsupportedArchitectureException()\n                }\n                prepare().let {",
-    "                load(pathToModel).let {\n                    if (it != 0) {\n                        throw IOException(\"O backend nativo não conseguiu carregar o arquivo GGUF após as tentativas de compatibilidade.\")\n                    }\n                }\n                _nativeModelLoaded = true\n                prepare().let {",
+    "                load(pathToModel).let {\n                    if (it != 0) {\n                        val nativeDetail = runCatching { lastError().trim() }.getOrDefault(\"\").take(3000)\n                        throw IOException(buildString {\n                            append(\"O backend nativo não conseguiu carregar o arquivo GGUF após as tentativas de compatibilidade.\")\n                            if (nativeDetail.isNotBlank()) append(\" Detalhe nativo: \" + nativeDetail)\n                        })\n                    }\n                }\n                _nativeModelLoaded = true\n                prepare().let {",
+)
+replace_once(
+    "                prepare().let {\n                    if (it != 0) throw IOException(\"Failed to prepare resources\")\n                }",
+    "                prepare().let {\n                    if (it != 0) {\n                        val nativeDetail = runCatching { lastError().trim() }.getOrDefault(\"\").take(3000)\n                        throw IOException(buildString {\n                            append(\"Failed to prepare resources\")\n                            if (nativeDetail.isNotBlank()) append(\". Detalhe nativo: \" + nativeDetail)\n                        })\n                    }\n                }",
 )
 replace_once(
     "                    unload()\n\n                    _state.value = InferenceEngine.State.Initialized",
@@ -68,9 +77,15 @@ PY
 # 1. Keep model weights on CPU. The packaged Android binding ships CPU variants,
 #    and automatic layer offload can select a backend/buffer combination that a
 #    specific device cannot allocate.
-# 2. Try the normal mmap + optimized CPU buffers first.
-# 3. If that fails, retry using ordinary CPU buffers and regular file reads.
-# 4. If model loading succeeds but an 8K context cannot be allocated, retry with
+# 2. Try normal mmap + optimized CPU buffers first.
+# 3. If that fails, keep mmap but disable extra/repacked CPU buffers. This is the
+#    low-RAM fallback: mapped weights stay file-backed instead of forcing a full
+#    ordinary-I/O copy into process memory.
+# 4. If that still fails, retry with conservative CPU buffers + regular file I/O.
+# 5. Capture warning/error output from llama.cpp and expose it to Kotlin so a
+#    device-specific load failure is diagnosable instead of becoming one generic
+#    UnsupportedArchitectureException.
+# 6. If model loading succeeds but an 8K context cannot be allocated, retry with
 #    4K and 2K contexts. This keeps smaller-memory phones usable instead of
 #    reporting the model itself as incompatible.
 python3 - "${AI_CHAT_FILE}" <<'PY'
@@ -88,7 +103,58 @@ def replace_once(old: str, new: str) -> None:
     text = text.replace(old, new, 1)
 
 replace_once(
+    "#include <string>\n#include <unistd.h>",
+    "#include <string>\n#include <mutex>\n#include <unistd.h>",
+)
+replace_once(
+    "static common_sampler                   * g_sampler;\n\nextern \"C\"\nJNIEXPORT void JNICALL\nJava_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {\n    // Set llama log handler to Android\n    llama_log_set(aichat_android_log_callback, nullptr);",
+    "static common_sampler                   * g_sampler;\n\n"
+    "static std::mutex                         g_native_error_mutex;\n"
+    "static std::string                        g_last_native_error;\n"
+    "constexpr size_t                          MAX_NATIVE_ERROR_CHARS = 6000;\n\n"
+    "static void clear_native_error() {\n"
+    "    std::lock_guard<std::mutex> lock(g_native_error_mutex);\n"
+    "    g_last_native_error.clear();\n"
+    "}\n\n"
+    "static void append_native_error(const char *text) {\n"
+    "    if (text == nullptr || text[0] == '\\0') return;\n"
+    "    std::lock_guard<std::mutex> lock(g_native_error_mutex);\n"
+    "    g_last_native_error.append(text);\n"
+    "    if (g_last_native_error.empty() || g_last_native_error.back() != '\\n') {\n"
+    "        g_last_native_error.push_back('\\n');\n"
+    "    }\n"
+    "    if (g_last_native_error.size() > MAX_NATIVE_ERROR_CHARS) {\n"
+    "        g_last_native_error.erase(0, g_last_native_error.size() - MAX_NATIVE_ERROR_CHARS);\n"
+    "    }\n"
+    "}\n\n"
+    "static void capturing_android_log_callback(enum ggml_log_level level, const char *text, void *user) {\n"
+    "    aichat_android_log_callback(level, text, user);\n"
+    "    if (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN) {\n"
+    "        append_native_error(text);\n"
+    "    }\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT void JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {\n"
+    "    // Set llama log handler to Android and preserve warnings/errors for the app.\n"
+    "    llama_log_set(capturing_android_log_callback, nullptr);",
+)
+replace_once(
+    "    LOGi(\"Backend initiated; Log handler set.\");\n}\n\nextern \"C\"\nJNIEXPORT jint JNICALL\nJava_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {",
+    "    LOGi(\"Backend initiated; Log handler set.\");\n}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jstring JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_lastError(JNIEnv *env, jobject /*unused*/) {\n"
+    "    std::lock_guard<std::mutex> lock(g_native_error_mutex);\n"
+    "    return env->NewStringUTF(g_last_native_error.c_str());\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {",
+)
+replace_once(
     "    llama_model_params model_params = llama_model_default_params();\n\n    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);",
+    "    clear_native_error();\n"
     "    llama_model_params model_params = llama_model_default_params();\n"
     "    // Android app inference is CPU-first. Avoid accidental device offload\n"
     "    // and keep the first attempt on the portable mmap path.\n"
@@ -105,14 +171,19 @@ replace_once(
     "    }",
     "    auto *model = llama_model_load_from_file(model_path, model_params);\n"
     "    if (!model) {\n"
-    "        LOGw(\"%s: optimized mmap load failed; retrying with conservative CPU buffers and regular I/O\", __func__);\n"
+    "        append_native_error(\"[IA Offline] mmap otimizado falhou; tentando mmap sem buffers extras.\");\n"
     "        model_params.use_extra_bufts = false;\n"
+    "        model = llama_model_load_from_file(model_path, model_params);\n"
+    "    }\n"
+    "    if (!model) {\n"
+    "        append_native_error(\"[IA Offline] mmap conservador falhou; tentando I/O regular em CPU.\");\n"
     "        model_params.load_mode = LLAMA_LOAD_MODE_NONE;\n"
     "        model = llama_model_load_from_file(model_path, model_params);\n"
     "    }\n"
     "    env->ReleaseStringUTFChars(jmodel_path, model_path);\n"
     "    if (!model) {\n"
-    "        LOGe(\"%s: model load failed in both Android compatibility modes\", __func__);\n"
+    "        append_native_error(\"[IA Offline] o carregamento falhou nos três modos de compatibilidade.\");\n"
+    "        LOGe(\"%s: model load failed in all Android compatibility modes\", __func__);\n"
     "        return 1;\n"
     "    }",
 )
