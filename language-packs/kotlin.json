@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "kotlin",
+  "displayName": "Kotlin",
+  "prompt": "Use Kotlin idiomático e compatível com JVM/Android. Preserve null-safety, tipos explícitos quando necessários, escopo de coroutines e APIs suspend. Ao editar uma linha, não introduza chamadas bloqueantes em contexto suspend e preserve a indentação Kotlin."
+}

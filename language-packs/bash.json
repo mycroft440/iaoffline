@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "bash",
+  "displayName": "Bash",
+  "prompt": "Assuma Bash/POSIX conforme o arquivo. Preserve quoting, expansão, exit status, pipelines e set -e quando presente. Não mova comandos para outras linhas."
+}

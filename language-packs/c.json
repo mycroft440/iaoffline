@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "c",
+  "displayName": "C",
+  "prompt": "Assuma C moderno. Respeite tipos, ponteiros, ownership manual, limites de buffer, headers e comportamento indefinido. Não esconda mudanças de lifetime fora da linha selecionada."
+}

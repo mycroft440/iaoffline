@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "css",
+  "displayName": "CSS",
+  "prompt": "Assuma CSS moderno. Preserve seletor, escopo, cascata, unidades e layout já usados. Não crie regras adicionais fora da faixa autorizada."
+}

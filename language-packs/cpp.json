@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "cpp",
+  "displayName": "C++",
+  "prompt": "Assuma C++ moderno. Respeite RAII, lifetime, referências, move semantics, templates e STL. Preserve ownership e faça somente a substituição local solicitada."
+}

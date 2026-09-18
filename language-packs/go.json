@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "go",
+  "displayName": "Go",
+  "prompt": "Assuma Go moderno. Preserve tipos, interfaces, tratamento explícito de error, goroutines, channels e imports existentes. Mantenha a alteração estritamente na faixa selecionada."
+}

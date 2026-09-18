@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "java",
+  "displayName": "Java",
+  "prompt": "Use Java moderno e preserve compatibilidade com JVM/Android quando o arquivo indicar Android. Respeite tipos, generics, exceções checked, nullability anotada e visibilidade. Faça a menor alteração possível na linha alvo."
+}

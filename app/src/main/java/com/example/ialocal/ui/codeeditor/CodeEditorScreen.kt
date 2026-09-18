@@ -1,8 +1,10 @@
 package com.example.ialocal.ui.codeeditor
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,10 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,16 +42,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -58,50 +57,26 @@ fun CodeEditorScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val editorFocus = remember { FocusRequester() }
     var editorValue by remember { mutableStateOf(TextFieldValue(state.code)) }
-    val errorHighlight = MaterialTheme.colorScheme.errorContainer
-    val warningHighlight = MaterialTheme.colorScheme.tertiaryContainer
-    val infoHighlight = MaterialTheme.colorScheme.secondaryContainer
-    val profile = CodeLanguageRegistry.find(state.language)
 
-    val issueTransformation = remember(
-        state.issues,
-        state.code,
-        errorHighlight,
-        warningHighlight,
-        infoHighlight,
-    ) {
-        VisualTransformation { source ->
-            val highlighted = buildAnnotatedString {
-                append(source)
-                state.issues.forEach { issue ->
-                    CodePatchEngine.selectionRange(source.text, issue)?.let { range ->
-                        val start = range.start.coerceIn(0, source.length)
-                        val end = range.end.coerceIn(start, source.length)
-                        if (end > start) {
-                            addStyle(
-                                SpanStyle(
-                                    background = when (issue.severity) {
-                                        CodeIssueSeverity.ERROR -> errorHighlight
-                                        CodeIssueSeverity.WARNING -> warningHighlight
-                                        CodeIssueSeverity.INFO -> infoHighlight
-                                    },
-                                ),
-                                start = start,
-                                end = end,
-                            )
-                        }
-                    }
-                }
-            }
-            TransformedText(highlighted, OffsetMapping.Identity)
-        }
+    val targetRange = remember(editorValue.text, editorValue.selection) {
+        CodeLineEditEngine.lineRangeForSelection(
+            code = editorValue.text,
+            selectionStart = editorValue.selection.start,
+            selectionEnd = editorValue.selection.end,
+        )
+    }
+    val targetText = remember(editorValue.text, targetRange) {
+        CodeLineEditEngine.extractLines(editorValue.text, targetRange).orEmpty()
     }
 
     LaunchedEffect(state.code) {
         if (editorValue.text != state.code) {
-            editorValue = TextFieldValue(state.code)
+            val cursor = editorValue.selection.start.coerceIn(0, state.code.length)
+            editorValue = TextFieldValue(
+                text = state.code,
+                selection = TextRange(cursor),
+            )
         }
     }
 
@@ -112,11 +87,13 @@ fun CodeEditorScreen(
         }
     }
 
+    BackHandler(onBack = onBack)
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("Diagnóstico de código") },
+                title = { Text("Canvas de código") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
@@ -125,221 +102,188 @@ fun CodeEditorScreen(
             )
         },
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(padding),
+            contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                "A sintaxe é decidida por parser formal local, não pela IA. Perfis comuns usam configuração dedicada e outras gramáticas do catálogo Tree-sitter são reconhecidas dinamicamente. A IA offline só complementa com erros de tipo, referência, lógica, segurança e compatibilidade depois que a sintaxe é aceita.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            item {
+                Text(
+                    text = "Editor preciso: toque em uma linha ou selecione um intervalo. A IA só pode substituir essa faixa; não há compilador, linter nem validação automática.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
-            OutlinedTextField(
-                value = state.language,
-                onValueChange = viewModel::updateLanguage,
-                label = { Text("Linguagem, extensão ou caminho") },
-                supportingText = {
-                    Text(
-                        "Perfil: ${profile.displayName} · parser: ${backendLabel(profile.syntaxBackend)} · " +
-                            "${CodeLanguageRegistry.catalogEntryCount} nomes/aliases formais reconhecidos",
+            item {
+                OutlinedTextField(
+                    value = state.language,
+                    onValueChange = viewModel::updateLanguage,
+                    label = { Text("Linguagem ou extensão") },
+                    supportingText = {
+                        Text(
+                            if (state.languagePackInstalled) {
+                                "Pacote de linguagem instalado e usado como contexto."
+                            } else {
+                                "Sem pacote baixado: a IA usa apenas o contexto base."
+                            },
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            targetRange.label() + " selecionada",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            targetRange.lineCount.toString() + " linha(s)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = editorValue,
+                        onValueChange = {
+                            editorValue = it
+                            viewModel.updateCode(it.text)
+                        },
+                        label = { Text("Código") },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(420.dp),
                     )
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
+                }
+            }
 
-            SyntaxStatusCard(
-                state = state.syntaxState,
-                parserName = state.syntaxParserName,
-                message = state.syntaxMessage,
-            )
+            item {
+                TargetPreview(
+                    label = "Trecho que a IA pode editar",
+                    code = targetText,
+                )
+            }
 
-            OutlinedTextField(
-                value = editorValue,
-                onValueChange = {
-                    editorValue = it
-                    viewModel.updateCode(it.text)
-                },
-                label = { Text("Código") },
-                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                visualTransformation = issueTransformation,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(360.dp)
-                    .focusRequester(editorFocus),
-            )
+            item {
+                OutlinedTextField(
+                    value = state.instruction,
+                    onValueChange = viewModel::updateInstruction,
+                    label = { Text("O que alterar somente nessa faixa?") },
+                    placeholder = { Text("Ex.: troque a chamada síncrona por await sem mudar o restante.") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            item {
                 Button(
-                    onClick = viewModel::analyze,
-                    enabled = !state.analyzing && state.code.isNotBlank(),
-                    modifier = Modifier.weight(1f),
+                    onClick = { viewModel.requestEdit(targetRange) },
+                    enabled = !state.editing &&
+                        state.code.isNotBlank() &&
+                        state.instruction.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    if (state.analyzing) {
+                    if (state.editing) {
                         CircularProgressIndicator(
                             modifier = Modifier.width(18.dp).height(18.dp),
                             strokeWidth = 2.dp,
                         )
                         Spacer(Modifier.width(8.dp))
-                    }
-                    Text(if (state.analyzing) "Validando" else "Validar código")
-                }
-
-                if (state.issues.any { it.canAutoFix }) {
-                    OutlinedButton(
-                        onClick = viewModel::applyAll,
-                        enabled = !state.analyzing,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Aplicar correções")
+                        Text("Preparando edição")
+                    } else {
+                        Icon(Icons.Default.Edit, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Editar " + targetRange.label().lowercase())
                     }
                 }
             }
 
-            if (state.lastAppliedCount > 0) {
-                Text(
-                    "${state.lastAppliedCount} correção(ões) aplicada(s). Execute a validação novamente para confirmar.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+            state.pendingEdit?.let { pending ->
+                item {
+                    PendingEditCard(
+                        edit = pending,
+                        onApply = viewModel::applyPendingEdit,
+                        onDiscard = viewModel::discardPendingEdit,
+                    )
+                }
             }
 
-            if (state.issues.isNotEmpty()) {
-                HorizontalDivider()
-                Text(
-                    "Erros e alertas encontrados (${state.issues.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
+            state.lastAppliedSummary?.let { summary ->
+                item {
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
 
-            state.issues.forEach { issue ->
-                IssueCard(
-                    issue = issue,
-                    onLocate = {
-                        CodePatchEngine.selectionRange(editorValue.text, issue)?.let { range ->
-                            editorValue = editorValue.copy(selection = range)
-                            editorFocus.requestFocus()
-                        }
-                    },
-                    onApply = { viewModel.applyIssue(issue) },
-                )
-            }
-
-            Spacer(Modifier.height(24.dp))
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
 }
 
 @Composable
-private fun SyntaxStatusCard(
-    state: SyntaxValidationState,
-    parserName: String?,
-    message: String?,
-) {
-    if (state == SyntaxValidationState.IDLE && message == null) return
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = when (state) {
-                    SyntaxValidationState.IDLE -> "Sintaxe precisa ser validada novamente"
-                    SyntaxValidationState.CHECKING -> "Validando sintaxe…"
-                    SyntaxValidationState.VALID -> "Sintaxe válida"
-                    SyntaxValidationState.INVALID -> "Sintaxe inválida"
-                    SyntaxValidationState.PARSER_UNAVAILABLE -> "Parser formal indisponível"
-                },
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = when (state) {
-                    SyntaxValidationState.INVALID,
-                    SyntaxValidationState.PARSER_UNAVAILABLE -> MaterialTheme.colorScheme.error
-                    SyntaxValidationState.VALID -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurface
-                },
-            )
-            parserName?.let {
-                Text(
-                    "Parser: $it",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            message?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun IssueCard(
-    issue: CodeIssue,
-    onLocate: () -> Unit,
+private fun PendingEditCard(
+    edit: PendingCodeLineEdit,
     onApply: () -> Unit,
+    onDiscard: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                issue.title,
+                text = "Edição preparada · " + edit.range.label(),
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
             )
-
-            val position = buildString {
-                append("linha ${issue.startLine}")
-                issue.column?.let { append(":$it") }
-                if (issue.endLine > issue.startLine) append("-${issue.endLine}")
-            }
             Text(
-                "${severityLabel(issue.severity)} · ${categoryLabel(issue.category)} · $position · ${sourceLabel(issue.source)}",
-                style = MaterialTheme.typography.labelMedium,
+                text = edit.summary,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            if (issue.explanation.isNotBlank()) {
-                Text(issue.explanation, style = MaterialTheme.typography.bodyMedium)
-            }
+            HorizontalDivider()
+            TargetPreview("Antes", edit.original)
+            TargetPreview("Depois", edit.replacement)
 
-            if (issue.original.isNotEmpty()) {
-                PatchPreview(label = "Trecho atual", code = issue.original)
-            }
-            if (issue.canAutoFix) {
-                PatchPreview(label = "Correção proposta", code = issue.replacement)
-            } else {
-                Text(
-                    "Revisão manual necessária: não há alteração automática considerada segura para este diagnóstico.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onLocate, modifier = Modifier.weight(1f)) {
-                    Text("Localizar")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDiscard,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Descartar")
                 }
-                if (issue.canAutoFix) {
-                    Button(onClick = onApply, modifier = Modifier.weight(1f)) {
-                        Text("Corrigir")
-                    }
+                Button(
+                    onClick = onApply,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Aplicar")
                 }
             }
         }
@@ -347,13 +291,13 @@ private fun IssueCard(
 }
 
 @Composable
-private fun PatchPreview(
+private fun TargetPreview(
     label: String,
     code: String,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            label,
+            text = label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -363,7 +307,7 @@ private fun PatchPreview(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
-                text = if (code.isEmpty()) "∅" else code,
+                text = code.ifEmpty { "∅" },
                 modifier = Modifier
                     .horizontalScroll(rememberScrollState())
                     .padding(10.dp),
@@ -372,30 +316,4 @@ private fun PatchPreview(
             )
         }
     }
-}
-
-private fun backendLabel(backend: SyntaxBackend): String = when (backend) {
-    SyntaxBackend.TREE_SITTER -> "Tree-sitter"
-    SyntaxBackend.SQL_JSQLPARSER -> "JSqlParser"
-    SyntaxBackend.NONE -> "não disponível"
-}
-
-private fun severityLabel(severity: CodeIssueSeverity): String = when (severity) {
-    CodeIssueSeverity.ERROR -> "Erro"
-    CodeIssueSeverity.WARNING -> "Alerta"
-    CodeIssueSeverity.INFO -> "Informação"
-}
-
-private fun categoryLabel(category: CodeIssueCategory): String = when (category) {
-    CodeIssueCategory.SYNTAX -> "Sintaxe"
-    CodeIssueCategory.TYPE -> "Tipo"
-    CodeIssueCategory.REFERENCE -> "Referência"
-    CodeIssueCategory.LOGIC -> "Lógica"
-    CodeIssueCategory.SECURITY -> "Segurança"
-    CodeIssueCategory.COMPATIBILITY -> "Compatibilidade"
-}
-
-private fun sourceLabel(source: CodeIssueSource): String = when (source) {
-    CodeIssueSource.LOCAL -> "parser local"
-    CodeIssueSource.AI -> "IA local"
 }

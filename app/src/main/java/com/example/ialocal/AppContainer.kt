@@ -21,6 +21,7 @@ import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.LlamaCppRuntime
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.ui.codeeditor.CodeLanguagePackRepository
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -29,6 +30,7 @@ class AppContainer(context: Context) {
     val diagnostics = AiEventLogger(appContext)
     val chatRepository = ChatRepository(database.chatDao())
     val themeRepository = ThemeRepository(appContext)
+    val codeLanguagePacks = CodeLanguagePackRepository(appContext)
     val attachmentImporter = AttachmentImporter(appContext)
     val attachmentProcessor = AttachmentContentProcessor(appContext)
     private val attachmentContextBuilder = AttachmentContextBuilder()

@@ -142,7 +142,7 @@ private fun LocalAiApp(
             composable("code-editor") {
                 val vm: CodeEditorViewModel = viewModel(
                     key = "code-editor",
-                    factory = CodeEditorViewModel.Factory(container.aiGateway),
+                    factory = CodeEditorViewModel.Factory(container.aiGateway, container.codeLanguagePacks),
                 )
                 CodeEditorScreen(
                     viewModel = vm,
@@ -237,7 +237,12 @@ private fun LocalAiApp(
             }
 
             composable("settings") {
-                val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory(container.themeRepository))
+                val vm: SettingsViewModel = viewModel(
+                    factory = SettingsViewModel.Factory(
+                        container.themeRepository,
+                        container.codeLanguagePacks,
+                    ),
+                )
                 SettingsScreen(viewModel = vm, onBack = { navController.popBackStack() })
             }
         }

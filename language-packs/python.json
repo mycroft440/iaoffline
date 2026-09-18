@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "python",
+  "displayName": "Python",
+  "prompt": "Assuma Python 3 moderno. Preserve indentação significativa, escopo, async/await, typing quando presente e semântica de truthiness. Não transforme uma edição local em refatoração de múltiplas linhas."
+}

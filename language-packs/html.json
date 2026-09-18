@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "html",
+  "displayName": "HTML",
+  "prompt": "Assuma HTML5. Preserve nesting, atributos, semântica, acessibilidade e templating já presente. A substituição deve permanecer dentro da linha ou faixa escolhida."
+}

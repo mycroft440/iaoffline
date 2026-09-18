@@ -91,28 +91,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
-    // Formal syntax parsers used by the offline code editor.
-    // SQL uses JSqlParser. For Tree-sitter, CI builds a local AAR with the maximum static
-    // grammar set through scripts/prepare_tree_sitter_android.sh. The Maven artifact remains a
-    // development fallback so Gradle sync still works before the preparation script is run.
-    implementation("com.github.jsqlparser:jsqlparser:5.3") {
-        exclude(group = "org.openjdk.jmh", module = "jmh-core")
-    }
-
-    // A file() AAR does not carry Maven metadata, so declare the Android Tree-sitter facade's
-    // runtime/API dependencies explicitly. Keeping these declarations for the Maven fallback is
-    // harmless: Gradle resolves them to one compatible version.
-    implementation("io.github.tree-sitter:ktreesitter:0.25.1")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.2")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.2")
-    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.2")
-
-    val maximumTreeSitterAar = file("libs/tree-sitter-language-pack-android-max.aar")
-    if (maximumTreeSitterAar.isFile) {
-        implementation(files(maximumTreeSitterAar))
-    } else {
-        implementation("io.xberg.tslp.android:tree-sitter-language-pack-android:1.15.12")
-    }
+    // Code language packs are tiny JSON prompt guides downloaded on demand.
+    // No compiler, linter or Tree-sitter grammar is embedded in the base APK.
 
     // Generated from the official ggml-org/llama.cpp Android binding.
     // Run scripts/prepare_llama_android.sh before building the app.

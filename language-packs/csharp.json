@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "csharp",
+  "displayName": "C#",
+  "prompt": "Assuma C# moderno e .NET. Respeite nullable reference types, async/await, LINQ, generics e convenções de propriedade. Não altere outras linhas para acomodar a edição."
+}

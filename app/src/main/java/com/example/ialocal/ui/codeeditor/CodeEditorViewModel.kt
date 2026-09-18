@@ -10,25 +10,31 @@ import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONArray
+import org.json.JSONObject
+
+data class PendingCodeLineEdit(
+    val range: CodeLineRange,
+    val original: String,
+    val replacement: String,
+    val summary: String,
+)
 
 data class CodeEditorUiState(
     val code: String = DEFAULT_SAMPLE,
     val language: String = "Kotlin",
-    val issues: List<CodeIssue> = emptyList(),
-    val analyzing: Boolean = false,
-    val syntaxState: SyntaxValidationState = SyntaxValidationState.IDLE,
-    val syntaxParserName: String? = null,
-    val syntaxMessage: String? = null,
+    val instruction: String = "",
+    val editing: Boolean = false,
+    val pendingEdit: PendingCodeLineEdit? = null,
+    val languagePackInstalled: Boolean = false,
+    val lastAppliedSummary: String? = null,
     val error: String? = null,
-    val lastAppliedCount: Int = 0,
 ) {
     companion object {
-        private const val DEFAULT_SAMPLE = """fun main() {
-    val numbers = listOf(1, 2, 3)
-    println(numbers[3])
+        private const val DEFAULT_SAMPLE = """fun greeting(name: String): String {
+    return "Olá, " + name
 }
 """
     }
@@ -36,279 +42,293 @@ data class CodeEditorUiState(
 
 class CodeEditorViewModel(
     private val aiGateway: AiGateway,
+    private val languagePacks: CodeLanguagePackRepository,
 ) : ViewModel() {
-    private val _state = MutableStateFlow(CodeEditorUiState())
+    private val _state = MutableStateFlow(
+        CodeEditorUiState(
+            languagePackInstalled = languagePacks.isInstalled("Kotlin"),
+        ),
+    )
     val state: StateFlow<CodeEditorUiState> = _state.asStateFlow()
 
-    fun updateCode(code: String) {
-        _state.update {
-            it.copy(
-                code = code,
-                issues = emptyList(),
-                syntaxState = SyntaxValidationState.IDLE,
-                syntaxParserName = null,
-                syntaxMessage = null,
-                lastAppliedCount = 0,
-            )
-        }
-    }
+    private var pendingSourceSnapshot: String? = null
 
-    fun updateLanguage(language: String) {
-        _state.update {
-            it.copy(
-                language = language,
-                issues = emptyList(),
-                syntaxState = SyntaxValidationState.IDLE,
-                syntaxParserName = null,
-                syntaxMessage = null,
-                lastAppliedCount = 0,
-            )
-        }
-    }
-
-    fun clearError() {
-        _state.update { it.copy(error = null) }
-    }
-
-    fun analyze() {
-        val snapshot = _state.value
-        if (snapshot.analyzing) return
-
-        val profile = CodeLanguageRegistry.find(snapshot.language)
-        _state.update {
-            it.copy(
-                analyzing = true,
-                issues = emptyList(),
-                syntaxState = SyntaxValidationState.CHECKING,
-                syntaxParserName = null,
-                syntaxMessage = "Validando a sintaxe com parser formal…",
-                error = null,
-                lastAppliedCount = 0,
-            )
-        }
-
+    init {
         viewModelScope.launch {
-            val syntax = FormalSyntaxDiagnostics.analyze(snapshot.code, profile)
-            _state.update {
-                it.copy(
-                    issues = syntax.issues,
-                    syntaxState = syntax.state,
-                    syntaxParserName = syntax.parserName,
-                    syntaxMessage = syntax.message,
-                )
-            }
-
-            // Syntax is authoritative only when a formal parser completed successfully.
-            // Do not ask the model to guess around invalid or unavailable grammar results.
-            if (syntax.state != SyntaxValidationState.VALID) {
-                _state.update { it.copy(analyzing = false) }
-                return@launch
-            }
-
-            runCatching {
-                aiGateway.chat(
-                    AiChatRequest(
-                        conversationId = "code-editor-${UUID.randomUUID()}",
-                        messages = listOf(
-                            AiChatMessage("system", SYSTEM_PROMPT),
-                            AiChatMessage(
-                                "user",
-                                buildString {
-                                    appendLine("Linguagem: ${profile.displayName}")
-                                    appendLine("Perfil de análise: ${profile.analysisHint}")
-                                    appendLine("A sintaxe já foi aceita pelo parser formal: ${syntax.parserName ?: "parser local"}.")
-                                    appendLine()
-                                    appendLine("Não faça diagnóstico de sintaxe. Retorne apenas erros concretos de tipo, referência, lógica, segurança ou compatibilidade.")
-                                    appendLine("Não reporte preferências de estilo, formatação ou refatorações opcionais.")
-                                    appendLine()
-                                    append(snapshot.code)
-                                },
-                            ),
-                        ),
-                    ),
-                )
-            }.onSuccess { response ->
-                runCatching { parseIssues(response) }
-                    .onSuccess { aiIssues ->
-                        _state.update {
-                            it.copy(
-                                issues = mergeDiagnostics(syntax.issues, aiIssues),
-                                analyzing = false,
-                            )
-                        }
-                    }
-                    .onFailure { error ->
-                        _state.update {
-                            it.copy(
-                                issues = syntax.issues,
-                                analyzing = false,
-                                error = "A sintaxe foi validada, mas a análise semântica complementar da IA não pôde ser lida: ${error.message}",
-                            )
-                        }
-                    }
-            }.onFailure { error ->
-                _state.update {
-                    it.copy(
-                        issues = syntax.issues,
-                        analyzing = false,
-                        error = "A sintaxe foi validada pelo parser formal. A análise semântica complementar da IA falhou: ${error.message ?: "erro desconhecido"}",
+            languagePacks.installedIds.collect {
+                _state.update { state ->
+                    state.copy(
+                        languagePackInstalled = languagePacks.isInstalled(state.language),
                     )
                 }
             }
         }
     }
 
-    fun applyIssue(issue: CodeIssue) {
-        if (!issue.canAutoFix) {
-            _state.update { it.copy(error = "Este diagnóstico exige revisão manual; não há patch automático seguro.") }
-            return
-        }
-
-        val snapshot = _state.value
-        val updated = CodePatchEngine.applyIssue(snapshot.code, issue)
-        if (updated == null) {
-            _state.update {
-                it.copy(error = "O trecho mudou desde a análise. Analise novamente antes de aplicar esta correção.")
-            }
-            return
-        }
-
+    fun updateCode(code: String) {
+        if (_state.value.code == code) return
+        pendingSourceSnapshot = null
         _state.update {
             it.copy(
-                code = updated,
-                issues = emptyList(),
-                syntaxState = SyntaxValidationState.IDLE,
-                syntaxParserName = null,
-                syntaxMessage = "Código alterado; valide a sintaxe novamente.",
+                code = code,
+                pendingEdit = null,
+                lastAppliedSummary = null,
                 error = null,
-                lastAppliedCount = 1,
             )
         }
     }
 
-    fun applyAll() {
-        val snapshot = _state.value
-        val (updated, applied) = CodePatchEngine.applyAll(snapshot.code, snapshot.issues)
+    fun updateLanguage(language: String) {
+        pendingSourceSnapshot = null
         _state.update {
             it.copy(
-                code = updated,
-                issues = if (applied > 0) emptyList() else it.issues,
-                syntaxState = if (applied > 0) SyntaxValidationState.IDLE else it.syntaxState,
-                syntaxParserName = if (applied > 0) null else it.syntaxParserName,
-                syntaxMessage = if (applied > 0) "Código alterado; valide a sintaxe novamente." else it.syntaxMessage,
-                error = if (applied == 0 && it.issues.any { issue -> issue.canAutoFix }) {
-                    "Nenhuma correção automática pôde ser aplicada porque os trechos já mudaram. Analise novamente."
-                } else {
-                    null
-                },
-                lastAppliedCount = applied,
+                language = language,
+                pendingEdit = null,
+                languagePackInstalled = languagePacks.isInstalled(language),
+                lastAppliedSummary = null,
+                error = null,
             )
         }
     }
 
-    private fun parseIssues(raw: String): List<CodeIssue> {
-        val start = raw.indexOf('[')
-        val end = raw.lastIndexOf(']')
-        require(start >= 0 && end >= start) { "JSON não encontrado" }
+    fun updateInstruction(instruction: String) {
+        _state.update { it.copy(instruction = instruction, error = null) }
+    }
 
-        val array = JSONArray(raw.substring(start, end + 1))
-        return buildList {
-            for (index in 0 until array.length()) {
-                val item = array.getJSONObject(index)
-                val original = item.optString("original")
-                val replacement = item.optString("replacement")
-                val startLine = item.optInt("startLine", 1).coerceAtLeast(1)
-                val severity = runCatching {
-                    CodeIssueSeverity.valueOf(item.optString("severity", "ERROR").uppercase())
-                }.getOrDefault(CodeIssueSeverity.ERROR)
-                val category = runCatching {
-                    CodeIssueCategory.valueOf(item.optString("category", "LOGIC").uppercase())
-                }.getOrDefault(CodeIssueCategory.LOGIC)
+    fun clearError() {
+        _state.update { it.copy(error = null) }
+    }
 
-                // The model is never authoritative for syntax. Ignore any syntax diagnosis it emits.
-                if (category == CodeIssueCategory.SYNTAX) continue
+    fun discardPendingEdit() {
+        pendingSourceSnapshot = null
+        _state.update { it.copy(pendingEdit = null, error = null) }
+    }
 
-                add(
-                    CodeIssue(
-                        id = item.optString("id").ifBlank { "ai-issue-$index" },
-                        title = item.optString("title").ifBlank { "Erro encontrado" },
-                        explanation = item.optString("explanation"),
-                        startLine = startLine,
-                        endLine = item.optInt("endLine", startLine).coerceAtLeast(startLine),
-                        original = original,
-                        replacement = replacement,
-                        severity = severity,
-                        category = category,
-                        column = item.optInt("column", 0).takeIf { it > 0 },
-                        canAutoFix = item.optBoolean("canAutoFix", original.isNotEmpty()),
-                        source = CodeIssueSource.AI,
+    fun requestEdit(range: CodeLineRange) {
+        val snapshot = _state.value
+        if (snapshot.editing) return
+        val instruction = snapshot.instruction.trim()
+        if (instruction.isBlank()) {
+            _state.update { it.copy(error = "Descreva o que deve ser alterado na linha selecionada.") }
+            return
+        }
+
+        val original = CodeLineEditEngine.extractLines(snapshot.code, range)
+        if (original == null) {
+            _state.update { it.copy(error = "A linha selecionada não existe mais.") }
+            return
+        }
+
+        _state.update {
+            it.copy(
+                editing = true,
+                pendingEdit = null,
+                lastAppliedSummary = null,
+                error = null,
+            )
+        }
+
+        val sourceSnapshot = snapshot.code
+        viewModelScope.launch {
+            val profile = CodeLanguageRegistry.find(snapshot.language)
+            val installedPack = languagePacks.guidanceFor(snapshot.language)
+            val prompt = buildEditPrompt(
+                profile = profile,
+                installedPack = installedPack,
+                code = sourceSnapshot,
+                range = range,
+                original = original,
+                instruction = instruction,
+            )
+
+            runCatching {
+                aiGateway.chat(
+                    AiChatRequest(
+                        conversationId = "code-canvas-" + UUID.randomUUID(),
+                        messages = listOf(
+                            AiChatMessage("system", SYSTEM_PROMPT),
+                            AiChatMessage("user", prompt),
+                        ),
                     ),
                 )
+            }.onSuccess { response ->
+                runCatching {
+                    parseEditResponse(response, range, original)
+                }.onSuccess { edit ->
+                    pendingSourceSnapshot = sourceSnapshot
+                    _state.update {
+                        it.copy(
+                            editing = false,
+                            pendingEdit = edit,
+                            languagePackInstalled = installedPack != null,
+                        )
+                    }
+                }.onFailure { error ->
+                    pendingSourceSnapshot = null
+                    _state.update {
+                        it.copy(
+                            editing = false,
+                            error = "A IA respondeu, mas a edição foi rejeitada por segurança: " +
+                                (error.message ?: "formato inválido"),
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                pendingSourceSnapshot = null
+                _state.update {
+                    it.copy(
+                        editing = false,
+                        error = "Não foi possível preparar a edição: " +
+                            (error.message ?: "erro desconhecido"),
+                    )
+                }
             }
         }
     }
 
-    private fun mergeDiagnostics(local: List<CodeIssue>, ai: List<CodeIssue>): List<CodeIssue> {
-        val result = local.toMutableList()
-        ai.forEach { candidate ->
-            val duplicate = result.any { existing ->
-                existing.startLine == candidate.startLine &&
-                    existing.category == candidate.category &&
-                    (existing.original == candidate.original || existing.title.equals(candidate.title, ignoreCase = true))
+    fun applyPendingEdit() {
+        val snapshot = _state.value
+        val pending = snapshot.pendingEdit ?: return
+        val source = pendingSourceSnapshot
+        if (source == null || snapshot.code != source) {
+            pendingSourceSnapshot = null
+            _state.update {
+                it.copy(
+                    pendingEdit = null,
+                    error = "O código mudou depois do pedido. Selecione a linha e peça a edição novamente.",
+                )
             }
-            if (!duplicate) result += candidate
+            return
         }
-        return result.sortedWith(
-            compareBy<CodeIssue> { it.startLine }
-                .thenBy { it.column ?: Int.MAX_VALUE }
-                .thenBy { it.severity.ordinal },
+
+        val currentOriginal = CodeLineEditEngine.extractLines(snapshot.code, pending.range)
+        if (currentOriginal != pending.original) {
+            pendingSourceSnapshot = null
+            _state.update {
+                it.copy(
+                    pendingEdit = null,
+                    error = "A linha alvo mudou. A edição não foi aplicada.",
+                )
+            }
+            return
+        }
+
+        val updated = CodeLineEditEngine.applyExactLines(
+            code = snapshot.code,
+            range = pending.range,
+            replacement = pending.replacement,
+        )
+        if (updated == null) {
+            _state.update {
+                it.copy(error = "A edição tentou alterar uma quantidade diferente de linhas e foi bloqueada.")
+            }
+            return
+        }
+
+        pendingSourceSnapshot = null
+        _state.update {
+            it.copy(
+                code = updated,
+                instruction = "",
+                pendingEdit = null,
+                lastAppliedSummary = pending.summary,
+                error = null,
+            )
+        }
+    }
+
+    private fun buildEditPrompt(
+        profile: CodeLanguageProfile,
+        installedPack: InstalledCodeLanguagePack?,
+        code: String,
+        range: CodeLineRange,
+        original: String,
+        instruction: String,
+    ): String = buildString {
+        appendLine("Linguagem declarada: " + profile.displayName)
+        appendLine("Faixa permitida: " + range.startLine + "-" + range.endLine)
+        appendLine("Quantidade obrigatória de linhas na resposta: " + range.lineCount)
+        appendLine("Pedido do usuário: " + instruction)
+        appendLine()
+        appendLine("Trecho exato que pode ser substituído:")
+        appendLine("<<<TARGET")
+        appendLine(original)
+        appendLine("TARGET")
+        appendLine()
+        appendLine("Contexto especializado:")
+        appendLine(installedPack?.prompt ?: profile.analysisHint)
+        appendLine()
+        appendLine("Contexto do arquivo com números de linha:")
+        append(CodeLineEditEngine.numberedContext(code, range))
+    }
+
+    private fun parseEditResponse(
+        raw: String,
+        requestedRange: CodeLineRange,
+        original: String,
+    ): PendingCodeLineEdit {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        require(start >= 0 && end >= start) { "JSON não encontrado" }
+
+        val json = JSONObject(raw.substring(start, end + 1))
+        val responseRange = CodeLineRange(
+            startLine = json.optInt("startLine", -1),
+            endLine = json.optInt("endLine", -1),
+        )
+        require(responseRange == requestedRange) {
+            "a IA tentou editar fora da linha selecionada"
+        }
+
+        val replacement = json.getString("replacement")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        require(CodeLineEditEngine.replacementLineCount(replacement) == requestedRange.lineCount) {
+            "a substituição mudaria a quantidade de linhas"
+        }
+        require(replacement != original) {
+            "nenhuma alteração foi proposta"
+        }
+
+        return PendingCodeLineEdit(
+            range = requestedRange,
+            original = original,
+            replacement = replacement,
+            summary = json.optString("summary").trim().ifBlank { "Edição preparada." },
         )
     }
 
     class Factory(
         private val aiGateway: AiGateway,
+        private val languagePacks: CodeLanguagePackRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return CodeEditorViewModel(aiGateway) as T
-        }
+        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+            CodeEditorViewModel(aiGateway, languagePacks) as T
     }
 
     private companion object {
         val SYSTEM_PROMPT = """
-            Você é um analisador semântico de código que complementa um parser formal local.
-            A SINTAXE JÁ FOI VALIDADA FORA DA IA. Você não tem autoridade para diagnosticar sintaxe.
+            Você é um editor de código cirúrgico. Você NÃO é um compilador, validador, linter ou revisor.
+            Sua única tarefa é substituir exatamente a linha ou intervalo de linhas escolhido pelo usuário.
 
             Regras obrigatórias:
-            1. Nunca retorne category=SYNTAX.
-            2. Não reporte preferências de estilo, formatação ou refatorações opcionais.
-            3. Detecte somente erros concretos de TYPE, REFERENCE, LOGIC, SECURITY ou COMPATIBILITY.
-            4. Não invente bibliotecas, APIs ou erros. Se não tiver evidência suficiente, omita o diagnóstico.
-            5. Cada patch deve alterar somente o menor trecho necessário.
-            6. Se houver patch seguro, original deve copiar EXATAMENTE o trecho existente e canAutoFix deve ser true.
-            7. Se o erro for real mas não houver patch local seguro, canAutoFix=false; original/replacement podem ser vazios.
-            8. startLine/endLine começam em 1; column também começa em 1 quando conhecida.
-            9. severity deve ser ERROR, WARNING ou INFO.
-            10. category deve ser TYPE, REFERENCE, LOGIC, SECURITY ou COMPATIBILITY.
-            11. Se não houver erro concreto, retorne [].
-            12. Retorne SOMENTE o array JSON, sem markdown e sem texto adicional.
+            1. Nunca altere startLine ou endLine informados pelo usuário.
+            2. replacement deve conter exatamente a mesma quantidade de linhas da faixa escolhida.
+            3. Não inclua linhas vizinhas em replacement.
+            4. Não faça correções extras, melhorias de estilo ou refatorações não pedidas.
+            5. Use o restante do arquivo apenas como contexto para entender o pedido.
+            6. Preserve indentação e a linguagem do arquivo.
+            7. Se o pedido não puder ser atendido sem alterar outras linhas, faça a melhor alteração possível somente na faixa escolhida e explique isso brevemente em summary.
+            8. Retorne SOMENTE um objeto JSON, sem markdown nem texto externo.
 
-            Formato:
-            [
-              {
-                "id": "issue-1",
-                "title": "Descrição curta do erro",
-                "severity": "ERROR",
-                "category": "TYPE",
-                "explanation": "Causa e efeito do erro.",
-                "startLine": 1,
-                "endLine": 1,
-                "column": 1,
-                "original": "trecho exato",
-                "replacement": "correção mínima",
-                "canAutoFix": true
-              }
-            ]
+            Formato obrigatório:
+            {
+              "startLine": 1,
+              "endLine": 1,
+              "replacement": "conteúdo substituto",
+              "summary": "descrição curta da mudança"
+            }
         """.trimIndent()
     }
 }

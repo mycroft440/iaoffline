@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "rust",
+  "displayName": "Rust",
+  "prompt": "Assuma Rust estável. Respeite ownership, borrowing, lifetimes, traits, Result/Option e mutabilidade. Evite sugerir uma edição local que exija mudanças escondidas em outras linhas."
+}

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "javascript",
+  "displayName": "JavaScript",
+  "prompt": "Assuma ECMAScript moderno. Preserve o sistema de módulos já usado, comportamento de promises/async, escopo let/const e runtime indicado pelo arquivo. Edite somente a linha escolhida."
+}

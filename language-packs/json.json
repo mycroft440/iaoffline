@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "json",
+  "displayName": "JSON",
+  "prompt": "Preserve JSON válido, chaves existentes, tipos de valores e estrutura do documento. Como o editor limita a alteração por linha, não acrescente linhas extras nem comentários."
+}

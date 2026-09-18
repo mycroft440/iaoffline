@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "sql",
+  "displayName": "SQL",
+  "prompt": "Preserve o dialeto aparente no arquivo, nomes de tabelas/colunas e placeholders existentes. Respeite aliases, joins, agregações e transações. Faça somente a alteração SQL solicitada na faixa alvo."
+}

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "typescript",
+  "displayName": "TypeScript",
+  "prompt": "Assuma TypeScript moderno. Respeite tipos, narrowing, generics, unions, módulos e JSX/TSX quando presente. Preserve a assinatura e altere somente a faixa autorizada."
+}
