@@ -142,7 +142,12 @@ private fun LocalAiApp(
             composable("code-editor") {
                 val vm: CodeEditorViewModel = viewModel(
                     key = "code-editor",
-                    factory = CodeEditorViewModel.Factory(container.aiGateway, container.codeLanguagePacks),
+                    factory = CodeEditorViewModel.Factory(
+                        container.aiGateway,
+                        container.codeLanguagePacks,
+                        container.modelRepository,
+                        container.codeEditSessions,
+                    ),
                 )
                 CodeEditorScreen(
                     viewModel = vm,

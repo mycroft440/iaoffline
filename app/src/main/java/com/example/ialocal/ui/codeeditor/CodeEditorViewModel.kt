@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.ai.AiChatRequest
 import com.example.ialocal.ai.AiGateway
+import com.example.ialocal.models.ModelRepository
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,22 +14,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONObject
-
-data class PendingCodeLineEdit(
-    val range: CodeLineRange,
-    val original: String,
-    val replacement: String,
-    val summary: String,
-)
 
 data class CodeEditorUiState(
     val code: String = DEFAULT_SAMPLE,
     val language: String = "Kotlin",
     val instruction: String = "",
     val editing: Boolean = false,
-    val pendingEdit: PendingCodeLineEdit? = null,
     val languagePackInstalled: Boolean = false,
+    val agentName: String? = null,
     val lastAppliedSummary: String? = null,
     val error: String? = null,
 ) {
@@ -43,6 +36,8 @@ data class CodeEditorUiState(
 class CodeEditorViewModel(
     private val aiGateway: AiGateway,
     private val languagePacks: CodeLanguagePackRepository,
+    private val modelRepository: ModelRepository,
+    private val codeEditSessions: CodeEditSessionStore,
 ) : ViewModel() {
     private val _state = MutableStateFlow(
         CodeEditorUiState(
@@ -51,15 +46,11 @@ class CodeEditorViewModel(
     )
     val state: StateFlow<CodeEditorUiState> = _state.asStateFlow()
 
-    private var pendingSourceSnapshot: String? = null
-
     init {
         viewModelScope.launch {
             languagePacks.installedIds.collect {
                 _state.update { state ->
-                    state.copy(
-                        languagePackInstalled = languagePacks.isInstalled(state.language),
-                    )
+                    state.copy(languagePackInstalled = languagePacks.isInstalled(state.language))
                 }
             }
         }
@@ -67,23 +58,13 @@ class CodeEditorViewModel(
 
     fun updateCode(code: String) {
         if (_state.value.code == code) return
-        pendingSourceSnapshot = null
-        _state.update {
-            it.copy(
-                code = code,
-                pendingEdit = null,
-                lastAppliedSummary = null,
-                error = null,
-            )
-        }
+        _state.update { it.copy(code = code, lastAppliedSummary = null, error = null) }
     }
 
     fun updateLanguage(language: String) {
-        pendingSourceSnapshot = null
         _state.update {
             it.copy(
                 language = language,
-                pendingEdit = null,
                 languagePackInstalled = languagePacks.isInstalled(language),
                 lastAppliedSummary = null,
                 error = null,
@@ -99,236 +80,129 @@ class CodeEditorViewModel(
         _state.update { it.copy(error = null) }
     }
 
-    fun discardPendingEdit() {
-        pendingSourceSnapshot = null
-        _state.update { it.copy(pendingEdit = null, error = null) }
-    }
-
-    fun requestEdit(range: CodeLineRange) {
+    fun requestEdit(target: CodeEditTarget) {
         val snapshot = _state.value
         if (snapshot.editing) return
+
         val instruction = snapshot.instruction.trim()
         if (instruction.isBlank()) {
-            _state.update { it.copy(error = "Descreva o que deve ser alterado na linha selecionada.") }
+            _state.update { it.copy(error = "Descreva o que o agente deve alterar no trecho selecionado.") }
+            return
+        }
+        if (target.endOffset > snapshot.code.length ||
+            snapshot.code.substring(target.startOffset, target.endOffset) != target.original
+        ) {
+            _state.update { it.copy(error = "A seleção mudou. Selecione novamente o trecho antes de editar.") }
             return
         }
 
-        val original = CodeLineEditEngine.extractLines(snapshot.code, range)
-        if (original == null) {
-            _state.update { it.copy(error = "A linha selecionada não existe mais.") }
-            return
-        }
+        _state.update { it.copy(editing = true, lastAppliedSummary = null, error = null) }
 
-        _state.update {
-            it.copy(
-                editing = true,
-                pendingEdit = null,
-                lastAppliedSummary = null,
-                error = null,
-            )
-        }
-
-        val sourceSnapshot = snapshot.code
         viewModelScope.launch {
-            val profile = CodeLanguageRegistry.find(snapshot.language)
-            val installedPack = languagePacks.guidanceFor(snapshot.language)
-            val prompt = buildEditPrompt(
-                profile = profile,
-                installedPack = installedPack,
-                code = sourceSnapshot,
-                range = range,
-                original = original,
-                instruction = instruction,
-            )
+            var sessionId: String? = null
+            try {
+                val agent = modelRepository.getDefaultAgent()
+                    ?: modelRepository.getAgents().firstOrNull()
+                    ?: error("Nenhum agente está configurado. Importe e verifique uma IA primeiro.")
+                val profile = CodeLanguageRegistry.find(snapshot.language)
+                val installedPack = languagePacks.guidanceFor(snapshot.language)
+                val session = codeEditSessions.create(snapshot.code, target)
+                sessionId = session.id
 
-            runCatching {
-                aiGateway.chat(
+                val finalAgentResponse = aiGateway.chat(
                     AiChatRequest(
                         conversationId = "code-canvas-" + UUID.randomUUID(),
+                        agentId = agent.id,
                         messages = listOf(
-                            AiChatMessage("system", SYSTEM_PROMPT),
-                            AiChatMessage("user", prompt),
+                            AiChatMessage(
+                                "user",
+                                buildAgentEditPrompt(
+                                    session.id,
+                                    profile,
+                                    installedPack,
+                                    snapshot.code,
+                                    target,
+                                    instruction,
+                                ),
+                            ),
                         ),
                     ),
                 )
-            }.onSuccess { response ->
-                runCatching {
-                    parseEditResponse(response, range, original)
-                }.onSuccess { edit ->
-                    pendingSourceSnapshot = sourceSnapshot
-                    _state.update {
-                        it.copy(
-                            editing = false,
-                            pendingEdit = edit,
-                            languagePackInstalled = installedPack != null,
-                        )
-                    }
-                }.onFailure { error ->
-                    pendingSourceSnapshot = null
-                    _state.update {
-                        it.copy(
-                            editing = false,
-                            error = "A IA respondeu, mas a edição foi rejeitada por segurança: " +
-                                (error.message ?: "formato inválido"),
-                        )
-                    }
+
+                val result = codeEditSessions.get(session.id)
+                    ?: error("A sessão de edição expirou antes da resposta do agente.")
+                val updatedCode = result.resultCode
+                    ?: error("O agente não executou a ferramenta replace_code_range.")
+
+                _state.update {
+                    it.copy(
+                        code = updatedCode,
+                        instruction = "",
+                        editing = false,
+                        languagePackInstalled = installedPack != null,
+                        agentName = agent.name,
+                        lastAppliedSummary = result.summary
+                            ?: finalAgentResponse.trim().take(240).ifBlank {
+                                "Trecho editado diretamente pelo agente."
+                            },
+                        error = null,
+                    )
                 }
-            }.onFailure { error ->
-                pendingSourceSnapshot = null
+            } catch (error: Throwable) {
                 _state.update {
                     it.copy(
                         editing = false,
-                        error = "Não foi possível preparar a edição: " +
+                        error = "O agente não conseguiu editar o trecho: " +
                             (error.message ?: "erro desconhecido"),
                     )
                 }
+            } finally {
+                sessionId?.let(codeEditSessions::remove)
             }
         }
     }
 
-    fun applyPendingEdit() {
-        val snapshot = _state.value
-        val pending = snapshot.pendingEdit ?: return
-        val source = pendingSourceSnapshot
-        if (source == null || snapshot.code != source) {
-            pendingSourceSnapshot = null
-            _state.update {
-                it.copy(
-                    pendingEdit = null,
-                    error = "O código mudou depois do pedido. Selecione a linha e peça a edição novamente.",
-                )
-            }
-            return
-        }
-
-        val currentOriginal = CodeLineEditEngine.extractLines(snapshot.code, pending.range)
-        if (currentOriginal != pending.original) {
-            pendingSourceSnapshot = null
-            _state.update {
-                it.copy(
-                    pendingEdit = null,
-                    error = "A linha alvo mudou. A edição não foi aplicada.",
-                )
-            }
-            return
-        }
-
-        val updated = CodeLineEditEngine.applyExactLines(
-            code = snapshot.code,
-            range = pending.range,
-            replacement = pending.replacement,
-        )
-        if (updated == null) {
-            _state.update {
-                it.copy(error = "A edição tentou alterar uma quantidade diferente de linhas e foi bloqueada.")
-            }
-            return
-        }
-
-        pendingSourceSnapshot = null
-        _state.update {
-            it.copy(
-                code = updated,
-                instruction = "",
-                pendingEdit = null,
-                lastAppliedSummary = pending.summary,
-                error = null,
-            )
-        }
-    }
-
-    private fun buildEditPrompt(
+    private fun buildAgentEditPrompt(
+        sessionId: String,
         profile: CodeLanguageProfile,
         installedPack: InstalledCodeLanguagePack?,
         code: String,
-        range: CodeLineRange,
-        original: String,
+        target: CodeEditTarget,
         instruction: String,
     ): String = buildString {
-        appendLine("Linguagem declarada: " + profile.displayName)
-        appendLine("Faixa permitida: " + range.startLine + "-" + range.endLine)
-        appendLine("Quantidade obrigatória de linhas na resposta: " + range.lineCount)
-        appendLine("Pedido do usuário: " + instruction)
+        appendLine("Você está operando o Canvas de código com autorização de escrita estritamente limitada.")
+        appendLine("Você DEVE executar a ferramenta replace_code_range exatamente uma vez para realizar a alteração.")
+        appendLine("Não devolva um patch em texto e não reescreva o arquivo inteiro.")
+        appendLine("A ferramenta já está travada no trecho autorizado; você só escolhe o replacement.")
         appendLine()
-        appendLine("Trecho exato que pode ser substituído:")
+        appendLine("session_id: $sessionId")
+        appendLine("Linguagem: ${profile.displayName}")
+        appendLine("Alvo autorizado: ${target.label()}")
+        appendLine("Pedido do usuário: $instruction")
+        appendLine()
+        appendLine("Trecho exato atualmente autorizado:")
         appendLine("<<<TARGET")
-        appendLine(original)
+        appendLine(target.original)
         appendLine("TARGET")
         appendLine()
         appendLine("Contexto especializado:")
         appendLine(installedPack?.prompt ?: profile.analysisHint)
         appendLine()
-        appendLine("Contexto do arquivo com números de linha:")
-        append(CodeLineEditEngine.numberedContext(code, range))
-    }
-
-    private fun parseEditResponse(
-        raw: String,
-        requestedRange: CodeLineRange,
-        original: String,
-    ): PendingCodeLineEdit {
-        val start = raw.indexOf('{')
-        val end = raw.lastIndexOf('}')
-        require(start >= 0 && end >= start) { "JSON não encontrado" }
-
-        val json = JSONObject(raw.substring(start, end + 1))
-        val responseRange = CodeLineRange(
-            startLine = json.optInt("startLine", -1),
-            endLine = json.optInt("endLine", -1),
-        )
-        require(responseRange == requestedRange) {
-            "a IA tentou editar fora da linha selecionada"
-        }
-
-        val replacement = json.getString("replacement")
-            .replace("\r\n", "\n")
-            .replace("\r", "\n")
-        require(CodeLineEditEngine.replacementLineCount(replacement) == requestedRange.lineCount) {
-            "a substituição mudaria a quantidade de linhas"
-        }
-        require(replacement != original) {
-            "nenhuma alteração foi proposta"
-        }
-
-        return PendingCodeLineEdit(
-            range = requestedRange,
-            original = original,
-            replacement = replacement,
-            summary = json.optString("summary").trim().ifBlank { "Edição preparada." },
-        )
+        appendLine("Contexto somente para leitura, com números de linha:")
+        append(CodeLineEditEngine.numberedContext(code, target))
+        appendLine()
+        appendLine("Chame replace_code_range com este session_id, o replacement exato e um summary curto.")
+        appendLine("Você pode inserir ou remover linhas DENTRO do alvo; tudo fora dele deve permanecer intocado.")
     }
 
     class Factory(
         private val aiGateway: AiGateway,
         private val languagePacks: CodeLanguagePackRepository,
+        private val modelRepository: ModelRepository,
+        private val codeEditSessions: CodeEditSessionStore,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            CodeEditorViewModel(aiGateway, languagePacks) as T
-    }
-
-    private companion object {
-        val SYSTEM_PROMPT = """
-            Você é um editor de código cirúrgico. Você NÃO é um compilador, validador, linter ou revisor.
-            Sua única tarefa é substituir exatamente a linha ou intervalo de linhas escolhido pelo usuário.
-
-            Regras obrigatórias:
-            1. Nunca altere startLine ou endLine informados pelo usuário.
-            2. replacement deve conter exatamente a mesma quantidade de linhas da faixa escolhida.
-            3. Não inclua linhas vizinhas em replacement.
-            4. Não faça correções extras, melhorias de estilo ou refatorações não pedidas.
-            5. Use o restante do arquivo apenas como contexto para entender o pedido.
-            6. Preserve indentação e a linguagem do arquivo.
-            7. Se o pedido não puder ser atendido sem alterar outras linhas, faça a melhor alteração possível somente na faixa escolhida e explique isso brevemente em summary.
-            8. Retorne SOMENTE um objeto JSON, sem markdown nem texto externo.
-
-            Formato obrigatório:
-            {
-              "startLine": 1,
-              "endLine": 1,
-              "replacement": "conteúdo substituto",
-              "summary": "descrição curta da mudança"
-            }
-        """.trimIndent()
+            CodeEditorViewModel(aiGateway, languagePacks, modelRepository, codeEditSessions) as T
     }
 }

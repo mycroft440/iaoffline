@@ -1,66 +1,37 @@
 package com.example.ialocal.ui.codeeditor
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CodeLineEditEngineTest {
-    @Test
-    fun cursorTargetsOnlyItsCurrentLine() {
+    @Test fun cursorAuthorizesOnlyCurrentLine() {
         val code = "primeira\nsegunda\nterceira"
         val offset = code.indexOf("segunda") + 2
-
-        assertEquals(
-            CodeLineRange(2, 2),
-            CodeLineEditEngine.lineRangeForSelection(code, offset, offset),
-        )
+        val target = CodeLineEditEngine.targetForSelection(code, offset, offset)
+        assertFalse(target.explicitSelection)
+        assertEquals(2, target.startLine)
+        assertEquals("segunda", target.original)
     }
 
-    @Test
-    fun selectionEndingAtNextLineStartDoesNotIncludeThatLine() {
-        val code = "a\nb\nc"
-        val start = code.indexOf("b")
-        val end = code.indexOf("c")
-
-        assertEquals(
-            CodeLineRange(2, 2),
-            CodeLineEditEngine.lineRangeForSelection(code, start, end),
-        )
+    @Test fun explicitSelectionAuthorizesOnlyExactCharacters() {
+        val code = "val total = price * count"
+        val start = code.indexOf("price")
+        val target = CodeLineEditEngine.targetForSelection(code, start, start + "price".length)
+        assertTrue(target.explicitSelection)
+        assertEquals("price", target.original)
+        assertEquals(start, target.startOffset)
+        assertEquals(start + 5, target.endOffset)
     }
 
-    @Test
-    fun appliesOnlyTheRequestedLine() {
-        val code = "val a = 1\nval b = 2\nprintln(a + b)"
-
-        val updated = CodeLineEditEngine.applyExactLines(
-            code = code,
-            range = CodeLineRange(2, 2),
-            replacement = "val b = 5",
-        )
-
-        assertEquals("val a = 1\nval b = 5\nprintln(a + b)", updated)
-    }
-
-    @Test
-    fun refusesReplacementThatChangesLineCount() {
-        val code = "a\nb\nc"
-
-        assertNull(
-            CodeLineEditEngine.applyExactLines(
-                code = code,
-                range = CodeLineRange(2, 2),
-                replacement = "b1\nb2",
-            ),
-        )
-    }
-
-    @Test
-    fun extractsExactlyTheSelectedRange() {
+    @Test fun multiLineSelectionKeepsExactOffsets() {
         val code = "one\ntwo\nthree\nfour"
-
-        assertEquals(
-            "two\nthree",
-            CodeLineEditEngine.extractLines(code, CodeLineRange(2, 3)),
-        )
+        val start = code.indexOf("two")
+        val end = code.indexOf("four") - 1
+        val target = CodeLineEditEngine.targetForSelection(code, start, end)
+        assertEquals("two\nthree", target.original)
+        assertEquals(2, target.startLine)
+        assertEquals(3, target.endLine)
     }
 }

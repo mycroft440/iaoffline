@@ -16,18 +16,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -59,24 +54,18 @@ fun CodeEditorScreen(
     val snackbar = remember { SnackbarHostState() }
     var editorValue by remember { mutableStateOf(TextFieldValue(state.code)) }
 
-    val targetRange = remember(editorValue.text, editorValue.selection) {
-        CodeLineEditEngine.lineRangeForSelection(
-            code = editorValue.text,
-            selectionStart = editorValue.selection.start,
-            selectionEnd = editorValue.selection.end,
+    val target = remember(editorValue.text, editorValue.selection) {
+        CodeLineEditEngine.targetForSelection(
+            editorValue.text,
+            editorValue.selection.start,
+            editorValue.selection.end,
         )
-    }
-    val targetText = remember(editorValue.text, targetRange) {
-        CodeLineEditEngine.extractLines(editorValue.text, targetRange).orEmpty()
     }
 
     LaunchedEffect(state.code) {
         if (editorValue.text != state.code) {
-            val cursor = editorValue.selection.start.coerceIn(0, state.code.length)
-            editorValue = TextFieldValue(
-                text = state.code,
-                selection = TextRange(cursor),
-            )
+            val cursor = target.startOffset.coerceIn(0, state.code.length)
+            editorValue = TextFieldValue(state.code, TextRange(cursor))
         }
     }
 
@@ -103,18 +92,26 @@ fun CodeEditorScreen(
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
                 Text(
-                    text = "Editor preciso: toque em uma linha ou selecione um intervalo. A IA só pode substituir essa faixa; não há compilador, linter nem validação automática.",
+                    "Selecione exatamente o trecho que pode mudar. Sem seleção, a linha do cursor vira o alvo. O agente executa a alteração por uma ferramenta que não consegue escrever fora dessa faixa.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            state.agentName?.let { name ->
+                item {
+                    Text(
+                        "Último agente editor: $name",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
 
             item {
@@ -127,7 +124,7 @@ fun CodeEditorScreen(
                             if (state.languagePackInstalled) {
                                 "Pacote de linguagem instalado e usado como contexto."
                             } else {
-                                "Sem pacote baixado: a IA usa apenas o contexto base."
+                                "Sem pacote baixado: o agente usa apenas o contexto base."
                             },
                         )
                     },
@@ -143,13 +140,13 @@ fun CodeEditorScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            targetRange.label() + " selecionada",
+                            target.label(),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
                         )
                         Text(
-                            targetRange.lineCount.toString() + " linha(s)",
+                            if (target.explicitSelection) "seleção exata" else "linha pelo cursor",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -162,29 +159,22 @@ fun CodeEditorScreen(
                             viewModel.updateCode(it.text)
                         },
                         label = { Text("Código") },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace,
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(420.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        modifier = Modifier.fillMaxWidth().height(420.dp),
                     )
                 }
             }
 
             item {
-                TargetPreview(
-                    label = "Trecho que a IA pode editar",
-                    code = targetText,
-                )
+                TargetPreview("Único trecho que o agente pode modificar", target.original)
             }
 
             item {
                 OutlinedTextField(
                     value = state.instruction,
                     onValueChange = viewModel::updateInstruction,
-                    label = { Text("O que alterar somente nessa faixa?") },
-                    placeholder = { Text("Ex.: troque a chamada síncrona por await sem mudar o restante.") },
+                    label = { Text("O que o agente deve fazer nesse trecho?") },
+                    placeholder = { Text("Ex.: troque somente esta chamada por uma versão assíncrona.") },
                     minLines = 2,
                     maxLines = 4,
                     modifier = Modifier.fillMaxWidth(),
@@ -193,10 +183,8 @@ fun CodeEditorScreen(
 
             item {
                 Button(
-                    onClick = { viewModel.requestEdit(targetRange) },
-                    enabled = !state.editing &&
-                        state.code.isNotBlank() &&
-                        state.instruction.isNotBlank(),
+                    onClick = { viewModel.requestEdit(target) },
+                    enabled = !state.editing && state.code.isNotBlank() && state.instruction.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (state.editing) {
@@ -205,29 +193,19 @@ fun CodeEditorScreen(
                             strokeWidth = 2.dp,
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Preparando edição")
+                        Text("Agente editando")
                     } else {
                         Icon(Icons.Default.Edit, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Editar " + targetRange.label().lowercase())
+                        Text("Agente editar trecho diretamente")
                     }
-                }
-            }
-
-            state.pendingEdit?.let { pending ->
-                item {
-                    PendingEditCard(
-                        edit = pending,
-                        onApply = viewModel::applyPendingEdit,
-                        onDiscard = viewModel::discardPendingEdit,
-                    )
                 }
             }
 
             state.lastAppliedSummary?.let { summary ->
                 item {
                     Text(
-                        text = summary,
+                        summary,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -240,64 +218,10 @@ fun CodeEditorScreen(
 }
 
 @Composable
-private fun PendingEditCard(
-    edit: PendingCodeLineEdit,
-    onApply: () -> Unit,
-    onDiscard: () -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = "Edição preparada · " + edit.range.label(),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = edit.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            HorizontalDivider()
-            TargetPreview("Antes", edit.original)
-            TargetPreview("Depois", edit.replacement)
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OutlinedButton(
-                    onClick = onDiscard,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Descartar")
-                }
-                Button(
-                    onClick = onApply,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Check, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Aplicar")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TargetPreview(
-    label: String,
-    code: String,
-) {
+private fun TargetPreview(label: String, code: String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            text = label,
+            label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -307,10 +231,8 @@ private fun TargetPreview(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
-                text = code.ifEmpty { "∅" },
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(10.dp),
+                code.ifEmpty { "∅" },
+                modifier = Modifier.horizontalScroll(rememberScrollState()).padding(10.dp),
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall,
             )
