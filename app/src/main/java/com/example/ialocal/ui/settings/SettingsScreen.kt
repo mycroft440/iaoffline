@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -105,7 +104,12 @@ fun SettingsScreen(
                 )
                 Text(
                     "O APK não inclui compiladores nem parsers. Estes pacotes pequenos são baixados do repositório somente quando você quiser e dão contexto especializado à IA no Canvas de código.",
-                    modifier = Modifier.padding(horizontal = 8.dp, bottom = 4.dp),
+                    modifier = Modifier.padding(
+                        start = 8.dp,
+                        top = 0.dp,
+                        end = 8.dp,
+                        bottom = 4.dp,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
