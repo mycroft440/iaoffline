@@ -229,46 +229,105 @@ class ChatViewModel(
         }
     }
 
+    fun rerunAssistant(messageId: String) {
+        if (_isGenerating.value || _isProcessingAttachments.value) return
+        val snapshot = messages.value
+        val assistantIndex = snapshot.indexOfFirst {
+            it.message.id == messageId && it.message.role == MessageRole.ASSISTANT.name
+        }
+        if (assistantIndex < 0) return
+        val userIndex = (assistantIndex - 1 downTo 0).firstOrNull {
+            snapshot[it].message.role == MessageRole.USER.name
+        } ?: return
+
+        val history = snapshot.take(userIndex + 1).map(::toAiMessageWithPersistedAttachments)
+        startAssistantOnlyGeneration(history)
+    }
+
     private fun startGeneration(outgoing: QueuedChatMessage) {
         _isGenerating.value = true
         generationJob = viewModelScope.launch {
-            var assistantId: String? = null
             try {
                 // Give Room's flows a chance to publish the previous completed response before
                 // building history for the next queued turn.
                 yield()
                 val historyBeforeSend = messages.value.map(::toAiMessageWithPersistedAttachments)
                 repository.addMessage(conversationId, MessageRole.USER, outgoing.content, outgoing.attachments)
-                val agentId = _selectedAgentId.value
-                    ?: conversation.value?.agentId
-                    ?: modelRepository.getDefaultAgent()?.id
-                if (agentId != null) repository.setConversationAgent(conversationId, agentId)
-
                 val history = historyBeforeSend + AiChatMessage("user", outgoing.content)
-                val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
-                assistantId = replyId
-                var accumulated = ""
-                aiGateway.streamChat(AiChatRequest(
-                    conversationId = conversationId,
-                    messages = history,
-                    attachments = outgoing.attachments,
-                    agentId = agentId,
-                )).collect { chunk ->
-                    accumulated += chunk
-                    repository.updateMessageContent(replyId, accumulated)
-                }
-                repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
+                generateAssistant(history, outgoing.attachments)
             } catch (cancel: CancellationException) {
-                assistantId?.let { repository.updateMessageStatus(it, MessageStatus.COMPLETE) }
                 throw cancel
             } catch (t: Throwable) {
-                assistantId?.let { repository.updateMessageStatus(it, MessageStatus.ERROR) }
                 _error.value = t.message ?: "Falha ao gerar a resposta."
             } finally {
                 _isGenerating.value = false
                 generationJob = null
                 startNextQueuedMessage()
             }
+        }
+    }
+
+    private fun startAssistantOnlyGeneration(history: List<AiChatMessage>) {
+        _isGenerating.value = true
+        generationJob = viewModelScope.launch {
+            try {
+                generateAssistant(history, emptyList())
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (t: Throwable) {
+                _error.value = t.message ?: "Falha ao refazer a resposta."
+            } finally {
+                _isGenerating.value = false
+                generationJob = null
+                startNextQueuedMessage()
+            }
+        }
+    }
+
+    private suspend fun generateAssistant(
+        history: List<AiChatMessage>,
+        attachments: List<PendingAttachment>,
+    ) {
+        val agentId = _selectedAgentId.value
+            ?: conversation.value?.agentId
+            ?: modelRepository.getDefaultAgent()?.id
+        if (agentId != null) repository.setConversationAgent(conversationId, agentId)
+
+        val replyId = repository.addMessage(
+            conversationId,
+            MessageRole.ASSISTANT,
+            "",
+            status = MessageStatus.SENDING,
+        )
+        val startedAt = System.currentTimeMillis()
+        var reasoningEndedAt: Long? = null
+        var accumulated = ""
+        try {
+            aiGateway.streamChat(
+                AiChatRequest(
+                    conversationId = conversationId,
+                    messages = history,
+                    attachments = attachments,
+                    agentId = agentId,
+                )
+            ).collect { chunk ->
+                accumulated += chunk
+                if (reasoningEndedAt == null && containsReasoningClose(accumulated)) {
+                    reasoningEndedAt = System.currentTimeMillis()
+                }
+                repository.updateMessageContent(replyId, accumulated)
+            }
+            val elapsed = (reasoningEndedAt ?: System.currentTimeMillis()) - startedAt
+            repository.updateMessageContent(replyId, appendReasoningMetadata(accumulated, elapsed))
+            repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
+        } catch (cancel: CancellationException) {
+            val elapsed = (reasoningEndedAt ?: System.currentTimeMillis()) - startedAt
+            repository.updateMessageContent(replyId, appendReasoningMetadata(accumulated, elapsed))
+            repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
+            throw cancel
+        } catch (t: Throwable) {
+            repository.updateMessageStatus(replyId, MessageStatus.ERROR)
+            throw t
         }
     }
 
@@ -289,14 +348,39 @@ class ChatViewModel(
                 remaining -= excerpt.length
             }
         }
-        val content = if (contexts.isEmpty()) item.message.content else
-            item.message.content + "\n\n[Contexto persistido dos anexos]\n" + contexts.joinToString("\n\n---\n\n")
+        val baseContent = if (item.message.role == MessageRole.ASSISTANT.name) {
+            assistantAnswerForHistory(item.message.content)
+        } else {
+            item.message.content
+        }
+        val content = if (contexts.isEmpty()) baseContent else
+            baseContent + "\n\n[Contexto persistido dos anexos]\n" + contexts.joinToString("\n\n---\n\n")
         return AiChatMessage(item.message.role.lowercase(), content)
     }
+
+    private fun assistantAnswerForHistory(raw: String): String {
+        val withoutMetadata = REASONING_METADATA.replace(raw, "").trim()
+        val tagged = REASONING_BLOCK.find(withoutMetadata)
+        if (tagged != null) {
+            return withoutMetadata.removeRange(tagged.range).trim()
+        }
+        return withoutMetadata
+    }
+
+    private fun appendReasoningMetadata(content: String, elapsedMs: Long): String {
+        val clean = REASONING_METADATA.replace(content, "").trimEnd()
+        return "$clean\n\n<!--nexus_reasoning_ms:${elapsedMs.coerceAtLeast(0L)}-->"
+    }
+
+    private fun containsReasoningClose(content: String): Boolean =
+        REASONING_CLOSE.containsMatchIn(content)
 
     companion object {
         private const val MAX_HISTORY_ATTACHMENT_PER_FILE = 4_000
         private const val MAX_HISTORY_ATTACHMENT_CHARS = 6_000
+        private val REASONING_CLOSE = Regex("(?is)</think(?:ing)?>")
+        private val REASONING_BLOCK = Regex("(?is)<think(?:ing)?>(.*?)</think(?:ing)?>")
+        private val REASONING_METADATA = Regex("(?is)\\s*<!--nexus_reasoning_ms:(\\d+)-->\\s*$")
     }
 
     class Factory(
