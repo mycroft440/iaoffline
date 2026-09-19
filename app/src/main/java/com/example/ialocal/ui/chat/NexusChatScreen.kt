@@ -41,11 +41,14 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
@@ -319,6 +322,7 @@ fun NexusChatScreen(
                         onMic = onMic,
                         onSend = viewModel::send,
                         onStop = viewModel::stopGeneration,
+                        onRerun = viewModel::rerunAssistant,
                         onRemoveAttachment = viewModel::removePendingAttachment,
                         onRemoveQueuedMessage = viewModel::removeQueuedMessage,
                         onSuggestion = { prompt -> viewModel.setDraft(prompt) },
@@ -371,6 +375,7 @@ fun NexusChatScreen(
                         onMic = onMic,
                         onSend = viewModel::send,
                         onStop = viewModel::stopGeneration,
+                        onRerun = viewModel::rerunAssistant,
                         onRemoveAttachment = viewModel::removePendingAttachment,
                         onRemoveQueuedMessage = viewModel::removeQueuedMessage,
                         onSuggestion = { prompt -> viewModel.setDraft(prompt) },
@@ -620,6 +625,7 @@ private fun NexusChatBody(
     onMic: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onRerun: (String) -> Unit,
     onRemoveAttachment: (String) -> Unit,
     onRemoveQueuedMessage: (Int) -> Unit,
     onSuggestion: (String) -> Unit,
@@ -665,6 +671,8 @@ private fun NexusChatBody(
                         NexusMessage(
                             item = item,
                             personaName = selectedAgent?.name,
+                            canRerun = !isGenerating,
+                            onRerun = { onRerun(item.message.id) },
                             modifier = Modifier.fillMaxWidth().widthIn(max = 780.dp),
                         )
                     }
@@ -1015,9 +1023,14 @@ private fun NexusSuggestion(
 private fun NexusMessage(
     item: MessageWithAttachments,
     personaName: String?,
+    canRerun: Boolean,
+    onRerun: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val user = item.message.role == MessageRole.USER.name
+    val parsed = remember(item.message.content) { parseAssistantContent(item.message.content) }
+    var reasoningExpanded by remember(item.message.id) { mutableStateOf(false) }
+
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.Top,
@@ -1109,12 +1122,95 @@ private fun NexusMessage(
                     )
                 }
             } else {
-                Text(
-                    item.message.content,
-                    color = NexusColors.TextSecondary,
-                    fontSize = 13.sp,
-                    lineHeight = 21.sp,
-                )
+                if (!parsed.reasoning.isNullOrBlank()) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { reasoningExpanded = !reasoningExpanded },
+                        shape = RoundedCornerShape(12.dp),
+                        color = NexusColors.Surface800.copy(alpha = 0.72f),
+                        border = BorderStroke(1.dp, NexusColors.BorderSoft),
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Psychology,
+                                        contentDescription = null,
+                                        tint = Color(0xFFC084FC),
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(
+                                        if (reasoningExpanded) "Ocultar raciocínio" else "Ver raciocínio",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = NexusColors.TextSecondary,
+                                    )
+                                    parsed.reasoningMs?.let {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "• ${formatReasoningDuration(it)}",
+                                            fontSize = 10.sp,
+                                            color = NexusColors.TextMuted,
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    if (reasoningExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    tint = NexusColors.TextMuted,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            AnimatedVisibility(reasoningExpanded) {
+                                Column {
+                                    Spacer(Modifier.height(9.dp))
+                                    HorizontalDivider(color = NexusColors.BorderSoft)
+                                    Spacer(Modifier.height(9.dp))
+                                    Text(
+                                        parsed.reasoning,
+                                        color = NexusColors.TextMuted,
+                                        fontSize = 11.sp,
+                                        lineHeight = 17.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                } else if (parsed.reasoningMs != null) {
+                    Text(
+                        "Tempo de resposta: ${formatReasoningDuration(parsed.reasoningMs)}",
+                        fontSize = 9.sp,
+                        color = NexusColors.TextMuted,
+                    )
+                    Spacer(Modifier.height(7.dp))
+                }
+
+                if (parsed.answer.isNotBlank()) {
+                    Text(
+                        parsed.answer,
+                        color = NexusColors.TextSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 21.sp,
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = onRerun,
+                    enabled = canRerun && parsed.answer.isNotBlank(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Rerun", fontSize = 10.sp)
+                }
             }
         }
     }
@@ -1466,6 +1562,56 @@ private fun NexusAgentDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
     )
 }
+
+private data class ParsedAssistantContent(
+    val reasoning: String?,
+    val answer: String,
+    val reasoningMs: Long?,
+)
+
+private fun parseAssistantContent(raw: String): ParsedAssistantContent {
+    val metadataMatch = REASONING_METADATA.find(raw)
+    val reasoningMs = metadataMatch?.groupValues?.getOrNull(1)?.toLongOrNull()
+    val clean = REASONING_METADATA.replace(raw, "").trim()
+
+    REASONING_BLOCK.find(clean)?.let { block ->
+        return ParsedAssistantContent(
+            reasoning = block.groupValues[1].trim(),
+            answer = clean.removeRange(block.range).trim(),
+            reasoningMs = reasoningMs,
+        )
+    }
+
+    val open = REASONING_OPEN.find(clean)
+    if (open != null) {
+        return ParsedAssistantContent(
+            reasoning = clean.substring(open.range.last + 1).trim(),
+            answer = clean.substring(0, open.range.first).trim(),
+            reasoningMs = reasoningMs,
+        )
+    }
+
+    return ParsedAssistantContent(
+        reasoning = null,
+        answer = clean,
+        reasoningMs = reasoningMs,
+    )
+}
+
+private fun formatReasoningDuration(ms: Long): String {
+    val seconds = ms.coerceAtLeast(0L) / 1000.0
+    return if (seconds < 60.0) {
+        String.format(Locale.getDefault(), "%.1f s", seconds)
+    } else {
+        val minutes = (seconds / 60).toInt()
+        val remaining = (seconds % 60).toInt()
+        "${minutes}m ${remaining}s"
+    }
+}
+
+private val REASONING_OPEN = Regex("(?is)<think(?:ing)?>")
+private val REASONING_BLOCK = Regex("(?is)<think(?:ing)?>(.*?)</think(?:ing)?>")
+private val REASONING_METADATA = Regex("(?is)\\s*<!--nexus_reasoning_ms:(\\d+)-->\\s*$")
 
 private fun formatTime(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
