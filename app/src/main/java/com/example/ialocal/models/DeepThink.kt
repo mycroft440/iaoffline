@@ -7,12 +7,12 @@ enum class DeepThinkLevel(val storedValue: Int, val label: String, val minimumOu
     AUTO(0, "Automático", 0),
     LOW(1, "Baixo", 1536),
     MEDIUM(2, "Médio", 2560),
-    HIGH(3, "Alto", 4096),
+    HIGH(3, "Máximo", 4096),
     ;
 
     companion object {
         fun fromStoredValue(value: Int): DeepThinkLevel =
-            entries.firstOrNull { it.storedValue == value } ?: AUTO
+            entries.firstOrNull { it.storedValue == value } ?: HIGH
     }
 }
 
@@ -68,17 +68,28 @@ class DeepThinkStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun getLevel(agentId: String): DeepThinkLevel =
-        DeepThinkLevel.fromStoredValue(preferences.getInt(key(agentId), DeepThinkLevel.AUTO.storedValue))
+        DeepThinkLevel.fromStoredValue(preferences.getInt(levelKey(agentId), DeepThinkLevel.HIGH.storedValue))
 
     fun setLevel(agentId: String, level: DeepThinkLevel) {
-        preferences.edit().putInt(key(agentId), level.storedValue).apply()
+        preferences.edit().putInt(levelKey(agentId), level.storedValue).apply()
+    }
+
+    fun isEnabled(agentId: String): Boolean =
+        preferences.getBoolean(enabledKey(agentId), false)
+
+    fun setEnabled(agentId: String, enabled: Boolean) {
+        preferences.edit().putBoolean(enabledKey(agentId), enabled).apply()
     }
 
     fun clear(agentId: String) {
-        preferences.edit().remove(key(agentId)).apply()
+        preferences.edit()
+            .remove(levelKey(agentId))
+            .remove(enabledKey(agentId))
+            .apply()
     }
 
-    private fun key(agentId: String): String = "level_$agentId"
+    private fun levelKey(agentId: String): String = "level_$agentId"
+    private fun enabledKey(agentId: String): String = "enabled_$agentId"
 
     companion object {
         private const val PREFS_NAME = "deepthink_agent_settings"
