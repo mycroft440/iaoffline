@@ -136,6 +136,7 @@ fun NexusChatScreen(
     val attachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val isProcessingAttachments by viewModel.isProcessingAttachments.collectAsStateWithLifecycle()
+    val queuedMessages by viewModel.queuedMessages.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val models by viewModel.models.collectAsStateWithLifecycle()
@@ -307,6 +308,7 @@ fun NexusChatScreen(
                         isGenerating = isGenerating,
                         draft = draft,
                         attachments = attachments,
+                        queuedMessages = queuedMessages,
                         isProcessingAttachments = isProcessingAttachments,
                         isRecording = isRecording,
                         deepThinkSupported = deepThinkSupported,
@@ -318,6 +320,7 @@ fun NexusChatScreen(
                         onSend = viewModel::send,
                         onStop = viewModel::stopGeneration,
                         onRemoveAttachment = viewModel::removePendingAttachment,
+                        onRemoveQueuedMessage = viewModel::removeQueuedMessage,
                         onSuggestion = { prompt -> viewModel.setDraft(prompt) },
                     )
                 }
@@ -357,6 +360,7 @@ fun NexusChatScreen(
                         isGenerating = isGenerating,
                         draft = draft,
                         attachments = attachments,
+                        queuedMessages = queuedMessages,
                         isProcessingAttachments = isProcessingAttachments,
                         isRecording = isRecording,
                         deepThinkSupported = deepThinkSupported,
@@ -368,6 +372,7 @@ fun NexusChatScreen(
                         onSend = viewModel::send,
                         onStop = viewModel::stopGeneration,
                         onRemoveAttachment = viewModel::removePendingAttachment,
+                        onRemoveQueuedMessage = viewModel::removeQueuedMessage,
                         onSuggestion = { prompt -> viewModel.setDraft(prompt) },
                     )
                 }
@@ -606,6 +611,7 @@ private fun NexusChatBody(
     isGenerating: Boolean,
     draft: String,
     attachments: List<PendingAttachment>,
+    queuedMessages: List<QueuedChatMessage>,
     isProcessingAttachments: Boolean,
     isRecording: Boolean,
     deepThinkSupported: Boolean,
@@ -615,6 +621,7 @@ private fun NexusChatBody(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
+    onRemoveQueuedMessage: (Int) -> Unit,
     onSuggestion: (String) -> Unit,
 ) {
     Column(modifier.background(NexusColors.Surface900)) {
@@ -675,6 +682,7 @@ private fun NexusChatBody(
         NexusComposer(
             draft = draft,
             attachments = attachments,
+            queuedMessages = queuedMessages,
             isGenerating = isGenerating,
             isProcessingAttachments = isProcessingAttachments,
             isRecording = isRecording,
@@ -687,6 +695,7 @@ private fun NexusChatBody(
             onSend = onSend,
             onStop = onStop,
             onRemoveAttachment = onRemoveAttachment,
+            onRemoveQueuedMessage = onRemoveQueuedMessage,
         )
     }
 }
@@ -1153,6 +1162,7 @@ private fun NexusLoading(modifier: Modifier = Modifier) {
 private fun NexusComposer(
     draft: String,
     attachments: List<PendingAttachment>,
+    queuedMessages: List<QueuedChatMessage>,
     isGenerating: Boolean,
     isProcessingAttachments: Boolean,
     isRecording: Boolean,
@@ -1165,6 +1175,7 @@ private fun NexusComposer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
+    onRemoveQueuedMessage: (Int) -> Unit,
 ) {
     Surface(
         color = NexusColors.Surface850.copy(alpha = 0.98f),
@@ -1178,6 +1189,59 @@ private fun NexusComposer(
                     .imePadding()
                     .padding(horizontal = 12.dp, vertical = 11.dp),
             ) {
+                AnimatedVisibility(queuedMessages.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            if (queuedMessages.size == 1) "1 mensagem na fila" else "${queuedMessages.size} mensagens na fila",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFA5B4FC),
+                        )
+                        queuedMessages.take(3).forEachIndexed { index, queued ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(11.dp),
+                                color = NexusColors.Surface800,
+                                border = BorderStroke(1.dp, NexusColors.Border),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "${index + 1}",
+                                        fontSize = 9.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = NexusColors.Brand,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        queued.content,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                        fontSize = 11.sp,
+                                        color = NexusColors.TextSecondary,
+                                    )
+                                    IconButton(onClick = { onRemoveQueuedMessage(index) }, modifier = Modifier.size(28.dp)) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remover da fila", modifier = Modifier.size(13.dp), tint = NexusColors.TextMuted)
+                                    }
+                                }
+                            }
+                        }
+                        if (queuedMessages.size > 3) {
+                            Text(
+                                "+ ${queuedMessages.size - 3} aguardando",
+                                fontSize = 9.sp,
+                                color = NexusColors.TextMuted,
+                            )
+                        }
+                    }
+                }
+
                 if (attachments.isNotEmpty()) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         items(attachments, key = { it.id }) { attachment ->
@@ -1247,9 +1311,15 @@ private fun NexusComposer(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 52.dp, max = 168.dp),
-                            placeholder = { Text("Envie uma mensagem ou anexe arquivos...", color = NexusColors.TextMuted, fontSize = 12.sp) },
+                            placeholder = {
+                                Text(
+                                    if (isGenerating) "Digite para adicionar à fila..." else "Envie uma mensagem ou anexe arquivos...",
+                                    color = NexusColors.TextMuted,
+                                    fontSize = 12.sp,
+                                )
+                            },
                             maxLines = 6,
-                            enabled = !isGenerating && !isProcessingAttachments,
+                            enabled = !isProcessingAttachments,
                             textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 19.sp),
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.Transparent,
@@ -1290,18 +1360,30 @@ private fun NexusComposer(
                                 }
                             }
 
-                            FilledIconButton(
-                                onClick = if (isGenerating) onStop else onSend,
-                                enabled = isGenerating || (!isProcessingAttachments && !isRecording && (draft.isNotBlank() || attachments.isNotEmpty())),
-                                colors = ButtonDefaults.filledIconButtonColors(containerColor = NexusColors.BrandStrong),
-                                shape = RoundedCornerShape(11.dp),
-                                modifier = Modifier.size(42.dp),
-                            ) {
-                                Icon(
-                                    if (isGenerating) Icons.Default.Stop else Icons.Default.Send,
-                                    contentDescription = if (isGenerating) "Parar geração" else "Enviar",
-                                    modifier = Modifier.size(17.dp),
-                                )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (isGenerating) {
+                                    FilledIconButton(
+                                        onClick = onStop,
+                                        colors = ButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF7F1D1D)),
+                                        shape = RoundedCornerShape(11.dp),
+                                        modifier = Modifier.size(42.dp),
+                                    ) {
+                                        Icon(Icons.Default.Stop, contentDescription = "Parar geração", modifier = Modifier.size(17.dp))
+                                    }
+                                }
+                                FilledIconButton(
+                                    onClick = onSend,
+                                    enabled = !isProcessingAttachments && !isRecording && (draft.isNotBlank() || attachments.isNotEmpty()),
+                                    colors = ButtonDefaults.filledIconButtonColors(containerColor = NexusColors.BrandStrong),
+                                    shape = RoundedCornerShape(11.dp),
+                                    modifier = Modifier.size(42.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Send,
+                                        contentDescription = if (isGenerating) "Adicionar mensagem à fila" else "Enviar",
+                                        modifier = Modifier.size(17.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -1311,7 +1393,11 @@ private fun NexusComposer(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("Enter envia · use nova linha pelo teclado", fontSize = 9.sp, color = NexusColors.TextMuted)
+                    Text(
+                        if (isGenerating) "Enviar adiciona à fila · será enviada após a resposta atual" else "Enter envia · use nova linha pelo teclado",
+                        fontSize = 9.sp,
+                        color = NexusColors.TextMuted,
+                    )
                     Text("${draft.length} caracteres", fontSize = 9.sp, color = NexusColors.TextMuted, fontFamily = FontFamily.Monospace)
                 }
             }
