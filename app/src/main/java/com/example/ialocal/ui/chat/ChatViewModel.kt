@@ -31,6 +31,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+
+data class QueuedChatMessage(
+    val content: String,
+    val attachments: List<PendingAttachment> = emptyList(),
+)
 
 class ChatViewModel(
     private val conversationId: String,
@@ -56,6 +62,7 @@ class ChatViewModel(
     private val _pendingAttachments = MutableStateFlow<List<PendingAttachment>>(emptyList()); val pendingAttachments = _pendingAttachments.asStateFlow()
     private val _isGenerating = MutableStateFlow(false); val isGenerating = _isGenerating.asStateFlow()
     private val _isProcessingAttachments = MutableStateFlow(false); val isProcessingAttachments = _isProcessingAttachments.asStateFlow()
+    private val _queuedMessages = MutableStateFlow<List<QueuedChatMessage>>(emptyList()); val queuedMessages: StateFlow<List<QueuedChatMessage>> = _queuedMessages.asStateFlow()
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
@@ -188,10 +195,20 @@ class ChatViewModel(
         removed?.let { viewModelScope.launch(Dispatchers.IO) { runCatching { File(it.localPath).delete() } } }
     }
 
+    fun removeQueuedMessage(index: Int) {
+        val current = _queuedMessages.value
+        if (index !in current.indices) return
+        val removed = current[index]
+        _queuedMessages.value = current.filterIndexed { itemIndex, _ -> itemIndex != index }
+        removed.attachments.forEach { attachment ->
+            viewModelScope.launch(Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
+        }
+    }
+
     fun stopGeneration() { generationJob?.cancel() }
 
     fun send() {
-        if (_isGenerating.value || _isProcessingAttachments.value) return
+        if (_isProcessingAttachments.value) return
         val currentDraft = _draft.value.trim()
         val attachments = _pendingAttachments.value
         if (currentDraft.isBlank() && attachments.isEmpty()) return
@@ -200,26 +217,41 @@ class ChatViewModel(
             attachments.any { it.mimeType?.startsWith("audio/") == true } -> "Analise o áudio enviado."
             else -> "Analise o arquivo enviado."
         }
-        _draft.value = ""; _pendingAttachments.value = emptyList(); _isGenerating.value = true; _error.value = null
+        val outgoing = QueuedChatMessage(content, attachments)
+        _draft.value = ""
+        _pendingAttachments.value = emptyList()
+        _error.value = null
 
-        val historyBeforeSend = messages.value.map(::toAiMessageWithPersistedAttachments)
+        if (_isGenerating.value) {
+            _queuedMessages.value = _queuedMessages.value + outgoing
+        } else {
+            startGeneration(outgoing)
+        }
+    }
+
+    private fun startGeneration(outgoing: QueuedChatMessage) {
+        _isGenerating.value = true
         generationJob = viewModelScope.launch {
             var assistantId: String? = null
             try {
-                repository.addMessage(conversationId, MessageRole.USER, content, attachments)
+                // Give Room's flows a chance to publish the previous completed response before
+                // building history for the next queued turn.
+                yield()
+                val historyBeforeSend = messages.value.map(::toAiMessageWithPersistedAttachments)
+                repository.addMessage(conversationId, MessageRole.USER, outgoing.content, outgoing.attachments)
                 val agentId = _selectedAgentId.value
                     ?: conversation.value?.agentId
                     ?: modelRepository.getDefaultAgent()?.id
                 if (agentId != null) repository.setConversationAgent(conversationId, agentId)
 
-                val history = historyBeforeSend + AiChatMessage("user", content)
+                val history = historyBeforeSend + AiChatMessage("user", outgoing.content)
                 val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
                 assistantId = replyId
                 var accumulated = ""
                 aiGateway.streamChat(AiChatRequest(
                     conversationId = conversationId,
                     messages = history,
-                    attachments = attachments,
+                    attachments = outgoing.attachments,
                     agentId = agentId,
                 )).collect { chunk ->
                     accumulated += chunk
@@ -235,8 +267,15 @@ class ChatViewModel(
             } finally {
                 _isGenerating.value = false
                 generationJob = null
+                startNextQueuedMessage()
             }
         }
+    }
+
+    private fun startNextQueuedMessage() {
+        val next = _queuedMessages.value.firstOrNull() ?: return
+        _queuedMessages.value = _queuedMessages.value.drop(1)
+        startGeneration(next)
     }
 
     private fun toAiMessageWithPersistedAttachments(item: MessageWithAttachments): AiChatMessage {
