@@ -106,6 +106,7 @@ object ModelCatalog {
             description = "Maior Gemma 4 abaixo do limite de 50B. Indicado apenas para aparelhos com muita RAM e espaço livre.",
         ),
 
+        // Qwen: mantidos do mais moderno para o mais antigo.
         CatalogModel(
             id = "qwen3.8-27b-q4-k-m",
             displayName = "Qwen3.8 27B",
@@ -117,7 +118,33 @@ object ModelCatalog {
             sha256 = "31629f53165ab6a7dad8c9847dcfd1fdf55829dac1e6e748f4a68581b0033d34",
             recommendedRamBytes = 32_000_000_000L,
             totalParametersBillions = 27.3,
-            description = "Qwen3.8 denso para uso geral, código e agentes. É uma opção pesada para Android e exige hardware excepcional.",
+            description = "Qwen3.8 denso para uso geral, código e agentes. É a geração Qwen mais atual incluída no catálogo e exige hardware excepcional no Android.",
+        ),
+        CatalogModel(
+            id = "qwen3.5-9b-q4-k-m",
+            displayName = "Qwen3.5 9B",
+            provider = ModelProvider.ALIBABA,
+            repository = "openresearchtools/Qwen3.5-9B-GGUF",
+            fileName = "Qwen3.5-9B-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 5_630_000_000L,
+            sha256 = "148ffb97ac1d4cbbaef95ff36dbc02948b9c25746d6df3bc86533b859060380a",
+            recommendedRamBytes = 11_000_000_000L,
+            totalParametersBillions = 9.0,
+            description = "Qwen3.5 9B recente para uso geral, raciocínio e código. Traz uma opção moderna de médio porte para aparelhos Android com bastante RAM.",
+        ),
+        CatalogModel(
+            id = "qwen3.5-4b-q4-k-m",
+            displayName = "Qwen3.5 4B",
+            provider = ModelProvider.ALIBABA,
+            repository = "lmstudio-community/Qwen3.5-4B-GGUF",
+            fileName = "Qwen3.5-4B-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 2_707_513_696L,
+            sha256 = "25082a7dd3776cc3c741c6347d3bd04523f05796607b3fbc32fa3a25dfa1418c",
+            recommendedRamBytes = 6_000_000_000L,
+            totalParametersBillions = 4.0,
+            description = "Qwen3.5 4B recente e mais leve, indicado para chat local, raciocínio e tarefas gerais em aparelhos com menos memória.",
         ),
         CatalogModel(
             id = "qwen3-coder-30b-a3b-instruct-q4-k-m",
