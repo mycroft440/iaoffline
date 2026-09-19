@@ -66,7 +66,7 @@ class AiOrchestrator(
         requireVerified(model)
 
         val capability = DeepThinkSupport.capability(model)
-        val deepThinkLevel = if (capability.supported) {
+        val deepThinkLevel = if (capability.supported && deepThinkStore.isEnabled(agent.id)) {
             deepThinkStore.getLevel(agent.id)
         } else {
             DeepThinkLevel.AUTO
