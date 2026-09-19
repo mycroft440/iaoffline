@@ -102,10 +102,16 @@ private fun LocalAiApp(
     }
 
     LaunchedEffect(Unit) {
-        if (container.modelRepository.getModels().isEmpty()) {
-            discoveredModels = container.modelManager.discoverPersistedCatalogModels()
-            showRecoveryPrompt = discoveredModels.isNotEmpty()
-        }
+        val installedModels = container.modelRepository.getModels()
+        val installedCatalogIds = container.modelManager.catalog
+            .filter { catalog ->
+                installedModels.any { installed -> installed.apiModelId.startsWith(catalog.apiIdPrefix) }
+            }
+            .mapTo(mutableSetOf()) { it.id }
+
+        discoveredModels = container.modelManager.discoverPersistedCatalogModels()
+            .filterNot { it.id in installedCatalogIds }
+        showRecoveryPrompt = discoveredModels.isNotEmpty()
     }
 
     NavHost(navController = navController, startDestination = "ai-home") {
@@ -133,7 +139,6 @@ private fun LocalAiApp(
                     onOpenOfflineModels = { navController.navigate("offline-models") },
                     onOpenApi = { navController.navigate("models") },
                     onOpenSettings = { navController.navigate("settings") },
-                    onRestoreModels = { recoveryPicker.launch(null) },
                     onOpenCodeEditor = { navController.navigate("code-editor") },
                     onExitApp = onExitApp,
                 )
@@ -259,8 +264,8 @@ private fun LocalAiApp(
             title = { Text("IAs salvas encontradas") },
             text = {
                 Text(
-                    "Encontramos ${discoveredModels.size} IA(s) em Downloads/IAs Offline. " +
-                        "Como o aplicativo foi reinstalado, o Android precisa que você autorize essa pasta uma vez. " +
+                    "Encontramos automaticamente ${discoveredModels.size} IA(s) salvas em Downloads/IAs Offline que ainda não estão registradas. " +
+                        "Quando o Android não permite abrir diretamente arquivos de uma instalação anterior, é necessário autorizar essa pasta uma vez. " +
                         "Os modelos serão validados e restaurados sem baixar novamente.",
                 )
             },
