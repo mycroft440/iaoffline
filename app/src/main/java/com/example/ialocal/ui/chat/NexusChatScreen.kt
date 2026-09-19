@@ -971,45 +971,6 @@ private fun NexusWelcome(
                     Text("DeepThink disponível para este modelo.", color = Color(0xFFC084FC), fontSize = 11.sp)
                 }
             }
-
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NexusSuggestion(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Default.Code,
-                        accent = NexusColors.Brand,
-                        title = "Clean Code",
-                        body = "Exemplos práticos de arquitetura, SOLID e código robusto.",
-                        onClick = { onSuggestion("Explique como aplicar os princípios SOLID com exemplos práticos e código limpo.") },
-                    )
-                    NexusSuggestion(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Default.Psychology,
-                        accent = NexusColors.Purple,
-                        title = "Análise profunda",
-                        body = "Compare alternativas, riscos, premissas e trade-offs.",
-                        onClick = { onSuggestion("Faça uma análise profunda deste problema, explicitando premissas, riscos e trade-offs.") },
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NexusSuggestion(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Default.Description,
-                        accent = NexusColors.Pink,
-                        title = "Criar conteúdo",
-                        body = "Estruture texto, documentação, relatório ou roteiro.",
-                        onClick = { onSuggestion("Ajude a estruturar um texto claro, conciso e bem organizado sobre o tema que vou fornecer.") },
-                    )
-                    NexusSuggestion(
-                        modifier = Modifier.weight(1f),
-                        icon = Icons.Default.Memory,
-                        accent = NexusColors.Emerald,
-                        title = "Modo offline",
-                        body = "Use o modelo instalado sem depender da internet.",
-                        onClick = { onSuggestion("Resuma as capacidades deste modelo local e sugira boas tarefas para executar offline.") },
-                    )
-                }
-            }
         }
     }
 }
