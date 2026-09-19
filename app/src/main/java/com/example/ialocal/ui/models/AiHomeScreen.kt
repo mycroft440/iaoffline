@@ -8,7 +8,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Download
@@ -92,7 +91,6 @@ fun AiHomeScreen(
     onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
-    onRestoreModels: () -> Unit,
     onOpenCodeEditor: () -> Unit,
     onExitApp: () -> Unit,
 ) {
@@ -125,7 +123,6 @@ fun AiHomeScreen(
             onOpenOfflineModels = onOpenOfflineModels,
             onOpenApi = onOpenApi,
             onOpenSettings = onOpenSettings,
-            onRestoreModels = onRestoreModels,
             onOpenCodeEditor = onOpenCodeEditor,
         )
     }
@@ -261,7 +258,6 @@ private fun HomeContent(
     onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
-    onRestoreModels: () -> Unit,
     onOpenCodeEditor: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -327,10 +323,7 @@ private fun HomeContent(
             item { Spacer(Modifier.height(2.dp)) }
         }
 
-        HomeFooter(
-            onRestoreModels = onRestoreModels,
-            onOpenCodeEditor = onOpenCodeEditor,
-        )
+        HomeFooter(onOpenCodeEditor = onOpenCodeEditor)
     }
 }
 
@@ -761,7 +754,6 @@ private fun HomeActionCard(
 
 @Composable
 private fun HomeFooter(
-    onRestoreModels: () -> Unit,
     onOpenCodeEditor: () -> Unit,
 ) {
     Row(
@@ -777,31 +769,6 @@ private fun HomeFooter(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .background(Color(0xFF0F172E), RoundedCornerShape(16.dp))
-                .border(2.dp, Color(0xFF818CF8), RoundedCornerShape(16.dp))
-                .clickable(onClick = onRestoreModels)
-                .padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Default.Restore,
-                contentDescription = null,
-                tint = Color(0xFFA5B4FC),
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(9.dp))
-            Text(
-                text = "Restaurar IAs",
-                color = Color(0xFFE0E7FF),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Black,
-            )
-        }
-
-        Spacer(Modifier.width(12.dp))
-
         Box(
             modifier = Modifier
                 .size(50.dp)
