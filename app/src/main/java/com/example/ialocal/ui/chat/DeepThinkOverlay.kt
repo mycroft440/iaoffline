@@ -33,22 +33,36 @@ fun DeepThinkOverlay(
     val context = LocalContext.current
     val store = remember(context) { DeepThinkStore(context.applicationContext) }
     var open by remember(agent.id) { mutableStateOf(false) }
+    var enabled by remember(agent.id) { mutableStateOf(store.isEnabled(agent.id)) }
     var level by remember(agent.id) { mutableStateOf(store.getLevel(agent.id)) }
     val capability = remember(model.id, model.name, model.apiModelId) { DeepThinkSupport.capability(model) }
 
     if (!capability.supported) return
 
     AssistChip(
-        onClick = { open = true },
-        label = { Text("DeepThink: ${level.label}") },
+        onClick = {
+            if (enabled) {
+                store.setEnabled(agent.id, false)
+                enabled = false
+            } else {
+                open = true
+            }
+        },
+        label = {
+            Text(
+                if (enabled) "DeepThink: ${level.label}"
+                else "DeepThink: Desativado",
+            )
+        },
     )
 
     if (open) {
-        var raw by remember(agent.id, level) { mutableFloatStateOf(level.storedValue.toFloat()) }
-        val selected = DeepThinkLevel.fromStoredValue(raw.roundToInt().coerceIn(0, 3))
+        // Sempre que o Deep Think é reativado, a configuração começa no nível máximo.
+        var raw by remember(agent.id, open) { mutableFloatStateOf(DeepThinkLevel.HIGH.storedValue.toFloat()) }
+        val selected = DeepThinkLevel.fromStoredValue(raw.roundToInt().coerceIn(1, 3))
         AlertDialog(
             onDismissRequest = { open = false },
-            title = { Text("DeepThink") },
+            title = { Text("Configurar DeepThink") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(model.name, style = MaterialTheme.typography.titleSmall)
@@ -57,23 +71,27 @@ fun DeepThinkOverlay(
                     Slider(
                         value = raw,
                         onValueChange = { raw = it },
-                        valueRange = 0f..3f,
-                        steps = 2,
+                        valueRange = 1f..3f,
+                        steps = 1,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("Automático · Baixo · Médio · Alto", style = MaterialTheme.typography.labelSmall)
+                    Text("Baixo · Médio · Máximo", style = MaterialTheme.typography.labelSmall)
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         store.setLevel(agent.id, selected)
+                        store.setEnabled(agent.id, true)
                         level = selected
+                        enabled = true
                         open = false
                     },
-                ) { Text("Salvar") }
+                ) { Text("Ativar") }
             },
-            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancelar") } },
+            dismissButton = {
+                TextButton(onClick = { open = false }) { Text("Cancelar") }
+            },
         )
     }
 }
