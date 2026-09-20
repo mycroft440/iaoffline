@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -44,6 +45,12 @@ interface ModelDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAgent(agent: AgentEntity)
+
+    @Transaction
+    suspend fun insertModelWithAgents(model: AiModelEntity, agents: List<AgentEntity>) {
+        insertModel(model)
+        agents.forEach { insertAgent(it) }
+    }
 
     @Update
     suspend fun updateAgent(agent: AgentEntity)
