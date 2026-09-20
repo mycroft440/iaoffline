@@ -102,7 +102,7 @@ data class AiModelEntity(
 data class AgentEntity(
     @PrimaryKey val id: String,
     val name: String,
-    val modelId: String,
+    val modelId: String?,
     val systemPrompt: String,
     val temperature: Float = 0.3f,
     val maxTokens: Int = 1024,
