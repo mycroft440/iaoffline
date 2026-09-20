@@ -119,10 +119,9 @@ class AiOrchestrator(
         return model
     }
 
-    private suspend fun resolveAgent(id: String?): AgentEntity = when {
-        id.isNullOrBlank() -> models.getDefaultAgent()
-        else -> models.getAgent(id)
-    } ?: throw IllegalStateException("Nenhum agente está configurado. Importe e verifique um modelo primeiro.")
+    private suspend fun resolveAgent(id: String?): AgentEntity =
+        models.resolveAgentForUse(id)
+            ?: throw IllegalStateException("Nenhum agente com modelo verificado está disponível. Verifique e ative um modelo primeiro.")
 
     private fun requireVerified(model: AiModelEntity) {
         check(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
