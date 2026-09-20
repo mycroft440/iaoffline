@@ -29,6 +29,7 @@ class ModelRepository(
     val agents: Flow<List<AgentEntity>> = dao.observeAgents()
 
     private val agentUsagePreferences = context.getSharedPreferences(AGENT_USAGE_PREFS, Context.MODE_PRIVATE)
+    private val profilePreferences = context.getSharedPreferences(PROFILE_PREFS, Context.MODE_PRIVATE)
     private val _agentUsageCounts = MutableStateFlow(loadAgentUsageCounts())
     val agentUsageCounts: StateFlow<Map<String, Int>> = _agentUsageCounts.asStateFlow()
 
@@ -162,7 +163,7 @@ class ModelRepository(
             updatedAt = now,
         )
         dao.insertAgent(agent)
-        ensureStarterProfiles(id)
+        ensureGlobalStarterProfiles()
         logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
         return model
     }
@@ -208,13 +209,13 @@ class ModelRepository(
     }
 
     suspend fun createAgentProfile(
-        modelId: String,
+        modelId: String?,
         name: String,
         systemPrompt: String,
         temperature: Float = 0.3f,
         maxTokens: Int = 1024,
     ): AgentEntity {
-        requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
+        if (modelId != null) requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
         val cleanName = name.trim().ifBlank { "Novo agente" }.take(80)
         val cleanPrompt = systemPrompt.trim().ifBlank { DEFAULT_SYSTEM_PROMPT }
         val existing = dao.getAgents().firstOrNull {
@@ -236,6 +237,29 @@ class ModelRepository(
         )
         dao.insertAgent(agent)
         return agent
+    }
+
+    suspend fun ensureGlobalStarterProfiles() {
+        if (profilePreferences.getBoolean(PROFILES_SEEDED_KEY, false)) return
+
+        var globalProfiles = dao.getAgents().filter { it.modelId == null }
+        GLOBAL_STARTER_PROFILES.forEach { starter ->
+            if (globalProfiles.none { it.name.equals(starter.name, ignoreCase = true) }) {
+                createAgentProfile(
+                    modelId = null,
+                    name = starter.name,
+                    systemPrompt = starter.prompt,
+                )
+                globalProfiles = dao.getAgents().filter { it.modelId == null }
+            }
+        }
+
+        if (dao.getDefaultAgent() == null) {
+            val first = globalProfiles.firstOrNull { it.name == GENERAL_ASSISTANT_NAME }
+                ?: globalProfiles.firstOrNull()
+            first?.let { setDefaultAgent(it.id) }
+        }
+        profilePreferences.edit().putBoolean(PROFILES_SEEDED_KEY, true).apply()
     }
 
     suspend fun ensureStarterProfiles(modelId: String) {
@@ -403,13 +427,37 @@ class ModelRepository(
             "Responda de forma direta, franca e sem moralizações desnecessárias. Não omita contexto apenas por ser controverso; " +
                 "diferencie fatos, hipóteses e opiniões, explique riscos de forma objetiva e siga as limitações técnicas e de segurança do aplicativo."
 
+        const val GENERAL_ASSISTANT_NAME = "Assistente Geral"
+        const val STUDY_TUTOR_NAME = "Tutor de Estudos"
+        const val CONTENT_CREATOR_NAME = "Criador de Conteúdo"
+        const val DATA_ANALYST_NAME = "Analista de Dados"
+
+        private const val STUDY_TUTOR_PROMPT =
+            "Você é um tutor paciente e rigoroso. Explique conceitos por etapas, use exemplos concretos, faça perguntas de verificação quando útil e adapte a profundidade ao nível do usuário."
+        private const val CONTENT_CREATOR_PROMPT =
+            "Você é um criador e editor de conteúdo. Produza textos claros, originais e adequados ao público e ao canal. Ofereça alternativas de tom e melhore estrutura, ritmo e precisão."
+        private const val DATA_ANALYST_PROMPT =
+            "Você é um analista de dados cuidadoso. Estruture hipóteses, verifique unidades e premissas, diferencie correlação de causalidade e apresente conclusões com limitações e próximos testes."
+
         private val STARTER_PROFILES = listOf(
             StarterProfile(SOFTWARE_ENGINEER_NAME, SOFTWARE_ENGINEER_PROMPT),
             StarterProfile(SELF_DRIVEN_NAME, SELF_DRIVEN_PROMPT),
             StarterProfile(UNCENSORED_NAME, UNCENSORED_PROMPT),
         )
 
+        private val GLOBAL_STARTER_PROFILES = listOf(
+            StarterProfile(SOFTWARE_ENGINEER_NAME, SOFTWARE_ENGINEER_PROMPT),
+            StarterProfile(SELF_DRIVEN_NAME, SELF_DRIVEN_PROMPT),
+            StarterProfile(UNCENSORED_NAME, UNCENSORED_PROMPT),
+            StarterProfile(GENERAL_ASSISTANT_NAME, DEFAULT_SYSTEM_PROMPT),
+            StarterProfile(STUDY_TUTOR_NAME, STUDY_TUTOR_PROMPT),
+            StarterProfile(CONTENT_CREATOR_NAME, CONTENT_CREATOR_PROMPT),
+            StarterProfile(DATA_ANALYST_NAME, DATA_ANALYST_PROMPT),
+        )
+
         private const val AGENT_USAGE_PREFS = "agent_profile_usage"
+        private const val PROFILE_PREFS = "ai_profiles"
+        private const val PROFILES_SEEDED_KEY = "global_profiles_seeded_v1"
         private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
     }
 }
