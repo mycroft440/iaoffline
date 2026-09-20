@@ -162,15 +162,32 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
                 )
             }
 
-            items(viewModel.catalog, key = { "catalog-${it.id}" }) { catalogModel ->
-                CatalogModelCard(
-                    model = catalogModel,
-                    state = download.takeIf { it.catalogId == catalogModel.id },
-                    installed = models.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) },
-                    anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
-                    onDownload = { viewModel.downloadCatalogModel(catalogModel.id) },
-                    onCancel = viewModel::cancelDownload,
-                )
+            viewModel.catalog.groupBy { it.provider }.forEach { (provider, providerModels) ->
+                item(key = "provider-${provider.name}") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ProviderLogo(provider = provider, size = 32.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            provider.brandName(),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+
+                items(providerModels, key = { "catalog-${it.id}" }) { catalogModel ->
+                    CatalogModelCard(
+                        model = catalogModel,
+                        state = download.takeIf { it.catalogId == catalogModel.id },
+                        installed = models.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) },
+                        anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
+                        onDownload = { viewModel.downloadCatalogModel(catalogModel.id) },
+                        onCancel = viewModel::cancelDownload,
+                    )
+                }
             }
 
             item {
