@@ -148,19 +148,7 @@ class ModelRepository(
             declaredContextLength = declaredContext,
             verificationStatus = ModelVerificationStatus.IMPORTED.name,
         )
-        val starterAgents = STARTER_PROFILES.map { starter ->
-            AgentEntity(
-                id = UUID.randomUUID().toString(),
-                name = starter.name,
-                modelId = id,
-                systemPrompt = starter.prompt,
-                temperature = 0.3f,
-                maxTokens = 1024,
-                isDefault = false,
-                createdAt = now,
-                updatedAt = now,
-            )
-        }
+        val starterAgents = starterAgentsForModel(id, now)
         dao.insertModelWithAgents(model, starterAgents)
         logger?.info("IMPORT", "Modelo importado com ${starterAgents.size} perfis iniciais: ${model.apiModelId}")
         return model
@@ -394,10 +382,26 @@ class ModelRepository(
                     it.id !in modelIdsWithAgents
             }
             .forEach { model ->
-                ensureStarterProfiles(model.id)
-                logger?.info("AGENT_REPAIR", "Perfis iniciais restaurados para ${model.apiModelId}")
+                val repairedAgents = starterAgentsForModel(model.id, System.currentTimeMillis())
+                dao.insertAgentsAtomically(repairedAgents)
+                logger?.info("AGENT_REPAIR", "${repairedAgents.size} perfis iniciais restaurados para ${model.apiModelId}")
             }
     }
+
+    private fun starterAgentsForModel(modelId: String, now: Long): List<AgentEntity> =
+        STARTER_PROFILES.map { starter ->
+            AgentEntity(
+                id = UUID.randomUUID().toString(),
+                name = starter.name,
+                modelId = modelId,
+                systemPrompt = starter.prompt,
+                temperature = 0.3f,
+                maxTokens = 1024,
+                isDefault = false,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
 
     private suspend fun isAgentVerified(agent: AgentEntity): Boolean =
         dao.getModel(agent.modelId)?.verificationStatus == ModelVerificationStatus.VERIFIED.name
