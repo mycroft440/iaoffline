@@ -68,6 +68,13 @@ class ChatViewModel(
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
     private var generationJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            runCatching { modelRepository.ensureGlobalStarterProfiles() }
+                .onFailure { _error.value = it.message ?: "Não foi possível preparar os perfis de I.A." }
+        }
+    }
+
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
 
@@ -87,10 +94,22 @@ class ChatViewModel(
     fun selectModel(modelId: String) {
         viewModelScope.launch {
             runCatching {
+                val currentAgentId = _selectedAgentId.value ?: conversation.value?.agentId
+                val currentAgent = currentAgentId?.let { modelRepository.getAgent(it) }
                 val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
-                val agent = modelAgents.firstOrNull { it.isDefault }
-                    ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
-                    ?: modelAgents.firstOrNull()
+                val agent = if (currentAgent != null && currentAgent.modelId == null) {
+                    modelRepository.createAgentProfile(
+                        modelId = modelId,
+                        name = currentAgent.name,
+                        systemPrompt = currentAgent.systemPrompt,
+                        temperature = currentAgent.temperature,
+                        maxTokens = currentAgent.maxTokens,
+                    )
+                } else {
+                    modelAgents.firstOrNull { it.isDefault }
+                        ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
+                        ?: modelAgents.firstOrNull()
+                }
                 _selectedAgentId.value = agent?.id
                 agent?.let { modelRepository.recordAgentUse(it.id) }
                 repository.setConversationAgent(conversationId, agent?.id)
@@ -101,7 +120,7 @@ class ChatViewModel(
     }
 
     fun createAgentProfile(
-        modelId: String,
+        modelId: String?,
         name: String,
         systemPrompt: String,
         temperature: Float = 0.3f,
