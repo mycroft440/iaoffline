@@ -16,6 +16,7 @@ import com.example.ialocal.data.ConversationListItem
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
+import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
@@ -24,10 +25,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,8 +54,15 @@ class ChatViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val conversations: StateFlow<List<ConversationListItem>> = repository.conversations
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val agents: StateFlow<List<AgentEntity>> = modelRepository.agents
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val agents: StateFlow<List<AgentEntity>> = combine(
+        modelRepository.agents,
+        modelRepository.models,
+    ) { agents, models ->
+        val verifiedModelIds = models
+            .filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
+            .mapTo(hashSetOf()) { it.id }
+        agents.filter { it.modelId in verifiedModelIds }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val models: StateFlow<List<AiModelEntity>> = modelRepository.models
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val agentUsageCounts: StateFlow<Map<String, Int>> = modelRepository.agentUsageCounts
@@ -72,9 +81,21 @@ class ChatViewModel(
     fun clearError() { _error.value = null }
 
     fun selectAgent(agentId: String?) {
-        _selectedAgentId.value = agentId
-        agentId?.let(modelRepository::recordAgentUse)
-        viewModelScope.launch { repository.setConversationAgent(conversationId, agentId) }
+        viewModelScope.launch {
+            if (agentId == null) {
+                _selectedAgentId.value = null
+                repository.setConversationAgent(conversationId, null)
+                return@launch
+            }
+            val resolved = modelRepository.resolveAgentForUse(agentId)
+            if (resolved?.id != agentId) {
+                _error.value = "Este perfil não está disponível porque o modelo ainda não foi verificado."
+                return@launch
+            }
+            _selectedAgentId.value = resolved.id
+            modelRepository.recordAgentUse(resolved.id)
+            repository.setConversationAgent(conversationId, resolved.id)
+        }
     }
 
     fun setDefaultAgent(agentId: String) {
@@ -87,6 +108,10 @@ class ChatViewModel(
     fun selectModel(modelId: String) {
         viewModelScope.launch {
             runCatching {
+                val model = requireNotNull(modelRepository.getModel(modelId)) { "Modelo não encontrado." }
+                require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
+                    "O modelo precisa passar pelo teste real de inferência antes de ser selecionado."
+                }
                 val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
                 val agent = modelAgents.firstOrNull { it.isDefault }
                     ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
@@ -140,10 +165,7 @@ class ChatViewModel(
                 val wasSelected = _selectedAgentId.value == agentId || conversation.value?.agentId == agentId
                 modelRepository.deleteAgent(agentId)
                 if (wasSelected) {
-                    val remaining = modelRepository.getAgents().filter { it.modelId == deleted.modelId }
-                    val replacement = remaining.firstOrNull { it.isDefault }
-                        ?: remaining.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
-                        ?: remaining.firstOrNull()
+                    val replacement = modelRepository.resolveAgentForUse(null)
                     _selectedAgentId.value = replacement?.id
                     repository.setConversationAgent(conversationId, replacement?.id)
                 }
@@ -288,10 +310,14 @@ class ChatViewModel(
         history: List<AiChatMessage>,
         attachments: List<PendingAttachment>,
     ) {
-        val agentId = _selectedAgentId.value
-            ?: conversation.value?.agentId
-            ?: modelRepository.getDefaultAgent()?.id
-        if (agentId != null) repository.setConversationAgent(conversationId, agentId)
+        val preferredAgentId = _selectedAgentId.value ?: conversation.value?.agentId
+        val agent = modelRepository.resolveAgentForUse(preferredAgentId)
+            ?: throw IllegalStateException("Nenhum perfil com modelo verificado está disponível. Verifique e ative um modelo primeiro.")
+        val agentId = agent.id
+        _selectedAgentId.value = agentId
+        if (conversation.value?.agentId != agentId) {
+            repository.setConversationAgent(conversationId, agentId)
+        }
 
         val replyId = repository.addMessage(
             conversationId,
