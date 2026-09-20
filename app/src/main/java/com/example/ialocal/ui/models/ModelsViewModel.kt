@@ -127,11 +127,13 @@ class ModelsViewModel(
 
     fun prepareForChat(id: String, onReady: () -> Unit) {
         if (_operationText.value != null || _isImporting.value || manager.downloadState.value.isBusy) return
+        _operationText.value = "Preparando I.A…"
         _error.value = null
         viewModelScope.launch {
             val model = repository.getModel(id)
             if (model == null) {
                 _error.value = "Modelo não encontrado."
+                _operationText.value = null
                 return@launch
             }
             _operationText.value = if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
