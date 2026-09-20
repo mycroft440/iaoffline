@@ -54,9 +54,10 @@ fun NexusProfileLibraryAction(
     val agentUsageCounts by viewModel.agentUsageCounts.collectAsStateWithLifecycle()
     val selectedAgentId by viewModel.selectedAgentId.collectAsStateWithLifecycle()
 
-    val globalProfiles = remember(agents, agentUsageCounts) {
-        agents.filter { it.modelId == null }.sortedWith(
-            compareByDescending<AgentEntity> { agentUsageCounts[it.id] ?: 0 }
+    val configurableProfiles = remember(agents, agentUsageCounts) {
+        agents.sortedWith(
+            compareByDescending<AgentEntity> { it.modelId == null }
+                .thenByDescending { agentUsageCounts[it.id] ?: 0 }
                 .thenByDescending { it.isDefault }
                 .thenByDescending { it.updatedAt }
         )
@@ -64,9 +65,6 @@ fun NexusProfileLibraryAction(
     val selectedAgent = agents.firstOrNull { it.id == selectedAgentId }
         ?: agents.firstOrNull { it.id == conversation?.agentId }
         ?: agents.firstOrNull { it.isDefault }
-    val selectedProfile = globalProfiles.firstOrNull { profile ->
-        profile.id == selectedAgent?.id || profile.name.equals(selectedAgent?.name, ignoreCase = true)
-    }
 
     var libraryOpen by remember { mutableStateOf(false) }
     var customOpen by remember { mutableStateOf(false) }
@@ -97,7 +95,7 @@ fun NexusProfileLibraryAction(
                 Column {
                     Text("Configurar perfis de I.A", fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Os perfis ficam disponíveis mesmo sem nenhum modelo instalado.",
+                        "Perfis globais ficam disponíveis mesmo sem modelo instalado; perfis antigos vinculados também podem ser editados ou apagados.",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Normal,
                         color = NexusColors.TextMuted,
@@ -120,7 +118,7 @@ fun NexusProfileLibraryAction(
                             color = NexusColors.TextMuted,
                         )
                     }
-                    if (globalProfiles.isEmpty()) {
+                    if (configurableProfiles.isEmpty()) {
                         item {
                             Text(
                                 "Preparando os perfis padrão…",
@@ -130,12 +128,12 @@ fun NexusProfileLibraryAction(
                             )
                         }
                     } else {
-                        items(globalProfiles, key = { "profile-${it.id}" }) { agent ->
+                        items(configurableProfiles, key = { "profile-${it.id}" }) { agent ->
                             NexusProfileRow(
                                 name = agent.name,
                                 description = agent.systemPrompt,
-                                selected = agent.id == selectedProfile?.id,
-                                actionLabel = if (agent.id == selectedProfile?.id) "Atual" else "Usar",
+                                selected = agent.id == selectedAgent?.id,
+                                actionLabel = if (agent.id == selectedAgent?.id) "Atual" else "Usar",
                                 onClick = {
                                     viewModel.selectAgent(agent.id)
                                     pendingDefaultAgent = agent
