@@ -220,11 +220,11 @@ private fun installedCompactName(model: AiModelEntity, catalogModel: CatalogMode
 
 private fun installedParameterLabel(model: AiModelEntity, catalogModel: CatalogModel?): String? {
     val raw = catalogModel?.displayName ?: model.name
-    return Regex("\\b\\d+(?:[.,]\\d+)?B(?:-A\\d+(?:[.,]\\d+)?B)?\\b", RegexOption.IGNORE_CASE)
-        .findAll(raw)
-        .lastOrNull()
-        ?.value
-        ?.uppercase(Locale.ROOT)
+    val nominal = Regex(
+        "\\s+(\\d+(?:[.,]\\d+)?B(?:-A\\d+(?:[.,]\\d+)?B)?)(?:\\s*·\\s*texto)?$",
+        RegexOption.IGNORE_CASE,
+    ).find(raw)?.groupValues?.getOrNull(1)
+    return nominal?.uppercase(Locale.ROOT)
         ?: catalogModel?.let { formatInstalledParameters(it.totalParametersBillions) }
 }
 
