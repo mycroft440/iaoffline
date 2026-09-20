@@ -743,13 +743,15 @@ private fun compactHtmlModelName(model: AiModelEntity, catalogModel: CatalogMode
         .ifBlank { raw }
 }
 
-private fun htmlModelParameterLabel(model: AiModelEntity, catalogModel: CatalogModel?): String? =
-    catalogModel?.let { formatHtmlParameters(it.totalParametersBillions) }
-        ?: Regex("\\b\\d+(?:[.,]\\d+)?B\\b", RegexOption.IGNORE_CASE)
-            .findAll(model.name)
-            .lastOrNull()
-            ?.value
-            ?.uppercase(Locale.ROOT)
+private fun htmlModelParameterLabel(model: AiModelEntity, catalogModel: CatalogModel?): String? {
+    val raw = catalogModel?.displayName ?: model.name
+    val nominal = Regex(
+        "\\s+(\\d+(?:[.,]\\d+)?B(?:-A\\d+(?:[.,]\\d+)?B)?)(?:\\s*·\\s*texto)?$",
+        RegexOption.IGNORE_CASE,
+    ).find(raw)?.groupValues?.getOrNull(1)
+    return nominal?.uppercase(Locale.ROOT)
+        ?: catalogModel?.let { formatHtmlParameters(it.totalParametersBillions) }
+}
 
 private fun formatHtmlParameters(value: Double): String =
     if (value % 1.0 == 0.0) "${value.toInt()}B" else "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
