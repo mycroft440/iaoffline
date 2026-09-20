@@ -13,6 +13,8 @@ class ChatRepository(
     fun observeMessages(conversationId: String): Flow<List<MessageWithAttachments>> =
         dao.observeMessages(conversationId)
 
+    suspend fun getConversation(id: String): ConversationEntity? = dao.getConversation(id)
+
     /**
      * Reserves an id for a new chat without persisting an empty conversation by default.
      * A caller may persist the empty row when it needs to preserve an explicit model/profile choice
