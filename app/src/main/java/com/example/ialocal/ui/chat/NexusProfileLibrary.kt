@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -43,53 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.data.AgentEntity
-import com.example.ialocal.data.ModelVerificationStatus
-import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.ui.theme.NexusColors
-
-private data class NexusAgentTemplate(
-    val name: String,
-    val description: String,
-    val prompt: String,
-)
-
-private val NEXUS_AGENT_TEMPLATES = listOf(
-    NexusAgentTemplate(
-        ModelRepository.SOFTWARE_ENGINEER_NAME,
-        "Especialista em programação, arquitetura e depuração.",
-        ModelRepository.SOFTWARE_ENGINEER_PROMPT,
-    ),
-    NexusAgentTemplate(
-        ModelRepository.SELF_DRIVEN_NAME,
-        "Foco em produtividade, disciplina e execução por etapas.",
-        ModelRepository.SELF_DRIVEN_PROMPT,
-    ),
-    NexusAgentTemplate(
-        ModelRepository.UNCENSORED_NAME,
-        "Respostas diretas, francas e com menos filtros de estilo.",
-        ModelRepository.UNCENSORED_PROMPT,
-    ),
-    NexusAgentTemplate(
-        "Assistente Geral",
-        "Equilibrado para tarefas cotidianas.",
-        ModelRepository.DEFAULT_SYSTEM_PROMPT,
-    ),
-    NexusAgentTemplate(
-        "Tutor de Estudos",
-        "Explicações didáticas, exemplos e revisão de conhecimento.",
-        "Você é um tutor paciente e rigoroso. Explique conceitos por etapas, use exemplos concretos, faça perguntas de verificação quando útil e adapte a profundidade ao nível do usuário.",
-    ),
-    NexusAgentTemplate(
-        "Criador de Conteúdo",
-        "Ajuda com textos, roteiros, ideias e revisão.",
-        "Você é um criador e editor de conteúdo. Produza textos claros, originais e adequados ao público e ao canal. Ofereça alternativas de tom e melhore estrutura, ritmo e precisão.",
-    ),
-    NexusAgentTemplate(
-        "Analista de Dados",
-        "Análise, tabelas, métricas e interpretação de resultados.",
-        "Você é um analista de dados cuidadoso. Estruture hipóteses, verifique unidades e premissas, diferencie correlação de causalidade e apresente conclusões com limitações e próximos testes.",
-    ),
-)
 
 @Composable
 fun NexusProfileLibraryAction(
@@ -98,63 +51,53 @@ fun NexusProfileLibraryAction(
 ) {
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
-    val models by viewModel.models.collectAsStateWithLifecycle()
     val agentUsageCounts by viewModel.agentUsageCounts.collectAsStateWithLifecycle()
     val selectedAgentId by viewModel.selectedAgentId.collectAsStateWithLifecycle()
 
-    val readyModels = remember(models) {
-        models.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
+    val globalProfiles = remember(agents, agentUsageCounts) {
+        agents.filter { it.modelId == null }.sortedWith(
+            compareByDescending<AgentEntity> { agentUsageCounts[it.id] ?: 0 }
+                .thenByDescending { it.isDefault }
+                .thenByDescending { it.updatedAt }
+        )
     }
     val selectedAgent = agents.firstOrNull { it.id == selectedAgentId }
         ?: agents.firstOrNull { it.id == conversation?.agentId }
         ?: agents.firstOrNull { it.isDefault }
-    val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
-        ?: readyModels.firstOrNull { it.isActive }
-        ?: readyModels.firstOrNull()
-    val modelAgents = remember(agents, selectedModel?.id, agentUsageCounts) {
-        val modelId = selectedModel?.id
-        if (modelId == null) {
-            emptyList()
-        } else {
-            agents.filter { it.modelId == modelId }.sortedWith(
-                compareByDescending<AgentEntity> { agentUsageCounts[it.id] ?: 0 }
-                    .thenByDescending { it.isDefault }
-                    .thenByDescending { it.updatedAt }
-            )
-        }
+    val selectedProfile = globalProfiles.firstOrNull { profile ->
+        profile.id == selectedAgent?.id || profile.name.equals(selectedAgent?.name, ignoreCase = true)
     }
 
     var libraryOpen by remember { mutableStateOf(false) }
     var customOpen by remember { mutableStateOf(false) }
+    var editingAgent by remember { mutableStateOf<AgentEntity?>(null) }
     var pendingDefaultAgent by remember { mutableStateOf<AgentEntity?>(null) }
     var pendingDeleteAgent by remember { mutableStateOf<AgentEntity?>(null) }
 
-    if (selectedModel != null) {
-        OutlinedButton(
-            onClick = { libraryOpen = true },
-            modifier = modifier,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, NexusColors.Border),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = NexusColors.Surface850.copy(alpha = 0.96f),
-                contentColor = NexusColors.TextSecondary,
-            ),
-        ) {
-            Icon(Icons.Default.Psychology, contentDescription = null, tint = NexusColors.Brand, modifier = Modifier.size(15.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Mais perfis", fontSize = 11.sp, fontWeight = FontWeight.Medium)
-        }
+    OutlinedButton(
+        onClick = { libraryOpen = true },
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, NexusColors.Border),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = NexusColors.Surface850.copy(alpha = 0.96f),
+            contentColor = NexusColors.TextSecondary,
+        ),
+    ) {
+        Icon(Icons.Default.Psychology, contentDescription = null, tint = NexusColors.Brand, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Configurar perfis de I.A", fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
 
-    if (libraryOpen && selectedModel != null) {
+    if (libraryOpen) {
         AlertDialog(
             onDismissRequest = { libraryOpen = false },
             containerColor = NexusColors.Surface850,
             title = {
                 Column {
-                    Text("Biblioteca de perfis", fontWeight = FontWeight.SemiBold)
+                    Text("Configurar perfis de I.A", fontWeight = FontWeight.SemiBold)
                     Text(
-                        selectedModel.name,
+                        "Os perfis ficam disponíveis mesmo sem nenhum modelo instalado.",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Normal,
                         color = NexusColors.TextMuted,
@@ -170,81 +113,41 @@ fun NexusProfileLibraryAction(
                 ) {
                     item {
                         Text(
-                            "SEUS PERFIS · MAIS USADOS PRIMEIRO",
+                            "PERFIS DISPONÍVEIS",
                             modifier = Modifier.padding(vertical = 6.dp),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = NexusColors.TextMuted,
                         )
                     }
-                    if (modelAgents.isEmpty()) {
+                    if (globalProfiles.isEmpty()) {
                         item {
                             Text(
-                                "Nenhum perfil disponível para este modelo. Você pode adicionar um perfil pronto ou criar um personalizado.",
+                                "Preparando os perfis padrão…",
                                 modifier = Modifier.padding(vertical = 8.dp),
                                 fontSize = 12.sp,
                                 color = NexusColors.TextMuted,
                             )
                         }
                     } else {
-                        items(modelAgents, key = { "profile-${it.id}" }) { agent ->
+                        items(globalProfiles, key = { "profile-${it.id}" }) { agent ->
                             NexusProfileRow(
                                 name = agent.name,
                                 description = agent.systemPrompt,
-                                selected = agent.id == selectedAgent?.id,
-                                actionLabel = if (agent.id == selectedAgent?.id) "Atual" else "Usar",
+                                selected = agent.id == selectedProfile?.id,
+                                actionLabel = if (agent.id == selectedProfile?.id) "Atual" else "Usar",
                                 onClick = {
                                     viewModel.selectAgent(agent.id)
                                     pendingDefaultAgent = agent
                                     libraryOpen = false
                                 },
+                                onEdit = {
+                                    editingAgent = agent
+                                    libraryOpen = false
+                                },
                                 onDelete = { pendingDeleteAgent = agent },
                             )
                         }
-                    }
-
-                    item {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = 10.dp),
-                            color = NexusColors.BorderSoft,
-                        )
-                        Text(
-                            "PERFIS PRONTOS",
-                            modifier = Modifier.padding(bottom = 6.dp),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = NexusColors.TextMuted,
-                        )
-                    }
-
-                    items(NEXUS_AGENT_TEMPLATES, key = { "template-${it.name}" }) { template ->
-                        val existing = modelAgents.firstOrNull { it.name.equals(template.name, ignoreCase = true) }
-                        NexusProfileRow(
-                            name = template.name,
-                            description = template.description,
-                            selected = existing?.id == selectedAgent?.id,
-                            actionLabel = when {
-                                existing?.id == selectedAgent?.id -> "Atual"
-                                existing != null -> "Usar"
-                                else -> "Adicionar"
-                            },
-                            onClick = {
-                                if (existing != null) {
-                                    viewModel.selectAgent(existing.id)
-                                    pendingDefaultAgent = existing
-                                    libraryOpen = false
-                                } else {
-                                    viewModel.createAgentProfile(
-                                        modelId = selectedModel.id,
-                                        name = template.name,
-                                        systemPrompt = template.prompt,
-                                    ) { created ->
-                                        pendingDefaultAgent = created
-                                    }
-                                    libraryOpen = false
-                                }
-                            },
-                        )
                     }
 
                     item {
@@ -257,7 +160,7 @@ fun NexusProfileLibraryAction(
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Criar perfil personalizado")
+                            Text("Criar novo perfil")
                         }
                     }
                 }
@@ -269,12 +172,15 @@ fun NexusProfileLibraryAction(
         )
     }
 
-    if (customOpen && selectedModel != null) {
+    if (customOpen) {
         NexusCustomProfileDialog(
+            title = "Criar novo perfil",
+            initialName = "",
+            initialPrompt = "",
             onDismiss = { customOpen = false },
             onSave = { name, prompt ->
                 viewModel.createAgentProfile(
-                    modelId = selectedModel.id,
+                    modelId = null,
                     name = name,
                     systemPrompt = prompt,
                 ) { created ->
@@ -285,13 +191,31 @@ fun NexusProfileLibraryAction(
         )
     }
 
+    editingAgent?.let { agent ->
+        NexusCustomProfileDialog(
+            title = "Editar perfil",
+            initialName = agent.name,
+            initialPrompt = agent.systemPrompt,
+            onDismiss = { editingAgent = null },
+            onSave = { name, prompt ->
+                viewModel.updateAgent(
+                    agent.copy(
+                        name = name,
+                        systemPrompt = prompt,
+                    )
+                )
+                editingAgent = null
+            },
+        )
+    }
+
     pendingDeleteAgent?.let { agent ->
         AlertDialog(
             onDismissRequest = { pendingDeleteAgent = null },
             containerColor = NexusColors.Surface850,
-            title = { Text("Excluir personalidade?") },
+            title = { Text("Excluir perfil?") },
             text = {
-                Text("Tem certeza que deseja excluir o perfil “${agent.name}”? Ele continuará disponível como modelo pronto para ser adicionado novamente, quando aplicável.")
+                Text("Tem certeza que deseja excluir o perfil “${agent.name}”? Perfis padrão apagados não serão recriados automaticamente.")
             },
             confirmButton = {
                 TextButton(
@@ -337,7 +261,8 @@ private fun NexusProfileRow(
     selected: Boolean,
     actionLabel: String,
     onClick: () -> Unit,
-    onDelete: (() -> Unit)? = null,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Surface(
         modifier = Modifier
@@ -376,11 +301,12 @@ private fun NexusProfileRow(
                     color = NexusColors.TextMuted,
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            if (onDelete != null) {
-                TextButton(onClick = onDelete) {
-                    Text("Excluir", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
-                }
+            Spacer(Modifier.width(6.dp))
+            TextButton(onClick = onEdit) {
+                Text("Editar", fontSize = 10.sp)
+            }
+            TextButton(onClick = onDelete) {
+                Text("Excluir", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
             }
             Text(actionLabel, fontSize = 10.sp, color = NexusColors.Brand)
         }
@@ -389,16 +315,19 @@ private fun NexusProfileRow(
 
 @Composable
 private fun NexusCustomProfileDialog(
+    title: String,
+    initialName: String,
+    initialPrompt: String,
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit,
 ) {
-    var name by remember { mutableStateOf("") }
-    var prompt by remember { mutableStateOf("") }
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    var prompt by remember(initialPrompt) { mutableStateOf(initialPrompt) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = NexusColors.Surface850,
-        title = { Text("Criar novo perfil", fontWeight = FontWeight.SemiBold) },
+        title = { Text(title, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
