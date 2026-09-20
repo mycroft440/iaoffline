@@ -10,6 +10,7 @@ enum class ModelProvider(val sectionLabel: String) {
     IBM("Modelos da IBM / Granite"),
     LIQUID("Modelos da Liquid AI"),
     AI2("Modelos da Ai2 / OLMo"),
+    NVIDIA("Modelos da NVIDIA / Nemotron"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -188,6 +189,20 @@ object ModelCatalog {
             totalParametersBillions = 30.5,
             activeParametersBillions = 3.3,
             description = "Qwen especializado em programação e agentes, com aproximadamente 3,3B parâmetros ativos por token.",
+        ),
+
+        CatalogModel(
+            id = "nemotron-nano-9b-v2-q4-k-m",
+            displayName = "Nemotron Nano 9B v2",
+            provider = ModelProvider.NVIDIA,
+            repository = "weathermanj/NVIDIA-Nemotron-Nano-9B-v2-gguf",
+            fileName = "NVIDIA-Nemotron-Nano-9B-v2-gguf-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 6_530_000_000L,
+            sha256 = "97b5df1983d2ed642846adf623fab3ce770f34afbd8ed5fdd4f36e35a3f79aa6",
+            recommendedRamBytes = 12_000_000_000L,
+            totalParametersBillions = 9.0,
+            description = "Modelo NVIDIA de 9B com modos de raciocínio e resposta direta. Forte em matemática, código, instruções e agentes; GGUF Q4_K_M compatível com llama.cpp.",
         ),
 
         CatalogModel(
