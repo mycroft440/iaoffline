@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Memory
@@ -36,7 +35,6 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -60,7 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.BuildConfig
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
-import com.example.ialocal.ui.branding.brandName
+import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.catalogProvider
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -76,7 +74,6 @@ private val HtmlText = Color(0xFFF1F2F5)
 private val HtmlMuted = Color(0xFF8B8E9D)
 private val HtmlDim = Color(0xFF5C5F6E)
 private val HtmlActive = Color(0xFF10B981)
-private val HtmlDanger = Color(0xFFF43F5E)
 
 private data class HtmlHardwareSnapshot(
     val freeStorageBytes: Long,
@@ -158,8 +155,6 @@ fun HtmlAiHomeScreen(
                     models = installedModels,
                     catalog = viewModel.catalog,
                     onOpenChats = onOpenChats,
-                    onStartChat = onStartChat,
-                    onDeleteModel = viewModel::delete,
                 )
             }
             item {
@@ -409,9 +404,9 @@ private fun HtmlInstalledModelsSection(
     models: List<AiModelEntity>,
     catalog: List<CatalogModel>,
     onOpenChats: () -> Unit,
-    onStartChat: () -> Unit,
-    onDeleteModel: (String) -> Unit,
 ) {
+    val visibleModels = models.sortedBy { it.importedAt }.take(6)
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -461,13 +456,23 @@ private fun HtmlInstalledModelsSection(
                 Text("Baixe pesos quantizados em GGUF para uso sem internet.", color = HtmlMuted, fontSize = 11.sp)
             }
         } else {
-            models.forEach { model ->
-                HtmlInstalledModelCard(
-                    model = model,
-                    catalogModel = catalog.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) },
-                    onStartChat = onStartChat,
-                    onDelete = { onDeleteModel(model.id) },
-                )
+            visibleModels.chunked(2).forEach { rowModels ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    rowModels.forEach { model ->
+                        HtmlInstalledModelCard(
+                            model = model,
+                            catalogModel = catalog.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (rowModels.size == 1) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
             }
         }
     }
@@ -477,117 +482,66 @@ private fun HtmlInstalledModelsSection(
 private fun HtmlInstalledModelCard(
     model: AiModelEntity,
     catalogModel: CatalogModel?,
-    onStartChat: () -> Unit,
-    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    var confirmDelete by remember(model.id) { mutableStateOf(false) }
-    val providerName = model.catalogProvider()?.brandName()
-    val params = catalogModel?.let { formatHtmlParameters(it.totalParametersBillions) }
+    val provider = model.catalogProvider()
+    val parameterLabel = htmlModelParameterLabel(model, catalogModel)
+    val displayName = compactHtmlModelName(model, catalogModel)
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(HtmlSurface, RoundedCornerShape(16.dp))
-            .border(1.dp, HtmlBorder, RoundedCornerShape(16.dp))
-            .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = modifier
+            .height(68.dp)
+            .background(HtmlSurface, RoundedCornerShape(14.dp))
+            .border(1.dp, HtmlBorder, RoundedCornerShape(14.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .background(HtmlElevated, RoundedCornerShape(12.dp))
-                .border(1.dp, HtmlBorder, RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("AI", color = HtmlText, fontFamily = FontFamily.Monospace, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
-
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = model.name,
-                    color = HtmlText,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                params?.let {
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = it,
-                        color = HtmlMuted,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        modifier = Modifier
-                            .background(HtmlElevated, RoundedCornerShape(4.dp))
-                            .border(1.dp, HtmlBorder, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.padding(top = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(providerName ?: (model.architecture ?: "Local"), color = HtmlMuted, fontSize = 11.sp)
-                Text("  •  ${formatHtmlBytes(model.sizeBytes)}", color = HtmlMuted, fontSize = 11.sp)
-                if (model.isActive) {
-                    Text("  •  ativa", color = Color(0xFF34D399), fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                }
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                modifier = Modifier
-                    .background(Color(0xE6059669), RoundedCornerShape(8.dp))
-                    .clickable(onClick = onStartChat)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box(Modifier.size(6.dp).background(Color.White, CircleShape))
-                Text(
-                    text = if (model.isActive) "Em Uso" else "Usar",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
+        if (provider != null) {
+            ProviderLogo(provider = provider, size = 34.dp)
+        } else {
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .background(HtmlElevated, RoundedCornerShape(8.dp))
-                    .border(1.dp, HtmlBorder, RoundedCornerShape(8.dp))
-                    .clickable { confirmDelete = true },
+                    .size(34.dp)
+                    .background(HtmlElevated, RoundedCornerShape(10.dp))
+                    .border(1.dp, HtmlBorder, RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Default.Delete, "Desinstalar modelo", tint = HtmlMuted, modifier = Modifier.size(17.dp))
+                Text(
+                    "AI",
+                    color = HtmlText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
-    }
 
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            containerColor = HtmlSurface,
-            titleContentColor = HtmlText,
-            textContentColor = HtmlMuted,
-            title = { Text("Desinstalar I.A?") },
-            text = { Text("Tem certeza que quer desinstalar ${model.name}?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    onDelete()
-                }) { Text("Desinstalar", color = HtmlDanger) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("Cancelar", color = HtmlMuted) }
-            },
-        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = displayName,
+                color = HtmlText,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            parameterLabel?.let { params ->
+                Text(
+                    text = params,
+                    color = HtmlMuted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
     }
 }
 
@@ -777,10 +731,25 @@ private fun currentClockText(): String =
 private fun formatHtmlGb(bytes: Long): String =
     "%.1f".format(bytes / (1024.0 * 1024.0 * 1024.0))
 
-private fun formatHtmlBytes(bytes: Long): String {
-    val gb = bytes / (1024.0 * 1024.0 * 1024.0)
-    return if (gb >= 1.0) "%.1f GB".format(gb) else "%.0f MB".format(bytes / (1024.0 * 1024.0))
+private fun compactHtmlModelName(model: AiModelEntity, catalogModel: CatalogModel?): String {
+    val raw = catalogModel?.displayName ?: model.name
+    val withoutParameter = raw.replace(
+        Regex("\\s+\\d+(?:[.,]\\d+)?B(?:-A\\d+(?:[.,]\\d+)?B)?(?:\\s*·\\s*texto)?$", RegexOption.IGNORE_CASE),
+        "",
+    )
+    return withoutParameter
+        .replace(Regex("^Qwen(?=\\d)", RegexOption.IGNORE_CASE), "Qwen ")
+        .trim()
+        .ifBlank { raw }
 }
+
+private fun htmlModelParameterLabel(model: AiModelEntity, catalogModel: CatalogModel?): String? =
+    catalogModel?.let { formatHtmlParameters(it.totalParametersBillions) }
+        ?: Regex("\\b\\d+(?:[.,]\\d+)?B\\b", RegexOption.IGNORE_CASE)
+            .findAll(model.name)
+            .lastOrNull()
+            ?.value
+            ?.uppercase(Locale.ROOT)
 
 private fun formatHtmlParameters(value: Double): String =
     if (value % 1.0 == 0.0) "${value.toInt()}B" else "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
