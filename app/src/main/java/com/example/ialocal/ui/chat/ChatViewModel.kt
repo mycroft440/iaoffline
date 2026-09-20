@@ -96,23 +96,22 @@ class ChatViewModel(
             runCatching {
                 val currentAgentId = _selectedAgentId.value ?: conversation.value?.agentId
                 val currentAgent = currentAgentId?.let { modelRepository.getAgent(it) }
-                val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
-                val agent = if (currentAgent != null && currentAgent.modelId == null) {
-                    modelRepository.createAgentProfile(
-                        modelId = modelId,
-                        name = currentAgent.name,
-                        systemPrompt = currentAgent.systemPrompt,
-                        temperature = currentAgent.temperature,
-                        maxTokens = currentAgent.maxTokens,
-                    )
+                    ?: modelRepository.getDefaultAgent()
+
+                if (currentAgent != null && currentAgent.modelId == null) {
+                    modelRepository.activateModel(modelId)
+                    _selectedAgentId.value = currentAgent.id
+                    modelRepository.recordAgentUse(currentAgent.id)
+                    repository.setConversationAgent(conversationId, currentAgent.id)
                 } else {
-                    modelAgents.firstOrNull { it.isDefault }
+                    val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
+                    val agent = modelAgents.firstOrNull { it.isDefault }
                         ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
                         ?: modelAgents.firstOrNull()
+                    _selectedAgentId.value = agent?.id
+                    agent?.let { modelRepository.recordAgentUse(it.id) }
+                    repository.setConversationAgent(conversationId, agent?.id)
                 }
-                _selectedAgentId.value = agent?.id
-                agent?.let { modelRepository.recordAgentUse(it.id) }
-                repository.setConversationAgent(conversationId, agent?.id)
             }.onFailure {
                 _error.value = it.message ?: "Não foi possível selecionar o modelo."
             }
