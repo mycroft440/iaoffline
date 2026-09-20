@@ -37,7 +37,7 @@ class ModelsViewModel(
     val serverState: StateFlow<ApiServerState> = apiServer.state
     val runtimeState: StateFlow<RuntimeState> = manager.runtimeState
     val downloadState = manager.downloadState
-    val catalog = manager.catalog
+    val catalog = manager.catalog.filter { it.totalParametersBillions < 15.0 }
 
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
