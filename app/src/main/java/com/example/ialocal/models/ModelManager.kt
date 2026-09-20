@@ -71,6 +71,20 @@ class ModelManager(
         persistentDownloads.discoverCatalogModels()
     }
 
+    /** Restores silently at startup whenever Android still exposes the previously authorized folder. */
+    suspend fun restorePersistedModelsIfAuthorized(): ModelRecoverySummary? {
+        val treeUri = persistentDownloads.persistedTreeUriOrNull() ?: return null
+        return runCatching { restorePersistedModels(treeUri) }
+            .onFailure {
+                logger?.error(
+                    "MODEL_RECOVERY",
+                    "A restauração automática das IAs salvas não pôde ser concluída.",
+                    it,
+                )
+            }
+            .getOrNull()
+    }
+
     /**
      * Restores catalog GGUFs from Downloads/IAs Offline without network access. The selected tree
      * grants the new installation access to files that survived the previous app uninstall.
