@@ -26,6 +26,9 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.MISTRAL -> "Mistral AI"
     ModelProvider.DEEPSEEK -> "DeepSeek"
     ModelProvider.MICROSOFT -> "Microsoft"
+    ModelProvider.IBM -> "IBM / Granite"
+    ModelProvider.LIQUID -> "Liquid AI"
+    ModelProvider.AI2 -> "Ai2 / OLMo"
 }
 
 fun ModelProvider.logoRes(): Int = when (this) {
@@ -35,6 +38,9 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.MISTRAL -> R.drawable.provider_mistral
     ModelProvider.DEEPSEEK -> R.drawable.provider_deepseek
     ModelProvider.MICROSOFT -> R.drawable.provider_microsoft
+    ModelProvider.IBM,
+    ModelProvider.LIQUID,
+    ModelProvider.AI2 -> R.drawable.provider_generic
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =
