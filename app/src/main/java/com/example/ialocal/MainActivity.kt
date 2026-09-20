@@ -142,7 +142,6 @@ private fun LocalAiApp(
                 onOpenOfflineModels = { navController.navigate("offline-models") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
-                onRestoreModels = { recoveryPicker.launch(null) },
                 onOpenCodeEditor = { navController.navigate("code-editor") },
                 onExitApp = onExitApp,
             )
