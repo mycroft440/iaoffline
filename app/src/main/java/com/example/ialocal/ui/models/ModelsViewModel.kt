@@ -125,6 +125,7 @@ class ModelsViewModel(
         _operationText.value = null
     }
 
+    /** Activates or verifies the selected installed model before opening its chat. */
     fun prepareForChat(id: String, onReady: () -> Unit) {
         if (_operationText.value != null || _isImporting.value || manager.downloadState.value.isBusy) return
         _operationText.value = "Preparando I.A…"
