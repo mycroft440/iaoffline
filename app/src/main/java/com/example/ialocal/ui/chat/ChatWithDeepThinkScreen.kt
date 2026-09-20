@@ -10,7 +10,7 @@ fun ChatWithDeepThinkScreen(
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    HtmlReferenceChatScreen(
+    PixelPerfectHtmlChatScreen(
         viewModel = viewModel,
         onOpenConversation = onOpenConversation,
         onOpenHistory = onOpenHistory,
