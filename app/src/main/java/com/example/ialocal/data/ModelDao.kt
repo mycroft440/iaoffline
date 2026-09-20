@@ -47,6 +47,11 @@ interface ModelDao {
     suspend fun insertAgent(agent: AgentEntity)
 
     @Transaction
+    suspend fun insertAgentsAtomically(agents: List<AgentEntity>) {
+        agents.forEach { insertAgent(it) }
+    }
+
+    @Transaction
     suspend fun insertModelWithAgents(model: AiModelEntity, agents: List<AgentEntity>) {
         insertModel(model)
         agents.forEach { insertAgent(it) }
