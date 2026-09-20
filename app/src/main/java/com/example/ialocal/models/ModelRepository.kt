@@ -148,22 +148,21 @@ class ModelRepository(
             declaredContextLength = declaredContext,
             verificationStatus = ModelVerificationStatus.IMPORTED.name,
         )
-        dao.insertModel(model)
-
-        val agent = AgentEntity(
-            id = UUID.randomUUID().toString(),
-            name = "$cleanName · Agente",
-            modelId = id,
-            systemPrompt = DEFAULT_SYSTEM_PROMPT,
-            temperature = 0.3f,
-            maxTokens = 1024,
-            isDefault = false,
-            createdAt = now,
-            updatedAt = now,
-        )
-        dao.insertAgent(agent)
-        ensureStarterProfiles(id)
-        logger?.info("IMPORT", "Modelo importado: ${model.apiModelId}")
+        val starterAgents = STARTER_PROFILES.map { starter ->
+            AgentEntity(
+                id = UUID.randomUUID().toString(),
+                name = starter.name,
+                modelId = id,
+                systemPrompt = starter.prompt,
+                temperature = 0.3f,
+                maxTokens = 1024,
+                isDefault = false,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
+        dao.insertModelWithAgents(model, starterAgents)
+        logger?.info("IMPORT", "Modelo importado com ${starterAgents.size} perfis iniciais: ${model.apiModelId}")
         return model
     }
 
@@ -191,6 +190,7 @@ class ModelRepository(
         dao.updateVerification(id, ModelVerificationStatus.VERIFYING.name, null, null)
 
     suspend fun markVerified(id: String) {
+        ensureStarterProfiles(id)
         dao.updateVerification(id, ModelVerificationStatus.VERIFIED.name, null, System.currentTimeMillis())
         ensureDefaultAgentForVerifiedModels(preferredModelId = id)
     }
@@ -237,7 +237,7 @@ class ModelRepository(
             name = cleanName,
             modelId = modelId,
             systemPrompt = cleanPrompt,
-            temperature = 0.3f,
+            temperature = temperature.coerceIn(0f, 2f),
             maxTokens = maxTokens.coerceIn(16, 4096),
             isDefault = false,
             createdAt = now,
@@ -360,6 +360,8 @@ class ModelRepository(
     }
 
     private suspend fun ensureDefaultAgentForVerifiedModels(preferredModelId: String? = null): AgentEntity? {
+        repairVerifiedModelsWithoutAgents()
+
         val current = dao.getDefaultAgent()
         if (current != null && isAgentVerified(current)) return current
 
@@ -370,8 +372,10 @@ class ModelRepository(
             ?.takeIf { it in verifiedModelIds }
             ?: ensureActiveVerifiedModel()?.id?.takeIf { it in verifiedModelIds }
         val eligibleAgents = dao.getAgents().filter { it.modelId in verifiedModelIds }
-        val replacement = targetModelId
-            ?.let { preferred -> eligibleAgents.firstOrNull { it.modelId == preferred } }
+        val targetAgents = targetModelId?.let { target -> eligibleAgents.filter { it.modelId == target } }.orEmpty()
+        val replacement = targetAgents.firstOrNull { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
+            ?: targetAgents.firstOrNull()
+            ?: eligibleAgents.firstOrNull { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
             ?: eligibleAgents.firstOrNull()
 
         if (current != null || replacement != null) dao.clearDefaultAgent()
@@ -379,6 +383,20 @@ class ModelRepository(
 
         dao.markAgentDefault(replacement.id, System.currentTimeMillis())
         return dao.getAgent(replacement.id)
+    }
+
+    private suspend fun repairVerifiedModelsWithoutAgents() {
+        val allAgents = dao.getAgents()
+        val modelIdsWithAgents = allAgents.mapTo(hashSetOf()) { it.modelId }
+        dao.getModels()
+            .filter {
+                it.verificationStatus == ModelVerificationStatus.VERIFIED.name &&
+                    it.id !in modelIdsWithAgents
+            }
+            .forEach { model ->
+                ensureStarterProfiles(model.id)
+                logger?.info("AGENT_REPAIR", "Perfis iniciais restaurados para ${model.apiModelId}")
+            }
     }
 
     private suspend fun isAgentVerified(agent: AgentEntity): Boolean =
