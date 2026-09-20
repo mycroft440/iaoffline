@@ -14,10 +14,26 @@ class ChatRepository(
         dao.observeMessages(conversationId)
 
     /**
-     * Reserves an id for a new chat without persisting an empty conversation.
-     * The row is created lazily when the first message is actually sent.
+     * Reserves an id for a new chat without persisting an empty conversation by default.
+     * When an agent is supplied, the empty row is persisted so that the chosen AI/profile pairing
+     * is already fixed before the first user message is sent. Empty rows remain hidden from history.
      */
-    suspend fun createConversation(): String = UUID.randomUUID().toString()
+    suspend fun createConversation(agentId: String? = null): String {
+        val id = UUID.randomUUID().toString()
+        if (agentId != null) {
+            val now = System.currentTimeMillis()
+            dao.insertConversation(
+                ConversationEntity(
+                    id = id,
+                    title = "Nova conversa",
+                    createdAt = now,
+                    updatedAt = now,
+                    agentId = agentId,
+                )
+            )
+        }
+        return id
+    }
 
     suspend fun renameConversation(id: String, title: String) {
         val clean = title.trim().ifBlank { "Nova conversa" }
