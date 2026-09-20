@@ -306,9 +306,10 @@ class ChatViewModel(
         history: List<AiChatMessage>,
         attachments: List<PendingAttachment>,
     ) {
+        val persistedConversation = repository.getConversation(conversationId)
         val agentId = _selectedAgentId.value
-            ?: conversation.value?.agentId
-            ?: modelRepository.getDefaultAgent()?.id
+            ?: persistedConversation?.agentId
+            ?: if (persistedConversation == null) modelRepository.getDefaultAgent()?.id else null
         if (agentId != null) repository.setConversationAgent(conversationId, agentId)
 
         val replyId = repository.addMessage(
