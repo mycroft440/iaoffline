@@ -125,6 +125,32 @@ class ModelsViewModel(
         _operationText.value = null
     }
 
+    fun prepareForChat(id: String, onReady: () -> Unit) {
+        if (_operationText.value != null || _isImporting.value || manager.downloadState.value.isBusy) return
+        _error.value = null
+        viewModelScope.launch {
+            val model = repository.getModel(id)
+            if (model == null) {
+                _error.value = "Modelo não encontrado."
+                return@launch
+            }
+            _operationText.value = if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
+                "Carregando ${model.name}…"
+            } else {
+                "Testando ${model.name}…"
+            }
+            runCatching {
+                if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) manager.load(id)
+                else manager.retryVerification(id)
+            }.onSuccess {
+                onReady()
+            }.onFailure {
+                _error.value = it.message ?: "Não foi possível iniciar o chat com esta I.A."
+            }
+            _operationText.value = null
+        }
+    }
+
     fun unload() = viewModelScope.launch {
         _operationText.value = "Liberando modelo da memória…"
         runCatching { manager.unload() }
