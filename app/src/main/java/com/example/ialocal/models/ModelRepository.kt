@@ -197,7 +197,8 @@ class ModelRepository(
 
     suspend fun markVerificationError(id: String, message: String) {
         dao.updateVerification(id, ModelVerificationStatus.ERROR.name, message, null)
-        ensureActiveVerifiedModel()
+        val active = ensureActiveVerifiedModel()
+        ensureDefaultAgentForVerifiedModels(preferredModelId = active?.id)
     }
 
     suspend fun setDefaultAgent(id: String) {
@@ -236,7 +237,7 @@ class ModelRepository(
             name = cleanName,
             modelId = modelId,
             systemPrompt = cleanPrompt,
-            temperature = temperature.coerceIn(0f, 2f),
+            temperature = 0.3f,
             maxTokens = maxTokens.coerceIn(16, 4096),
             isDefault = false,
             createdAt = now,
@@ -365,9 +366,11 @@ class ModelRepository(
         val verifiedModelIds = dao.getModels()
             .filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
             .mapTo(linkedSetOf()) { it.id }
-        val eligibleAgents = dao.getAgents().filter { it.modelId in verifiedModelIds }
-        val replacement = preferredModelId
+        val targetModelId = preferredModelId
             ?.takeIf { it in verifiedModelIds }
+            ?: ensureActiveVerifiedModel()?.id?.takeIf { it in verifiedModelIds }
+        val eligibleAgents = dao.getAgents().filter { it.modelId in verifiedModelIds }
+        val replacement = targetModelId
             ?.let { preferred -> eligibleAgents.firstOrNull { it.modelId == preferred } }
             ?: eligibleAgents.firstOrNull()
 
