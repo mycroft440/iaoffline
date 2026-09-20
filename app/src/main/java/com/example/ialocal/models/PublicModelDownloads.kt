@@ -53,7 +53,7 @@ class PublicModelDownloads(context: Context) {
                     appendLine("IAs Offline")
                     appendLine()
                     appendLine("Os modelos GGUF baixados pelo app ficam nesta pasta para sobreviver à desinstalação.")
-                    appendLine("Ao reinstalar o app, use Restaurar IAs e autorize esta pasta uma vez quando o Android solicitar.")
+                    appendLine("Ao abrir o app novamente, a restauração é tentada automaticamente quando o Android ainda permite acesso. Se o sistema revogar a permissão após uma reinstalação, autorize esta pasta quando solicitado.")
                     appendLine("Antes de voltar a usar um arquivo, o app confere o SHA-256 e executa uma validação real de inferência.")
                 }
                 resolver.openOutputStream(uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
@@ -201,7 +201,7 @@ class PublicModelDownloads(context: Context) {
             }
         }
 
-        persistedTreeUri()?.let { treeUri ->
+        persistedTreeUriOrNull()?.let { treeUri ->
             runCatching {
                 modelFolders(treeUri).forEach { folder ->
                     folder.listFiles()
@@ -229,7 +229,7 @@ class PublicModelDownloads(context: Context) {
         preferences.edit().putString(PREF_TREE_URI, treeUri.toString()).apply()
     }
 
-    private fun persistedTreeUri(): Uri? = preferences.getString(PREF_TREE_URI, null)
+    fun persistedTreeUriOrNull(): Uri? = preferences.getString(PREF_TREE_URI, null)
         ?.let(Uri::parse)
         ?.takeIf { stored -> resolver.persistedUriPermissions.any { it.uri == stored && it.isReadPermission } }
 
