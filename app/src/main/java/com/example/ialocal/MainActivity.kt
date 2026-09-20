@@ -102,6 +102,9 @@ private fun LocalAiApp(
     }
 
     LaunchedEffect(Unit) {
+        container.modelRepository.ensureGlobalStarterProfiles()
+        container.modelManager.restorePersistedModelsIfAuthorized()
+
         val installedModels = container.modelRepository.getModels()
         val installedCatalogIds = container.modelManager.catalog
             .filter { catalog ->
