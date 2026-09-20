@@ -198,7 +198,13 @@ private fun LocalAiApp(
                 onBack = { navController.popBackStack() },
                 onStartChat = {
                     scope.launch {
-                        val conversationId = container.chatRepository.createConversation()
+                        val globalAgent = container.modelRepository.getDefaultAgent()
+                            ?.takeIf { it.modelId == null }
+                            ?: container.modelRepository.getAgents().firstOrNull { it.modelId == null }
+                        val conversationId = container.chatRepository.createConversation(
+                            agentId = globalAgent?.id,
+                            persistEmpty = true,
+                        )
                         navController.navigate("chat/$conversationId")
                     }
                 },
