@@ -61,8 +61,12 @@ class AiOrchestrator(
         temperatureOverride: Float? = null,
     ): AgentRunResult {
         val agent = resolveAgent(agentId)
-        val model = models.getModel(agent.modelId)
-            ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
+        val model = if (agent.modelId != null) {
+            models.getModel(agent.modelId)
+                ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
+        } else {
+            resolveModel(null)
+        }
         requireVerified(model)
 
         val capability = DeepThinkSupport.capability(model)
@@ -122,7 +126,7 @@ class AiOrchestrator(
     private suspend fun resolveAgent(id: String?): AgentEntity = when {
         id.isNullOrBlank() -> models.getDefaultAgent()
         else -> models.getAgent(id)
-    } ?: throw IllegalStateException("Nenhum agente está configurado. Importe e verifique um modelo primeiro.")
+    } ?: throw IllegalStateException("Nenhum perfil de I.A está configurado.")
 
     private fun requireVerified(model: AiModelEntity) {
         check(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
