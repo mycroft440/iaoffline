@@ -15,12 +15,15 @@ class ChatRepository(
 
     /**
      * Reserves an id for a new chat without persisting an empty conversation by default.
-     * When an agent is supplied, the empty row is persisted so that the chosen AI/profile pairing
-     * is already fixed before the first user message is sent. Empty rows remain hidden from history.
+     * A caller may persist the empty row when it needs to preserve an explicit model/profile choice
+     * before the first user message. Empty rows remain hidden from the conversation history.
      */
-    suspend fun createConversation(agentId: String? = null): String {
+    suspend fun createConversation(
+        agentId: String? = null,
+        persistEmpty: Boolean = false,
+    ): String {
         val id = UUID.randomUUID().toString()
-        if (agentId != null) {
+        if (persistEmpty || agentId != null) {
             val now = System.currentTimeMillis()
             dao.insertConversation(
                 ConversationEntity(
