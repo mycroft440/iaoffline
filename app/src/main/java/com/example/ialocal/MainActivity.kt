@@ -39,6 +39,7 @@ import com.example.ialocal.ui.codeeditor.CodeEditorViewModel
 import com.example.ialocal.ui.home.HomeScreen
 import com.example.ialocal.ui.home.HomeViewModel
 import com.example.ialocal.ui.models.HtmlAiHomeScreen
+import com.example.ialocal.ui.models.InstalledModelsScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.models.OfflineModelsScreen
@@ -138,7 +139,7 @@ private fun LocalAiApp(
                         navController.navigate("chat/$conversationId")
                     }
                 },
-                onOpenChats = { navController.navigate("home") },
+                onOpenChats = { navController.navigate("my-models") },
                 onOpenOfflineModels = { navController.navigate("offline-models") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
@@ -177,6 +178,30 @@ private fun LocalAiApp(
             OfflineModelsScreen(
                 viewModel = vm,
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("my-models") {
+            val vm: ModelsViewModel = viewModel(
+                key = "installed-models",
+                factory = ModelsViewModel.Factory(
+                    container.modelRepository,
+                    container.modelManager,
+                    container.apiServer,
+                    container.apiSettings,
+                    container.integrationSelfTest,
+                ),
+            )
+            val scope = rememberCoroutineScope()
+            InstalledModelsScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onStartChat = {
+                    scope.launch {
+                        val conversationId = container.chatRepository.createConversation()
+                        navController.navigate("chat/$conversationId")
+                    }
+                },
             )
         }
 
