@@ -195,8 +195,10 @@ class ModelRepository(
         ensureDefaultAgentForVerifiedModels(preferredModelId = id)
     }
 
-    suspend fun markVerificationError(id: String, message: String) =
+    suspend fun markVerificationError(id: String, message: String) {
         dao.updateVerification(id, ModelVerificationStatus.ERROR.name, message, null)
+        ensureActiveVerifiedModel()
+    }
 
     suspend fun setDefaultAgent(id: String) {
         val agent = requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
@@ -234,7 +236,7 @@ class ModelRepository(
             name = cleanName,
             modelId = modelId,
             systemPrompt = cleanPrompt,
-            temperature = 0.3f,
+            temperature = temperature.coerceIn(0f, 2f),
             maxTokens = maxTokens.coerceIn(16, 4096),
             isDefault = false,
             createdAt = now,
@@ -315,15 +317,10 @@ class ModelRepository(
             _agentUsageCounts.value = _agentUsageCounts.value - agentIds.toSet()
         }
 
-        val remaining = dao.getModels()
-        val verified = remaining.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
-        if (verified.isNotEmpty() && remaining.none { it.isActive }) {
-            dao.clearActiveModel()
-            dao.markModelActive(verified.first().id)
-        }
-        val preferredModelId = remaining.firstOrNull {
-            it.isActive && it.verificationStatus == ModelVerificationStatus.VERIFIED.name
-        }?.id ?: verified.firstOrNull()?.id
+        val active = ensureActiveVerifiedModel()
+        val preferredModelId = active?.id ?: dao.getModels()
+            .firstOrNull { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
+            ?.id
         ensureDefaultAgentForVerifiedModels(preferredModelId)
         logger?.info("IMPORT", "Modelo removido e arquivo interno excluído: ${model.apiModelId}")
     }
@@ -332,7 +329,7 @@ class ModelRepository(
     suspend fun getAgents(): List<AgentEntity> = dao.getAgents()
     suspend fun getModel(id: String): AiModelEntity? = dao.getModel(id)
     suspend fun getModelByApiId(apiId: String): AiModelEntity? = dao.getModelByApiId(apiId)
-    suspend fun getActiveModel(): AiModelEntity? = dao.getActiveModel()
+    suspend fun getActiveModel(): AiModelEntity? = ensureActiveVerifiedModel()
     suspend fun getAgent(id: String): AgentEntity? = dao.getAgent(id)
     suspend fun getDefaultAgent(): AgentEntity? = ensureDefaultAgentForVerifiedModels()
     suspend fun getAgentForModel(modelId: String): AgentEntity? = dao.getAgentForModel(modelId)
@@ -343,6 +340,22 @@ class ModelRepository(
             if (preferred != null && isAgentVerified(preferred)) return preferred
         }
         return ensureDefaultAgentForVerifiedModels()
+    }
+
+    private suspend fun ensureActiveVerifiedModel(preferredModelId: String? = null): AiModelEntity? {
+        val current = dao.getActiveModel()
+        if (current != null && current.verificationStatus == ModelVerificationStatus.VERIFIED.name) return current
+
+        val verified = dao.getModels().filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
+        val replacement = preferredModelId
+            ?.let { preferred -> verified.firstOrNull { it.id == preferred } }
+            ?: verified.firstOrNull()
+
+        if (current != null || replacement != null) dao.clearActiveModel()
+        if (replacement == null) return null
+
+        dao.markModelActive(replacement.id)
+        return dao.getModel(replacement.id)
     }
 
     private suspend fun ensureDefaultAgentForVerifiedModels(preferredModelId: String? = null): AgentEntity? {
