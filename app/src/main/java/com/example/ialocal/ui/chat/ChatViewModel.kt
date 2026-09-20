@@ -77,6 +77,12 @@ class ChatViewModel(
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
     private var generationJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            runCatching { modelRepository.getDefaultAgent() }
+        }
+    }
+
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
 
@@ -161,7 +167,7 @@ class ChatViewModel(
     fun deleteAgent(agentId: String) {
         viewModelScope.launch {
             runCatching {
-                val deleted = modelRepository.getAgent(agentId) ?: return@runCatching
+                modelRepository.getAgent(agentId) ?: return@runCatching
                 val wasSelected = _selectedAgentId.value == agentId || conversation.value?.agentId == agentId
                 modelRepository.deleteAgent(agentId)
                 if (wasSelected) {
