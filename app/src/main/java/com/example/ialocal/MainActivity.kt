@@ -7,11 +7,11 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -39,10 +39,17 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var container: AppContainer
 
+    private val storageAccessLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        if (::container.isInitialized && Environment.isExternalStorageManager()) {
+            container.automaticModelImporter.startScan()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         container = (application as LocalAiApplication).container
-        requestAutomaticStorageScanAccessIfNeeded()
 
         setContent {
             val themeMode by container.themeRepository.themeMode.collectAsStateWithLifecycle(
@@ -51,54 +58,53 @@ class MainActivity : ComponentActivity() {
             LocalAiTheme(themeMode = themeMode) {
                 LocalAiApp(
                     container = container,
+                    onScanStorage = ::requestStorageScan,
                     onExitApp = { finish() },
                 )
             }
         }
+
+        runInitialStorageScanOnce()
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (::container.isInitialized && Environment.isExternalStorageManager()) {
-            lifecycleScope.launch {
-                runCatching { container.automaticModelImporter.scanAndImport() }
-                    .onFailure { error ->
-                        container.diagnostics.error(
-                            "AUTO_MODEL_SCAN",
-                            "Falha na varredura automática do armazenamento compartilhado.",
-                            error,
-                        )
-                    }
-            }
-        }
-    }
-
-    private fun requestAutomaticStorageScanAccessIfNeeded() {
-        if (Environment.isExternalStorageManager()) return
-
+    private fun runInitialStorageScanOnce() {
         val preferences = getSharedPreferences(STORAGE_SCAN_PREFS, MODE_PRIVATE)
-        if (preferences.getBoolean(KEY_STORAGE_ACCESS_REQUESTED, false)) return
-        preferences.edit().putBoolean(KEY_STORAGE_ACCESS_REQUESTED, true).apply()
+        if (preferences.getBoolean(KEY_INITIAL_STORAGE_SCAN_HANDLED, false)) return
+
+        preferences.edit().putBoolean(KEY_INITIAL_STORAGE_SCAN_HANDLED, true).apply()
+        requestStorageScan()
+    }
+
+    private fun requestStorageScan() {
+        if (!::container.isInitialized || container.automaticModelImporter.progress.value.isRunning) return
+
+        if (Environment.isExternalStorageManager()) {
+            container.automaticModelImporter.startScan()
+            return
+        }
 
         val appAccessIntent = Intent(
             Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
             Uri.parse("package:$packageName"),
         )
-        runCatching { startActivity(appAccessIntent) }
+        runCatching { storageAccessLauncher.launch(appAccessIntent) }
             .onFailure {
-                runCatching { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+                runCatching {
+                    storageAccessLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }
             }
     }
 
     companion object {
         private const val STORAGE_SCAN_PREFS = "automatic_model_storage_access"
-        private const val KEY_STORAGE_ACCESS_REQUESTED = "requested"
+        private const val KEY_INITIAL_STORAGE_SCAN_HANDLED = "initial_scan_handled"
     }
 }
 
 @Composable
 private fun LocalAiApp(
     container: AppContainer,
+    onScanStorage: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -145,9 +151,11 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
+            val importProgress by container.automaticModelImporter.progress.collectAsStateWithLifecycle()
             val scope = rememberCoroutineScope()
             MyAisScreen(
                 viewModel = vm,
+                importProgress = importProgress,
                 onBack = { navController.popBackStack() },
                 onOpenChat = { modelId ->
                     scope.launch {
@@ -287,7 +295,13 @@ private fun LocalAiApp(
                     container.codeLanguagePacks,
                 ),
             )
-            SettingsScreen(viewModel = vm, onBack = { navController.popBackStack() })
+            val importProgress by container.automaticModelImporter.progress.collectAsStateWithLifecycle()
+            SettingsScreen(
+                viewModel = vm,
+                importProgress = importProgress,
+                onScanStorage = onScanStorage,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }
