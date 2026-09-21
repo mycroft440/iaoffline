@@ -7,16 +7,19 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Runtime backed by the official llama.cpp Android binding pinned by the build script. */
 class LlamaCppRuntime(
@@ -26,6 +29,7 @@ class LlamaCppRuntime(
 ) : ModelRuntime {
     private val appContext = context.applicationContext
     private val mutex = Mutex()
+    private val nativeDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val engine by lazy { AiChat.getInferenceEngine(appContext) }
     private val _state = MutableStateFlow(RuntimeState())
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
@@ -34,31 +38,36 @@ class LlamaCppRuntime(
     /** setSystemPrompt can only be called directly after a load in the pinned binding. */
     private var requestSessionConsumed = false
 
-    override suspend fun warmUp(model: AiModelEntity) {
+    override suspend fun warmUp(model: AiModelEntity) = withContext(nativeDispatcher) {
         mutex.withLock {
             ensureFreshLoaded(model, forceReload = loadedModelId != model.id || requestSessionConsumed)
         }
     }
 
-    override suspend fun verify(model: AiModelEntity): VerificationResult = mutex.withLock {
-        try {
-            logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
-            ensureFreshLoaded(model, forceReload = true)
-            engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
-            requestSessionConsumed = true
-            _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
-            val output = engine.sendUserPrompt("Responda apenas: OK", predictLength = 8)
-                .toList().joinToString("").trim()
-            require(output.isNotBlank()) { "O runtime carregou o modelo, mas a inferência de teste não gerou texto." }
-            logger?.info("INFERENCE", "Smoke test respondeu: ${output.take(80)}")
-
-            // Reset once more, so the first real API request may set its own system prompt.
-            ensureFreshLoaded(model, forceReload = true)
-            VerificationResult(output)
-        } catch (t: Throwable) {
-            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
-            logger?.error("INFERENCE", "Falha no teste real de inferência", t)
-            throw t
+    override suspend fun verify(model: AiModelEntity): VerificationResult = withContext(nativeDispatcher) {
+        mutex.withLock {
+            var finalState = RuntimeState()
+            try {
+                logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
+                ensureFreshLoaded(model, forceReload = true)
+                engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
+                requestSessionConsumed = true
+                _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
+                val output = engine.sendUserPrompt("Responda apenas: OK", predictLength = 8)
+                    .toList().joinToString("").trim()
+                require(output.isNotBlank()) { "O runtime carregou o modelo, mas a inferência de teste não gerou texto." }
+                logger?.info("INFERENCE", "Smoke test respondeu: ${output.take(80)}")
+                VerificationResult(output)
+            } catch (t: Throwable) {
+                finalState = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
+                _state.value = finalState
+                logger?.error("INFERENCE", "Falha no teste real de inferência", t)
+                throw t
+            } finally {
+                // A verification is only a smoke test. Do not keep a multi-GB model resident in RAM
+                // before the user actually opens/activates it.
+                unloadLocked(finalState)
+            }
         }
     }
 
@@ -111,7 +120,7 @@ class LlamaCppRuntime(
         } finally {
             mutex.unlock()
         }
-    }
+    }.flowOn(nativeDispatcher)
 
     override suspend fun complete(
         model: AiModelEntity,
@@ -126,7 +135,7 @@ class LlamaCppRuntime(
         return output
     }
 
-    override suspend fun unload() {
+    override suspend fun unload() = withContext(nativeDispatcher) {
         mutex.withLock { unloadLocked() }
     }
 
@@ -168,14 +177,18 @@ class LlamaCppRuntime(
         if (ready is InferenceEngine.State.Error) throw ready.exception
     }
 
-    private fun unloadLocked() {
+    private fun unloadLocked(finalState: RuntimeState = RuntimeState()) {
         val current = engine.state.value
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
             requestSessionConsumed = false
+            _state.value = finalState
             return
         }
-        if (loadedModelId == null && current is InferenceEngine.State.Initialized) return
+        if (loadedModelId == null && current is InferenceEngine.State.Initialized) {
+            _state.value = finalState
+            return
+        }
 
         _state.value = RuntimeState(RuntimeStatus.UNLOADING, loadedModelId)
         logger?.info("MODEL_UNLOAD", "Liberando contexto nativo")
@@ -183,7 +196,7 @@ class LlamaCppRuntime(
             .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
         loadedModelId = null
         requestSessionConsumed = false
-        _state.value = RuntimeState(RuntimeStatus.IDLE)
+        _state.value = finalState
     }
 
     private fun humanize(t: Throwable): String {
