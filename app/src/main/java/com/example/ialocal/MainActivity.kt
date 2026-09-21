@@ -27,11 +27,11 @@ import com.example.ialocal.ui.codeeditor.CodeEditorScreen
 import com.example.ialocal.ui.codeeditor.CodeEditorViewModel
 import com.example.ialocal.ui.home.HomeScreen
 import com.example.ialocal.ui.home.HomeViewModel
+import com.example.ialocal.ui.models.GroupedOfflineModelsScreen
 import com.example.ialocal.ui.models.HtmlAiHomeScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.models.MyAisScreen
-import com.example.ialocal.ui.models.OfflineModelsScreen
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
 import com.example.ialocal.ui.theme.LocalAiTheme
@@ -217,7 +217,7 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
-            OfflineModelsScreen(
+            GroupedOfflineModelsScreen(
                 viewModel = vm,
                 onBack = { navController.popBackStack() },
             )
