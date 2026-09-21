@@ -340,7 +340,11 @@ class ChatViewModel(
         attachments: List<PendingAttachment>,
     ) {
         val preferredAgentId = _selectedAgentId.value ?: conversation.value?.agentId
-        val preferredAgent = preferredAgentId?.let(modelRepository::getAgent)
+        val preferredAgent = if (preferredAgentId != null) {
+            modelRepository.getAgent(preferredAgentId)
+        } else {
+            null
+        }
         if (preferredAgent != null) {
             val selectedModel = requireNotNull(modelRepository.getModel(preferredAgent.modelId)) {
                 "O modelo selecionado não está mais disponível."
