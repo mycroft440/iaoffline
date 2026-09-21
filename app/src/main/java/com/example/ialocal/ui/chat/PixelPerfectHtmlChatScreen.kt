@@ -501,7 +501,7 @@ private fun ExactDrawer(
                 if (groupItems.isNotEmpty()) {
                     item {
                         Text(
-                            groupName.uppercase(Locale.getDefault()),
+                            groupName.uppercase(Locale.ROOT),
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
