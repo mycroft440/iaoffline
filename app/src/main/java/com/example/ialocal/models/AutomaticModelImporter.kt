@@ -177,7 +177,10 @@ class AutomaticModelImporter(
         }
 
         return result
-            .distinctBy { runCatching { it.canonicalPath }.getOrElse { it.absolutePath } }
+            .distinctBy { file ->
+                runCatching { file.canonicalPath }
+                    .getOrElse { file.absolutePath }
+            }
             .sortedByDescending { it.lastModified() }
     }
 
