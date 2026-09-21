@@ -68,10 +68,20 @@ class AutomaticModelImporter(
                 val preview = try {
                     inspectFile(file)
                 } catch (t: Throwable) {
-                    // A file that is structurally not a usable GGUF should not be reparsed on every resume.
+                    // Structurally invalid GGUFs are ignored until the file itself changes.
                     markProcessed(fingerprint)
                     invalid += 1
-                    logger?.error("AUTO_MODEL_SCAN", "GGUF ignorado durante varredura automática: ${file.absolutePath}", t)
+                    logger?.error("AUTO_MODEL_SCAN", "GGUF inválido ignorado: ${file.absolutePath}", t)
+                    return@forEach
+                }
+
+                if (!preview.compatibility.canStore) {
+                    // Do not remember this as processed: freeing space later must allow a retry.
+                    failures += 1
+                    logger?.info(
+                        "AUTO_MODEL_SCAN",
+                        "Sem espaço para importar ${file.name}; o app tentará novamente em outra varredura.",
+                    )
                     return@forEach
                 }
 
@@ -127,7 +137,6 @@ class AutomaticModelImporter(
         val metadata = inspector.inspect(file)
         require(metadata.tensorCount > 0) { "O GGUF não contém tensors de modelo." }
         val compatibility = compatibilityChecker.check(file.length())
-        require(compatibility.canStore) { "Não há espaço livre suficiente para importar ${file.name}." }
 
         return ModelImportPreview(
             uri = Uri.fromFile(file),
@@ -139,13 +148,9 @@ class AutomaticModelImporter(
     }
 
     private fun sameInstalledModel(model: AiModelEntity, preview: ModelImportPreview): Boolean {
-        if (preview.sourceSizeBytes == null || model.sizeBytes != preview.sourceSizeBytes) return false
-        if (model.name.equals(preview.suggestedName, ignoreCase = true)) return true
-        val importedArchitecture = model.architecture?.trim().orEmpty()
-        val candidateArchitecture = preview.metadata.architecture?.trim().orEmpty()
-        return importedArchitecture.isNotBlank() &&
-            candidateArchitecture.isNotBlank() &&
-            importedArchitecture.equals(candidateArchitecture, ignoreCase = true)
+        val sourceSize = preview.sourceSizeBytes ?: return false
+        return model.sizeBytes == sourceSize &&
+            model.name.equals(preview.suggestedName, ignoreCase = true)
     }
 
     private fun discoverGgufFiles(): List<File> {
