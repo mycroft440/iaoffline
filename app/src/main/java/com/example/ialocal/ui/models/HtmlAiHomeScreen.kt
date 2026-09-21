@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -145,7 +144,7 @@ fun HtmlAiHomeScreen(
                 HtmlAppHeader(onOpenSettings = onOpenSettings)
             }
             item {
-                HtmlHeroCard(onStartChat = onStartChat)
+                HtmlHeroCard()
             }
             item {
                 MyAisHomePreview(
@@ -309,14 +308,13 @@ private fun HtmlAppHeader(onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun HtmlHeroCard(onStartChat: () -> Unit) {
+private fun HtmlHeroCard() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(HtmlSurface, RoundedCornerShape(16.dp))
             .border(1.dp, HtmlBorder, RoundedCornerShape(16.dp))
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -368,30 +366,6 @@ private fun HtmlHeroCard(onStartChat: () -> Unit) {
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(HtmlText, RoundedCornerShape(12.dp))
-                .clickable(onClick = onStartChat)
-                .padding(horizontal = 16.dp, vertical = 13.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Default.Chat,
-                contentDescription = null,
-                tint = HtmlBg,
-                modifier = Modifier.size(17.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "Iniciar chat com IA",
-                color = HtmlBg,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
         }
     }
 }
