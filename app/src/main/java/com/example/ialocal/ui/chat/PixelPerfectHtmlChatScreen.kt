@@ -670,21 +670,6 @@ private fun ExactChatBody(
                     }
                     if (generating) item { ExactLoading() }
                 }
-                Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 16.dp).clickable(onClick = onNew),
-                    shape = RoundedCornerShape(50),
-                    color = PCard.copy(alpha = 0.90f),
-                    border = BorderStroke(1.dp, PBorder),
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.Add, null, tint = PText2, modifier = Modifier.size(10.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Novo chat", fontSize = 12.sp, color = PText2)
-                    }
-                }
             }
         }
 
