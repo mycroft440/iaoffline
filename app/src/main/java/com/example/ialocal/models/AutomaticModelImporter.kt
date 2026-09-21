@@ -8,7 +8,13 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import java.io.File
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -22,6 +28,34 @@ data class AutomaticModelImportSummary(
     val failures: Int = 0,
     val permissionRequired: Boolean = false,
 )
+
+enum class AutomaticModelImportPhase {
+    IDLE,
+    DISCOVERING,
+    IMPORTING,
+    COMPLETED,
+    PERMISSION_REQUIRED,
+    FAILED,
+}
+
+data class AutomaticModelImportProgress(
+    val phase: AutomaticModelImportPhase = AutomaticModelImportPhase.IDLE,
+    val processed: Int = 0,
+    val total: Int = 0,
+    val currentFileName: String? = null,
+    val summary: AutomaticModelImportSummary? = null,
+) {
+    val isRunning: Boolean
+        get() = phase == AutomaticModelImportPhase.DISCOVERING ||
+            phase == AutomaticModelImportPhase.IMPORTING
+
+    val fraction: Float?
+        get() = if (phase == AutomaticModelImportPhase.IMPORTING && total > 0) {
+            (processed.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+        } else {
+            null
+        }
+}
 
 /**
  * Searches the primary shared Android storage for GGUF files and imports compatible models without
@@ -37,96 +71,161 @@ class AutomaticModelImporter(
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val scanMutex = Mutex()
+    private val scanScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inspector = GgufInspector()
     private val compatibilityChecker = DeviceCompatibilityChecker(appContext)
+    private val _progress = MutableStateFlow(AutomaticModelImportProgress())
+
+    val progress: StateFlow<AutomaticModelImportProgress> = _progress.asStateFlow()
+
+    fun startScan() {
+        if (_progress.value.isRunning) return
+
+        _progress.value = AutomaticModelImportProgress(
+            phase = AutomaticModelImportPhase.DISCOVERING,
+        )
+        scanScope.launch {
+            runCatching { scanAndImport() }
+                .onFailure { error ->
+                    logger?.error(
+                        "AUTO_MODEL_SCAN",
+                        "Falha na varredura do armazenamento compartilhado.",
+                        error,
+                    )
+                }
+        }
+    }
 
     suspend fun scanAndImport(): AutomaticModelImportSummary = scanMutex.withLock {
         if (!Environment.isExternalStorageManager()) {
-            return@withLock AutomaticModelImportSummary(permissionRequired = true)
+            val summary = AutomaticModelImportSummary(permissionRequired = true)
+            _progress.value = AutomaticModelImportProgress(
+                phase = AutomaticModelImportPhase.PERMISSION_REQUIRED,
+                summary = summary,
+            )
+            return@withLock summary
         }
 
-        withContext(Dispatchers.IO) {
-            val candidates = discoverGgufFiles()
-            var installed = repository.getModels().toMutableList()
-            var imported = 0
-            var alreadyInstalled = 0
-            var invalid = 0
-            var verificationWarnings = 0
-            var failures = 0
+        _progress.value = AutomaticModelImportProgress(
+            phase = AutomaticModelImportPhase.DISCOVERING,
+        )
 
-            candidates.forEach { file ->
-                val fingerprint = fingerprint(file)
-                if (preferences.getBoolean(fingerprint, false)) return@forEach
+        try {
+            val summary = withContext(Dispatchers.IO) {
+                val candidates = discoverGgufFiles()
+                var installed = repository.getModels().toMutableList()
+                var imported = 0
+                var alreadyInstalled = 0
+                var invalid = 0
+                var verificationWarnings = 0
+                var failures = 0
 
-                val catalogModel = catalogModelForFileName(file.name)
-                if (catalogModel != null && installed.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) }) {
-                    markProcessed(fingerprint)
-                    alreadyInstalled += 1
-                    return@forEach
-                }
+                _progress.value = AutomaticModelImportProgress(
+                    phase = AutomaticModelImportPhase.IMPORTING,
+                    total = candidates.size,
+                )
 
-                val preview = try {
-                    inspectFile(file)
-                } catch (t: Throwable) {
-                    // Structurally invalid GGUFs are ignored until the file itself changes.
-                    markProcessed(fingerprint)
-                    invalid += 1
-                    logger?.error("AUTO_MODEL_SCAN", "GGUF inválido ignorado: ${file.absolutePath}", t)
-                    return@forEach
-                }
-
-                if (!preview.compatibility.canStore) {
-                    // Do not remember this as processed: freeing space later must allow a retry.
-                    failures += 1
-                    logger?.info(
-                        "AUTO_MODEL_SCAN",
-                        "Sem espaço para importar ${file.name}; o app tentará novamente em outra varredura.",
+                candidates.forEachIndexed { index, file ->
+                    _progress.value = _progress.value.copy(
+                        processed = index,
+                        total = candidates.size,
+                        currentFileName = file.name,
                     )
-                    return@forEach
-                }
 
-                if (installed.any { sameInstalledModel(it, preview) }) {
-                    markProcessed(fingerprint)
-                    alreadyInstalled += 1
-                    return@forEach
-                }
+                    try {
+                        val fingerprint = fingerprint(file)
+                        if (preferences.getBoolean(fingerprint, false)) return@forEachIndexed
 
-                val beforeIds = installed.mapTo(hashSetOf()) { it.id }
-                try {
-                    manager.importAndVerify(preview)
-                    installed = repository.getModels().toMutableList()
-                    markProcessed(fingerprint)
-                    imported += 1
-                    logger?.info("AUTO_MODEL_SCAN", "Modelo importado automaticamente: ${file.absolutePath}")
-                } catch (t: Throwable) {
-                    val after = repository.getModels().toMutableList()
-                    val importedDespiteVerification = after.firstOrNull { it.id !in beforeIds }
-                    installed = after
-                    if (importedDespiteVerification != null) {
-                        // ModelManager intentionally keeps an imported GGUF when runtime verification fails.
-                        markProcessed(fingerprint)
-                        imported += 1
-                        verificationWarnings += 1
-                        logger?.error(
-                            "AUTO_MODEL_SCAN",
-                            "${file.name} foi importado automaticamente, mas a verificação de execução falhou.",
-                            t,
+                        val catalogModel = catalogModelForFileName(file.name)
+                        if (catalogModel != null && installed.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) }) {
+                            markProcessed(fingerprint)
+                            alreadyInstalled += 1
+                            return@forEachIndexed
+                        }
+
+                        val preview = try {
+                            inspectFile(file)
+                        } catch (t: Throwable) {
+                            // Structurally invalid GGUFs are ignored until the file itself changes.
+                            markProcessed(fingerprint)
+                            invalid += 1
+                            logger?.error("AUTO_MODEL_SCAN", "GGUF inválido ignorado: ${file.absolutePath}", t)
+                            return@forEachIndexed
+                        }
+
+                        if (!preview.compatibility.canStore) {
+                            // Do not remember this as processed: freeing space later must allow a retry.
+                            failures += 1
+                            logger?.info(
+                                "AUTO_MODEL_SCAN",
+                                "Sem espaço para importar ${file.name}; tente novamente em Configurações depois de liberar espaço.",
+                            )
+                            return@forEachIndexed
+                        }
+
+                        if (installed.any { sameInstalledModel(it, preview) }) {
+                            markProcessed(fingerprint)
+                            alreadyInstalled += 1
+                            return@forEachIndexed
+                        }
+
+                        val beforeIds = installed.mapTo(hashSetOf()) { it.id }
+                        try {
+                            manager.importAndVerify(preview)
+                            installed = repository.getModels().toMutableList()
+                            markProcessed(fingerprint)
+                            imported += 1
+                            logger?.info("AUTO_MODEL_SCAN", "Modelo importado automaticamente: ${file.absolutePath}")
+                        } catch (t: Throwable) {
+                            val after = repository.getModels().toMutableList()
+                            val importedDespiteVerification = after.firstOrNull { it.id !in beforeIds }
+                            installed = after
+                            if (importedDespiteVerification != null) {
+                                // ModelManager intentionally keeps an imported GGUF when runtime verification fails.
+                                markProcessed(fingerprint)
+                                imported += 1
+                                verificationWarnings += 1
+                                logger?.error(
+                                    "AUTO_MODEL_SCAN",
+                                    "${file.name} foi importado automaticamente, mas a verificação de execução falhou.",
+                                    t,
+                                )
+                            } else {
+                                failures += 1
+                                logger?.error("AUTO_MODEL_SCAN", "Falha ao importar automaticamente ${file.absolutePath}", t)
+                            }
+                        }
+                    } finally {
+                        _progress.value = _progress.value.copy(
+                            processed = index + 1,
+                            total = candidates.size,
+                            currentFileName = null,
                         )
-                    } else {
-                        failures += 1
-                        logger?.error("AUTO_MODEL_SCAN", "Falha ao importar automaticamente ${file.absolutePath}", t)
                     }
                 }
+
+                AutomaticModelImportSummary(
+                    scanned = candidates.size,
+                    imported = imported,
+                    alreadyInstalled = alreadyInstalled,
+                    invalid = invalid,
+                    verificationWarnings = verificationWarnings,
+                    failures = failures,
+                )
             }
 
-            AutomaticModelImportSummary(
-                scanned = candidates.size,
-                imported = imported,
-                alreadyInstalled = alreadyInstalled,
-                invalid = invalid,
-                verificationWarnings = verificationWarnings,
-                failures = failures,
+            _progress.value = AutomaticModelImportProgress(
+                phase = AutomaticModelImportPhase.COMPLETED,
+                processed = summary.scanned,
+                total = summary.scanned,
+                summary = summary,
             )
+            summary
+        } catch (t: Throwable) {
+            _progress.value = AutomaticModelImportProgress(
+                phase = AutomaticModelImportPhase.FAILED,
+            )
+            throw t
         }
     }
 
