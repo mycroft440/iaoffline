@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.WifiOff
@@ -132,10 +131,7 @@ fun HtmlAiHomeScreen(
         containerColor = HtmlBg,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            HtmlBottomBar(
-                onRestoreModels = onRestoreModels,
-                onOpenCodeEditor = onOpenCodeEditor,
-            )
+            HtmlBottomBar(onOpenCodeEditor = onOpenCodeEditor)
         },
     ) { padding ->
         LazyColumn(
@@ -723,7 +719,6 @@ private fun HtmlNavigationCard(
 
 @Composable
 private fun HtmlBottomBar(
-    onRestoreModels: () -> Unit,
     onOpenCodeEditor: () -> Unit,
 ) {
     Column(
@@ -736,27 +731,10 @@ private fun HtmlBottomBar(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .background(HtmlSurface, RoundedCornerShape(12.dp))
-                    .border(1.dp, HtmlBorder, RoundedCornerShape(12.dp))
-                    .clickable(onClick = onRestoreModels)
-                    .padding(horizontal = 16.dp, vertical = 13.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.Refresh, null, tint = HtmlMuted, modifier = Modifier.size(17.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Restaurar IAs", color = HtmlText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            }
+        Box(modifier = Modifier.fillMaxWidth()) {
             Box(
                 modifier = Modifier
+                    .align(Alignment.CenterEnd)
                     .size(width = 48.dp, height = 44.dp)
                     .background(HtmlSurface, RoundedCornerShape(12.dp))
                     .border(1.dp, HtmlBorder, RoundedCornerShape(12.dp))
