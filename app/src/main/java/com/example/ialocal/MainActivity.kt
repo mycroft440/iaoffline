@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.ThemeMode
+import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.chat.ChatWithDeepThinkScreen
 import com.example.ialocal.ui.codeeditor.CodeEditorScreen
@@ -38,12 +39,13 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var container: AppContainer
+    private var pendingStorageScanMode = AutomaticModelScanMode.FULL
 
     private val storageAccessLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         if (::container.isInitialized && Environment.isExternalStorageManager()) {
-            container.automaticModelImporter.startScan()
+            container.automaticModelImporter.startScan(pendingStorageScanMode)
         }
     }
 
@@ -58,7 +60,7 @@ class MainActivity : ComponentActivity() {
             LocalAiTheme(themeMode = themeMode) {
                 LocalAiApp(
                     container = container,
-                    onScanStorage = ::requestStorageScan,
+                    onScanStorage = { requestStorageScan(AutomaticModelScanMode.FULL) },
                     onExitApp = { finish() },
                 )
             }
@@ -72,14 +74,15 @@ class MainActivity : ComponentActivity() {
         if (preferences.getBoolean(KEY_INITIAL_STORAGE_SCAN_HANDLED, false)) return
 
         preferences.edit().putBoolean(KEY_INITIAL_STORAGE_SCAN_HANDLED, true).apply()
-        requestStorageScan()
+        requestStorageScan(AutomaticModelScanMode.QUICK)
     }
 
-    private fun requestStorageScan() {
+    private fun requestStorageScan(mode: AutomaticModelScanMode) {
         if (!::container.isInitialized || container.automaticModelImporter.progress.value.isRunning) return
+        pendingStorageScanMode = mode
 
         if (Environment.isExternalStorageManager()) {
-            container.automaticModelImporter.startScan()
+            container.automaticModelImporter.startScan(mode)
             return
         }
 
@@ -167,6 +170,7 @@ private fun LocalAiApp(
                                 container.modelManager.load(modelId)
                             } else {
                                 container.modelManager.retryVerification(modelId)
+                                container.modelManager.load(modelId)
                             }
                             container.modelRepository.getAgentForModel(modelId)?.let { agent ->
                                 container.modelRepository.setDefaultAgent(agent.id)
