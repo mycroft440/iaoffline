@@ -38,6 +38,11 @@ enum class AutomaticModelImportPhase {
     FAILED,
 }
 
+enum class AutomaticModelScanMode {
+    QUICK,
+    FULL,
+}
+
 data class AutomaticModelImportProgress(
     val phase: AutomaticModelImportPhase = AutomaticModelImportPhase.IDLE,
     val processed: Int = 0,
@@ -58,14 +63,14 @@ data class AutomaticModelImportProgress(
 }
 
 /**
- * Searches the primary shared Android storage for GGUF files and imports compatible models without
- * making the user pick each file manually. Android requires MANAGE_EXTERNAL_STORAGE for this broad
- * scan; callers must request the special access before invoking [scanAndImport].
+ * Searches shared Android storage for GGUF files and imports compatible models without making the
+ * user pick each file manually. The first app scan can use [AutomaticModelScanMode.QUICK] to avoid
+ * walking the entire shared storage; the manual Settings scan uses [AutomaticModelScanMode.FULL].
+ * Runtime verification is deliberately deferred until the user actually activates/opens a model.
  */
 class AutomaticModelImporter(
     context: Context,
     private val repository: ModelRepository,
-    private val manager: ModelManager,
     private val logger: AiEventLogger? = null,
 ) {
     private val appContext = context.applicationContext
@@ -78,14 +83,14 @@ class AutomaticModelImporter(
 
     val progress: StateFlow<AutomaticModelImportProgress> = _progress.asStateFlow()
 
-    fun startScan() {
+    fun startScan(mode: AutomaticModelScanMode = AutomaticModelScanMode.FULL) {
         if (_progress.value.isRunning) return
 
         _progress.value = AutomaticModelImportProgress(
             phase = AutomaticModelImportPhase.DISCOVERING,
         )
         scanScope.launch {
-            runCatching { scanAndImport() }
+            runCatching { scanAndImport(mode) }
                 .onFailure { error ->
                     logger?.error(
                         "AUTO_MODEL_SCAN",
@@ -96,7 +101,9 @@ class AutomaticModelImporter(
         }
     }
 
-    suspend fun scanAndImport(): AutomaticModelImportSummary = scanMutex.withLock {
+    suspend fun scanAndImport(
+        mode: AutomaticModelScanMode = AutomaticModelScanMode.FULL,
+    ): AutomaticModelImportSummary = scanMutex.withLock {
         if (!Environment.isExternalStorageManager()) {
             val summary = AutomaticModelImportSummary(permissionRequired = true)
             _progress.value = AutomaticModelImportProgress(
@@ -112,12 +119,11 @@ class AutomaticModelImporter(
 
         try {
             val summary = withContext(Dispatchers.IO) {
-                val candidates = discoverGgufFiles()
+                val candidates = discoverGgufFiles(mode)
                 var installed = repository.getModels().toMutableList()
                 var imported = 0
                 var alreadyInstalled = 0
                 var invalid = 0
-                var verificationWarnings = 0
                 var failures = 0
 
                 _progress.value = AutomaticModelImportProgress(
@@ -169,31 +175,18 @@ class AutomaticModelImporter(
                             return@forEachIndexed
                         }
 
-                        val beforeIds = installed.mapTo(hashSetOf()) { it.id }
                         try {
-                            manager.importAndVerify(preview)
+                            repository.importGguf(preview)
                             installed = repository.getModels().toMutableList()
                             markProcessed(fingerprint)
                             imported += 1
-                            logger?.info("AUTO_MODEL_SCAN", "Modelo importado automaticamente: ${file.absolutePath}")
+                            logger?.info(
+                                "AUTO_MODEL_SCAN",
+                                "Modelo importado automaticamente sem carregar o runtime: ${file.absolutePath}",
+                            )
                         } catch (t: Throwable) {
-                            val after = repository.getModels().toMutableList()
-                            val importedDespiteVerification = after.firstOrNull { it.id !in beforeIds }
-                            installed = after
-                            if (importedDespiteVerification != null) {
-                                // ModelManager intentionally keeps an imported GGUF when runtime verification fails.
-                                markProcessed(fingerprint)
-                                imported += 1
-                                verificationWarnings += 1
-                                logger?.error(
-                                    "AUTO_MODEL_SCAN",
-                                    "${file.name} foi importado automaticamente, mas a verificação de execução falhou.",
-                                    t,
-                                )
-                            } else {
-                                failures += 1
-                                logger?.error("AUTO_MODEL_SCAN", "Falha ao importar automaticamente ${file.absolutePath}", t)
-                            }
+                            failures += 1
+                            logger?.error("AUTO_MODEL_SCAN", "Falha ao importar automaticamente ${file.absolutePath}", t)
                         }
                     } finally {
                         _progress.value = _progress.value.copy(
@@ -209,7 +202,6 @@ class AutomaticModelImporter(
                     imported = imported,
                     alreadyInstalled = alreadyInstalled,
                     invalid = invalid,
-                    verificationWarnings = verificationWarnings,
                     failures = failures,
                 )
             }
@@ -252,14 +244,38 @@ class AutomaticModelImporter(
             model.name.equals(preview.suggestedName, ignoreCase = true)
     }
 
-    private fun discoverGgufFiles(): List<File> {
+    private fun discoverGgufFiles(mode: AutomaticModelScanMode): List<File> {
         val root = Environment.getExternalStorageDirectory()
         if (!root.isDirectory || !root.canRead()) return emptyList()
 
         val result = mutableListOf<File>()
+        if (mode == AutomaticModelScanMode.QUICK) {
+            runCatching { root.listFiles() }.getOrNull().orEmpty()
+                .filterTo(result) { file ->
+                    file.isFile && file.extension.equals("gguf", ignoreCase = true) && file.length() > 0L
+                }
+            val quickRoots = listOf(
+                File(root, Environment.DIRECTORY_DOWNLOADS),
+                File(root, Environment.DIRECTORY_DOCUMENTS),
+            ).filter { it.isDirectory && it.canRead() }
+            result += discoverRecursively(quickRoots)
+        } else {
+            result += discoverRecursively(listOf(root))
+        }
+
+        return result
+            .distinctBy { file ->
+                runCatching { file.canonicalPath }
+                    .getOrElse { file.absolutePath }
+            }
+            .sortedByDescending { it.lastModified() }
+    }
+
+    private fun discoverRecursively(roots: List<File>): List<File> {
+        val result = mutableListOf<File>()
         val pending = ArrayDeque<File>()
         val visited = hashSetOf<String>()
-        pending.add(root)
+        roots.forEach { root -> if (root.isDirectory && root.canRead()) pending.add(root) }
 
         while (pending.isNotEmpty()) {
             val directory = pending.removeFirst()
@@ -274,13 +290,7 @@ class AutomaticModelImporter(
                 }
             }
         }
-
         return result
-            .distinctBy { file ->
-                runCatching { file.canonicalPath }
-                    .getOrElse { file.absolutePath }
-            }
-            .sortedByDescending { it.lastModified() }
     }
 
     private fun shouldEnter(directory: File): Boolean {
