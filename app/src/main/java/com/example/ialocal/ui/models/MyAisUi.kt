@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.models.AutomaticModelImportPhase
+import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.ui.branding.brandName
@@ -219,6 +222,7 @@ private fun MyAiPreviewCard(
 @Composable
 fun MyAisScreen(
     viewModel: ModelsViewModel,
+    importProgress: AutomaticModelImportProgress,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
 ) {
@@ -259,7 +263,11 @@ fun MyAisScreen(
                 }
             }
 
-            if (orderedModels.isEmpty()) {
+            if (importProgress.isRunning) {
+                ModelStorageImportProgress(importProgress)
+            }
+
+            if (orderedModels.isEmpty() && !importProgress.isRunning) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Nenhuma IA instalada.", color = MyAiMuted, fontSize = 13.sp)
                 }
@@ -283,6 +291,65 @@ fun MyAisScreen(
                     item { Spacer(Modifier.height(20.dp)) }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ModelStorageImportProgress(progress: AutomaticModelImportProgress) {
+    val detail = when (progress.phase) {
+        AutomaticModelImportPhase.DISCOVERING -> "Procurando arquivos GGUF no armazenamento interno..."
+        AutomaticModelImportPhase.IMPORTING -> if (progress.total > 0) {
+            val current = (progress.processed + 1).coerceAtMost(progress.total)
+            "Processando IA $current de ${progress.total}"
+        } else {
+            "Nenhum arquivo GGUF encontrado."
+        }
+        else -> ""
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .background(MyAiSurface, RoundedCornerShape(14.dp))
+            .border(1.dp, MyAiBorder, RoundedCornerShape(14.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Text(
+            "Buscando I.As no armazenamento interno",
+            color = MyAiText,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(detail, color = MyAiMuted, fontSize = 11.sp)
+
+        val fraction = progress.fraction
+        if (fraction == null) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = MyAiActive,
+                trackColor = MyAiElevated,
+            )
+        } else {
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+                color = MyAiActive,
+                trackColor = MyAiElevated,
+            )
+        }
+
+        progress.currentFileName?.let { fileName ->
+            Text(
+                fileName,
+                color = MyAiMuted,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
