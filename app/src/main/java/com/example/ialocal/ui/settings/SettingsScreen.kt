@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -39,12 +40,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.data.ThemeMode
+import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.ui.codeeditor.CodeLanguagePackDescriptor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
+    importProgress: AutomaticModelImportProgress,
+    onScanStorage: () -> Unit,
     onBack: () -> Unit,
 ) {
     val selected by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -97,6 +101,21 @@ fun SettingsScreen(
 
             item {
                 Text(
+                    "Modelos locais",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            item {
+                StorageScanCard(
+                    scanning = importProgress.isRunning,
+                    onScanStorage = onScanStorage,
+                )
+            }
+
+            item {
+                Text(
                     "Linguagens do editor",
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.titleMedium,
@@ -130,6 +149,44 @@ fun SettingsScreen(
             }
 
             item { Spacer(Modifier.padding(bottom = 12.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun StorageScanCard(
+    scanning: Boolean,
+    onScanStorage: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Buscar I.As no armazenamento interno",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "A busca automática acontece somente na primeira abertura do app. Depois disso, novas buscas são iniciadas apenas por este botão. Se necessário, o Android solicitará acesso aos arquivos.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onScanStorage,
+                enabled = !scanning,
+            ) {
+                if (scanning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Text(" Buscando...")
+                } else {
+                    Text("Buscar agora")
+                }
+            }
         }
     }
 }
