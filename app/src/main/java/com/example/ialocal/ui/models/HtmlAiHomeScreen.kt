@@ -11,17 +11,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -65,7 +62,6 @@ private val HtmlBg = Color(0xFF0C0D10)
 private val HtmlSurface = Color(0xFF15161B)
 private val HtmlElevated = Color(0xFF1E1F26)
 private val HtmlBorder = Color(0xFF282A33)
-private val HtmlSubtle = Color(0xFF383B47)
 private val HtmlText = Color(0xFFF1F2F5)
 private val HtmlMuted = Color(0xFF8B8E9D)
 private val HtmlDim = Color(0xFF5C5F6E)
@@ -123,65 +119,50 @@ fun HtmlAiHomeScreen(
     Scaffold(
         containerColor = HtmlBg,
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            HtmlBottomBar(onOpenCodeEditor = onOpenCodeEditor)
-        },
     ) { padding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(HtmlBg),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .background(HtmlBg)
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                HtmlStatusBar(
-                    clock = clock,
-                    batteryPercent = hardware.batteryPercent,
-                )
-            }
-            item {
-                HtmlAppHeader(onOpenSettings = onOpenSettings)
-            }
-            item {
-                HtmlHeroCard()
-            }
-            item {
+            HtmlStatusBar(
+                clock = clock,
+                batteryPercent = hardware.batteryPercent,
+            )
+            HtmlAppHeader(
+                onOpenCodeEditor = onOpenCodeEditor,
+                onOpenSettings = onOpenSettings,
+            )
+            HtmlHeroCard()
+            HtmlNavigationCard(
+                title = "Chat com I.A",
+                subtitle = "Inicie uma nova conversa com sua I.A local",
+                icon = Icons.Default.SmartToy,
+                onClick = onStartChat,
+            )
+            MyAisHomePreview(
+                models = installedModels,
+                catalog = viewModel.catalog,
+                onOpenMyAis = onOpenChats,
+            )
+            HtmlHardwareCard(hardware)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 HtmlNavigationCard(
-                    title = "Chat com I.A",
-                    subtitle = "Inicie uma nova conversa com sua I.A local",
-                    icon = Icons.Default.SmartToy,
-                    onClick = onStartChat,
+                    title = "Baixar I.As offline",
+                    subtitle = "Modelos GGUF otimizados para uso local",
+                    icon = Icons.Default.Download,
+                    onClick = onOpenOfflineModels,
+                )
+                HtmlNavigationCard(
+                    title = "Utilizar API",
+                    subtitle = "Configure e controle a API local do aparelho",
+                    icon = Icons.Default.Code,
+                    onClick = onOpenApi,
                 )
             }
-            item {
-                MyAisHomePreview(
-                    models = installedModels,
-                    catalog = viewModel.catalog,
-                    onOpenMyAis = onOpenChats,
-                )
-            }
-            item {
-                HtmlHardwareCard(hardware)
-            }
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    HtmlNavigationCard(
-                        title = "Baixar I.As offline",
-                        subtitle = "Modelos GGUF otimizados para uso local",
-                        icon = Icons.Default.Download,
-                        onClick = onOpenOfflineModels,
-                    )
-                    HtmlNavigationCard(
-                        title = "Utilizar API",
-                        subtitle = "Configure e controle a API local do aparelho",
-                        icon = Icons.Default.Code,
-                        onClick = onOpenApi,
-                    )
-                }
-            }
-            item { Spacer(Modifier.height(4.dp)) }
         }
     }
 
@@ -240,7 +221,10 @@ private fun HtmlStatusBar(clock: String, batteryPercent: Int) {
 }
 
 @Composable
-private fun HtmlAppHeader(onOpenSettings: () -> Unit) {
+private fun HtmlAppHeader(
+    onOpenCodeEditor: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -295,6 +279,21 @@ private fun HtmlAppHeader(onOpenSettings: () -> Unit) {
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.5.sp,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(HtmlSurface, RoundedCornerShape(12.dp))
+                    .border(1.dp, HtmlBorder, RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenCodeEditor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Code,
+                    contentDescription = "Console e editor",
+                    tint = Color(0xFF34D399),
+                    modifier = Modifier.size(18.dp),
                 )
             }
             Box(
@@ -501,42 +500,6 @@ private fun HtmlNavigationCard(
         ) {
             Icon(Icons.Default.KeyboardArrowRight, null, tint = HtmlMuted, modifier = Modifier.size(17.dp))
         }
-    }
-}
-
-@Composable
-private fun HtmlBottomBar(
-    onOpenCodeEditor: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(HtmlBg)
-            .border(1.dp, HtmlBorder)
-            .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .size(width = 48.dp, height = 44.dp)
-                    .background(HtmlSurface, RoundedCornerShape(12.dp))
-                    .border(1.dp, HtmlBorder, RoundedCornerShape(12.dp))
-                    .clickable(onClick = onOpenCodeEditor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Default.Code, "Console e editor", tint = Color(0xFF34D399), modifier = Modifier.size(18.dp))
-            }
-        }
-        Box(
-            modifier = Modifier
-                .width(128.dp)
-                .height(4.dp)
-                .background(HtmlSubtle, RoundedCornerShape(50)),
-        )
     }
 }
 
