@@ -112,6 +112,7 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.ConversationListItem
 import com.example.ialocal.data.MessageRole
+import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
@@ -642,6 +643,15 @@ private fun ExactChatBody(
     onRemoveAttachment: (String) -> Unit,
     onRemoveQueued: (Int) -> Unit,
 ) {
+    val sendingAssistantId = if (generating) {
+        messages.lastOrNull {
+            it.message.role == MessageRole.ASSISTANT.name &&
+                it.message.status == MessageStatus.SENDING.name
+        }?.message?.id
+    } else {
+        null
+    }
+
     Column(Modifier.fillMaxSize().background(PBg)) {
         ExactTopBar(
             agent = selectedAgent?.name ?: "Perfil",
@@ -666,9 +676,13 @@ private fun ExactChatBody(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     items(messages, key = { it.message.id }) { item ->
-                        ExactMessage(item = item, canRerun = !generating) { onRerun(item.message.id) }
+                        if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
+                            ExactLoading()
+                        } else {
+                            ExactMessage(item = item, canRerun = !generating) { onRerun(item.message.id) }
+                        }
                     }
-                    if (generating) item { ExactLoading() }
+                    if (generating && sendingAssistantId == null) item { ExactLoading() }
                 }
             }
         }
