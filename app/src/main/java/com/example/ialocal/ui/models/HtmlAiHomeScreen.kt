@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
@@ -145,6 +146,14 @@ fun HtmlAiHomeScreen(
             }
             item {
                 HtmlHeroCard()
+            }
+            item {
+                HtmlNavigationCard(
+                    title = "Chat com I.A",
+                    subtitle = "Inicie uma nova conversa com sua I.A local",
+                    icon = Icons.Default.SmartToy,
+                    onClick = onStartChat,
+                )
             }
             item {
                 MyAisHomePreview(
