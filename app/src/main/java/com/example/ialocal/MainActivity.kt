@@ -18,7 +18,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.ThemeMode
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.ui.chat.ChatViewModel
@@ -162,29 +161,8 @@ private fun LocalAiApp(
                 onBack = { navController.popBackStack() },
                 onOpenChat = { modelId ->
                     scope.launch {
-                        runCatching {
-                            val model = requireNotNull(container.modelRepository.getModel(modelId)) {
-                                "IA não encontrada."
-                            }
-                            if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
-                                container.modelManager.load(modelId)
-                            } else {
-                                container.modelManager.retryVerification(modelId)
-                                container.modelManager.load(modelId)
-                            }
-                            container.modelRepository.getAgentForModel(modelId)?.let { agent ->
-                                container.modelRepository.setDefaultAgent(agent.id)
-                            }
-                            container.chatRepository.createConversation()
-                        }.onSuccess { conversationId ->
-                            navController.navigate("chat/$conversationId")
-                        }.onFailure { error ->
-                            container.diagnostics.error(
-                                "MY_AI_CHAT",
-                                "Falha ao abrir o chat com a IA selecionada.",
-                                error,
-                            )
-                        }
+                        val conversationId = container.chatRepository.createConversation()
+                        navController.navigate("chat/$conversationId?modelId=$modelId")
                     }
                 },
             )
@@ -238,19 +216,29 @@ private fun LocalAiApp(
         }
 
         composable(
-            route = "chat/{conversationId}",
-            arguments = listOf(navArgument("conversationId") { type = NavType.StringType }),
+            route = "chat/{conversationId}?modelId={modelId}",
+            arguments = listOf(
+                navArgument("conversationId") { type = NavType.StringType },
+                navArgument("modelId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
         ) { entry ->
             val id = requireNotNull(entry.arguments?.getString("conversationId"))
+            val initialModelId = entry.arguments?.getString("modelId")
             val vm: ChatViewModel = viewModel(
                 key = "chat-$id",
                 factory = ChatViewModel.Factory(
                     conversationId = id,
+                    initialModelId = initialModelId,
                     repository = container.chatRepository,
                     aiGateway = container.aiGateway,
                     attachmentImporter = container.attachmentImporter,
                     attachmentProcessor = container.attachmentProcessor,
                     modelRepository = container.modelRepository,
+                    modelManager = container.modelManager,
                 ),
             )
             ChatWithDeepThinkScreen(
