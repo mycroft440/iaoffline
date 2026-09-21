@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.ThemeMode
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.chat.ChatWithDeepThinkScreen
@@ -28,6 +29,7 @@ import com.example.ialocal.ui.home.HomeViewModel
 import com.example.ialocal.ui.models.HtmlAiHomeScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
+import com.example.ialocal.ui.models.MyAisScreen
 import com.example.ialocal.ui.models.OfflineModelsScreen
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
@@ -122,13 +124,57 @@ private fun LocalAiApp(
                         navController.navigate("chat/$conversationId")
                     }
                 },
-                onOpenChats = { navController.navigate("home") },
+                onOpenChats = { navController.navigate("my-ais") },
                 onOpenOfflineModels = { navController.navigate("offline-models") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
                 onRestoreModels = {},
                 onOpenCodeEditor = { navController.navigate("code-editor") },
                 onExitApp = onExitApp,
+            )
+        }
+
+        composable("my-ais") {
+            val vm: ModelsViewModel = viewModel(
+                key = "my-ais-models",
+                factory = ModelsViewModel.Factory(
+                    container.modelRepository,
+                    container.modelManager,
+                    container.apiServer,
+                    container.apiSettings,
+                    container.integrationSelfTest,
+                ),
+            )
+            val scope = rememberCoroutineScope()
+            MyAisScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onOpenChat = { modelId ->
+                    scope.launch {
+                        runCatching {
+                            val model = requireNotNull(container.modelRepository.getModel(modelId)) {
+                                "IA não encontrada."
+                            }
+                            if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
+                                container.modelManager.load(modelId)
+                            } else {
+                                container.modelManager.retryVerification(modelId)
+                            }
+                            container.modelRepository.getAgentForModel(modelId)?.let { agent ->
+                                container.modelRepository.setDefaultAgent(agent.id)
+                            }
+                            container.chatRepository.createConversation()
+                        }.onSuccess { conversationId ->
+                            navController.navigate("chat/$conversationId")
+                        }.onFailure { error ->
+                            container.diagnostics.error(
+                                "MY_AI_CHAT",
+                                "Falha ao abrir o chat com a IA selecionada.",
+                                error,
+                            )
+                        }
+                    }
+                },
             )
         }
 
