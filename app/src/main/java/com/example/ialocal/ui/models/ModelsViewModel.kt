@@ -119,8 +119,12 @@ class ModelsViewModel(
             "Testando ${model.name}…"
         }
         runCatching {
-            if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) manager.load(id)
-            else manager.retryVerification(id)
+            if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
+                manager.load(id)
+            } else {
+                manager.retryVerification(id)
+                manager.load(id)
+            }
         }.onFailure { _error.value = it.message ?: "Falha ao ativar o modelo." }
         _operationText.value = null
     }
