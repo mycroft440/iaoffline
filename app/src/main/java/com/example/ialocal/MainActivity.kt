@@ -1,29 +1,17 @@
 package com.example.ialocal
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -31,7 +19,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.data.ThemeMode
-import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.chat.ChatWithDeepThinkScreen
 import com.example.ialocal.ui.codeeditor.CodeEditorScreen
@@ -48,9 +35,12 @@ import com.example.ialocal.ui.theme.LocalAiTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private lateinit var container: AppContainer
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val container = (application as LocalAiApplication).container
+        container = (application as LocalAiApplication).container
+        requestAutomaticStorageScanAccessIfNeeded()
 
         setContent {
             val themeMode by container.themeRepository.themeMode.collectAsStateWithLifecycle(
@@ -64,6 +54,44 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        if (::container.isInitialized && Environment.isExternalStorageManager()) {
+            lifecycleScope.launch {
+                runCatching { container.automaticModelImporter.scanAndImport() }
+                    .onFailure { error ->
+                        container.diagnostics.error(
+                            "AUTO_MODEL_SCAN",
+                            "Falha na varredura automática do armazenamento compartilhado.",
+                            error,
+                        )
+                    }
+            }
+        }
+    }
+
+    private fun requestAutomaticStorageScanAccessIfNeeded() {
+        if (Environment.isExternalStorageManager()) return
+
+        val preferences = getSharedPreferences(STORAGE_SCAN_PREFS, MODE_PRIVATE)
+        if (preferences.getBoolean(KEY_STORAGE_ACCESS_REQUESTED, false)) return
+        preferences.edit().putBoolean(KEY_STORAGE_ACCESS_REQUESTED, true).apply()
+
+        val appAccessIntent = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        runCatching { startActivity(appAccessIntent) }
+            .onFailure {
+                runCatching { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+            }
+    }
+
+    companion object {
+        private const val STORAGE_SCAN_PREFS = "automatic_model_storage_access"
+        private const val KEY_STORAGE_ACCESS_REQUESTED = "requested"
+    }
 }
 
 @Composable
@@ -72,47 +100,6 @@ private fun LocalAiApp(
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
-    val appScope = rememberCoroutineScope()
-    var discoveredModels by remember { mutableStateOf<List<CatalogModel>>(emptyList()) }
-    var showRecoveryPrompt by remember { mutableStateOf(false) }
-    var recoveryRunning by remember { mutableStateOf(false) }
-    var recoveryProgress by remember { mutableStateOf<String?>(null) }
-    var recoveryMessage by remember { mutableStateOf<String?>(null) }
-
-    val recoveryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            appScope.launch {
-                showRecoveryPrompt = false
-                recoveryRunning = true
-                recoveryProgress = "Localizando IAs salvas…"
-                runCatching {
-                    container.modelManager.restorePersistedModels(uri) { progress ->
-                        recoveryProgress = progress
-                    }
-                }.onSuccess { summary ->
-                    recoveryMessage = summary.toUserMessage()
-                    discoveredModels = emptyList()
-                }.onFailure { error ->
-                    recoveryMessage = error.message ?: "Não foi possível restaurar as IAs salvas."
-                }
-                recoveryProgress = null
-                recoveryRunning = false
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        val installedModels = container.modelRepository.getModels()
-        val installedCatalogIds = container.modelManager.catalog
-            .filter { catalog ->
-                installedModels.any { installed -> installed.apiModelId.startsWith(catalog.apiIdPrefix) }
-            }
-            .mapTo(mutableSetOf()) { it.id }
-
-        discoveredModels = container.modelManager.discoverPersistedCatalogModels()
-            .filterNot { it.id in installedCatalogIds }
-        showRecoveryPrompt = discoveredModels.isNotEmpty()
-    }
 
     NavHost(navController = navController, startDestination = "ai-home") {
         composable("ai-home") {
@@ -139,7 +126,7 @@ private fun LocalAiApp(
                 onOpenOfflineModels = { navController.navigate("offline-models") },
                 onOpenApi = { navController.navigate("models") },
                 onOpenSettings = { navController.navigate("settings") },
-                onRestoreModels = { recoveryPicker.launch(null) },
+                onRestoreModels = {},
                 onOpenCodeEditor = { navController.navigate("code-editor") },
                 onExitApp = onExitApp,
             )
@@ -256,62 +243,5 @@ private fun LocalAiApp(
             )
             SettingsScreen(viewModel = vm, onBack = { navController.popBackStack() })
         }
-    }
-
-    if (showRecoveryPrompt && discoveredModels.isNotEmpty() && !recoveryRunning) {
-        AlertDialog(
-            onDismissRequest = { showRecoveryPrompt = false },
-            title = { Text("IAs salvas encontradas") },
-            text = {
-                Text(
-                    "Encontramos automaticamente ${discoveredModels.size} IA(s) salvas em Downloads/IAs Offline que ainda não estão registradas. " +
-                        "Quando o Android não permite abrir diretamente arquivos de uma instalação anterior, é necessário autorizar essa pasta uma vez. " +
-                        "Os modelos serão validados e restaurados sem baixar novamente.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showRecoveryPrompt = false
-                    recoveryPicker.launch(null)
-                }) {
-                    Text("Autorizar e restaurar")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRecoveryPrompt = false }) {
-                    Text("Agora não")
-                }
-            },
-        )
-    }
-
-    if (recoveryRunning) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Restaurando IAs") },
-            text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    CircularProgressIndicator()
-                    Text(recoveryProgress ?: "Verificando arquivos salvos…")
-                }
-            },
-            confirmButton = {},
-        )
-    }
-
-    recoveryMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { recoveryMessage = null },
-            title = { Text("Restauração de IAs") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { recoveryMessage = null }) {
-                    Text("OK")
-                }
-            },
-        )
     }
 }
