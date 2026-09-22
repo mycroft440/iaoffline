@@ -1,6 +1,5 @@
 package com.example.ialocal.ui.models
 
-import com.example.ialocal.BuildConfig
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -247,7 +246,6 @@ private data class HomeHardwareSnapshot(
     val usedRamBytes: Long
         get() = (totalRamBytes - availableRamBytes).coerceAtLeast(0L)
 }
-
 @Composable
 private fun HomeContent(
     modifier: Modifier,
@@ -381,16 +379,6 @@ private fun HomeHeader(
                     color = HomeText,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold,
-                )
-                Text(
-                    text = "v${BuildConfig.VERSION_NAME}",
-                    color = Color(0xFFC7D2FE),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Black,
-                    modifier = Modifier
-                        .background(Color(0xFF312E81), RoundedCornerShape(50))
-                        .border(1.dp, Color(0xFF818CF8), RoundedCornerShape(50))
-                        .padding(horizontal = 9.dp, vertical = 3.dp),
                 )
             }
 
