@@ -267,10 +267,10 @@ class AiOrchestrator(
 
     companion object {
         private const val MAX_TOOL_ROUNDS = 4
-        private val REASONING_OPEN = Regex("(?is)<think(?:ing)?>")
-        private val REASONING_CLOSE = Regex("(?is)</think(?:ing)?>")
-        private val REASONING_OPEN_TAGS = listOf("<think>", "<thinking>")
-        private val REASONING_CLOSE_TAGS = listOf("</think>", "</thinking>")
+        private val REASONING_OPEN = Regex("(?is)<(?:think(?:ing)?|reasoning|analysis)>")
+        private val REASONING_CLOSE = Regex("(?is)</(?:think(?:ing)?|reasoning|analysis)>")
+        private val REASONING_OPEN_TAGS = listOf("<think>", "<thinking>", "<reasoning>", "<analysis>")
+        private val REASONING_CLOSE_TAGS = listOf("</think>", "</thinking>", "</reasoning>", "</analysis>")
 
         private fun classifyAgentStreamRound(content: String): AgentStreamRoundMode {
             val trimmed = content.trimStart()
