@@ -43,7 +43,10 @@ class AdsManager(private val appContext: Context) {
                     updateAdsAccess()
                 }
             },
-            { updateAdsAccess() },
+            {
+                updatePrivacyOptions()
+                updateAdsAccess()
+            },
         )
     }
 
