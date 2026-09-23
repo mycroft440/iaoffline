@@ -278,13 +278,17 @@ fun MyAisScreen(
                     InlineAdBanner(enabled = adsEnabled)
                 }
 
-                if (orderedModels.isEmpty() && !importProgress.isRunning) {
+                if (orderedModels.isEmpty()) {
                     item(key = "my-ais-empty") {
                         Box(
-                            Modifier.fillMaxWidth().height(160.dp),
+                            Modifier.fillMaxWidth().height(240.dp),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text("Nenhuma IA instalada.", color = MyAiMuted, fontSize = 13.sp)
+                            Text(
+                                if (importProgress.isRunning) "Buscando I.As no aparelho..." else "Nenhuma IA instalada.",
+                                color = MyAiMuted,
+                                fontSize = 13.sp,
+                            )
                         }
                     }
                 } else {
