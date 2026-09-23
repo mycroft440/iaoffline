@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.data.ThemeMode
 import com.example.ialocal.models.AutomaticModelImportProgress
+import com.example.ialocal.models.BuiltInProfile
 import com.example.ialocal.ui.codeeditor.CodeLanguagePackDescriptor
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,6 +50,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     importProgress: AutomaticModelImportProgress,
     onScanStorage: () -> Unit,
+    selectedProfile: BuiltInProfile,
+    onSelectProfile: (BuiltInProfile) -> Unit,
     privacyOptionsRequired: Boolean,
     onPrivacyOptions: () -> Unit,
     onBack: () -> Unit,
@@ -100,6 +103,33 @@ fun SettingsScreen(
             item { ThemeOption("Seguir o sistema", ThemeMode.SYSTEM, selected, viewModel::setTheme) }
             item { ThemeOption("Claro", ThemeMode.LIGHT, selected, viewModel::setTheme) }
             item { ThemeOption("Escuro", ThemeMode.DARK, selected, viewModel::setTheme) }
+
+            item {
+                Text(
+                    "Perfis de IA",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Escolha um dos dois perfis. Eles ficam disponíveis no chat antes mesmo de baixar uma IA.",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            items(BuiltInProfile.entries, key = { it.name }) { profile ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { onSelectProfile(profile) }.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = profile == selectedProfile, onClick = { onSelectProfile(profile) })
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text(profile.displayName, fontWeight = FontWeight.SemiBold)
+                        Text(profile.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
 
             if (privacyOptionsRequired) {
                 item {
@@ -187,7 +217,7 @@ private fun StorageScanCard(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "A busca automática acontece somente na primeira abertura do app. Depois disso, novas buscas são iniciadas apenas por este botão. Se necessário, o Android solicitará acesso aos arquivos.",
+                "A busca automática acontece na primeira abertura do app. Você também pode buscar novamente aqui ou em Minhas I.As. Se necessário, o Android solicitará acesso aos arquivos.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

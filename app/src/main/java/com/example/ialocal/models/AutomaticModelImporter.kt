@@ -65,7 +65,7 @@ data class AutomaticModelImportProgress(
 /**
  * Searches shared Android storage for GGUF files and imports compatible models without making the
  * user pick each file manually. The first app scan can use [AutomaticModelScanMode.QUICK] to avoid
- * walking the entire shared storage; the manual Settings scan uses [AutomaticModelScanMode.FULL].
+ * walking the entire shared storage; the manual scan uses [AutomaticModelScanMode.FULL].
  * Runtime verification is deliberately deferred until the user actually activates/opens a model.
  */
 class AutomaticModelImporter(
@@ -147,6 +147,20 @@ class AutomaticModelImporter(
                             markProcessed(fingerprint)
                             alreadyInstalled += 1
                             return@forEachIndexed
+                        }
+
+                        if (catalogModel != null) {
+                            val checksum = runCatching { fileSha256(file) }.getOrElse { error ->
+                                failures += 1
+                                logger?.error("AUTO_MODEL_SCAN", "Falha ao ler ${file.name}.", error)
+                                return@forEachIndexed
+                            }
+                            if (!checksum.equals(catalogModel.sha256, true)) {
+                                markProcessed(fingerprint)
+                                invalid += 1
+                                logger?.info("AUTO_MODEL_SCAN", "O GGUF ${file.name} não corresponde ao SHA-256 do catálogo.")
+                                return@forEachIndexed
+                            }
                         }
 
                         val preview = try {
@@ -255,6 +269,7 @@ class AutomaticModelImporter(
                     file.isFile && file.extension.equals("gguf", ignoreCase = true) && file.length() > 0L
                 }
             val quickRoots = listOf(
+                File(root, PublicModelDownloads.FOLDER_NAME),
                 File(root, Environment.DIRECTORY_DOWNLOADS),
                 File(root, Environment.DIRECTORY_DOCUMENTS),
             ).filter { it.isDirectory && it.canRead() }
@@ -268,7 +283,10 @@ class AutomaticModelImporter(
                 runCatching { file.canonicalPath }
                     .getOrElse { file.absolutePath }
             }
-            .sortedByDescending { it.lastModified() }
+            .sortedWith(
+                compareByDescending<File> { it.parentFile?.name == PublicModelDownloads.FOLDER_NAME }
+                    .thenByDescending { it.lastModified() }
+            )
     }
 
     private fun discoverRecursively(roots: List<File>): List<File> {
@@ -308,6 +326,19 @@ class AutomaticModelImporter(
         val raw = "$canonical|${file.length()}|${file.lastModified()}"
         val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
         return KEY_PREFIX + digest.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun fileSha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun markProcessed(key: String) {

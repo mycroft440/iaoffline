@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
@@ -44,15 +43,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,7 +59,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.api.ApiServerStatus
-import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.IntegrationCheckStatus
@@ -79,10 +74,9 @@ import com.example.ialocal.ui.branding.catalogProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
+fun ModelsScreen(viewModel: ModelsViewModel, onEnsureStorageAccess: (() -> Unit) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     val models by viewModel.models.collectAsStateWithLifecycle()
-    val agents by viewModel.agents.collectAsStateWithLifecycle()
     val server by viewModel.serverState.collectAsStateWithLifecycle()
     val runtime by viewModel.runtimeState.collectAsStateWithLifecycle()
     val download by viewModel.downloadState.collectAsStateWithLifecycle()
@@ -93,7 +87,6 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
     val apiKey by viewModel.apiKey.collectAsStateWithLifecycle()
     val integration by viewModel.integrationTest.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    var editAgent by remember { mutableStateOf<AgentEntity?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.inspectModel(uri)
@@ -184,7 +177,9 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
                         state = download.takeIf { it.catalogId == catalogModel.id },
                         installed = models.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) },
                         anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
-                        onDownload = { viewModel.downloadCatalogModel(catalogModel.id) },
+                        onDownload = {
+                            onEnsureStorageAccess { viewModel.downloadCatalogModel(catalogModel.id) }
+                        },
                         onCancel = viewModel::cancelDownload,
                     )
                 }
@@ -218,15 +213,11 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
             }
 
             items(models, key = { it.id }) { model ->
-                val agent = agents.firstOrNull { it.modelId == model.id }
                 ModelCard(
                     model = model,
-                    agent = agent,
                     loaded = runtime.modelId == model.id && runtime.status == RuntimeStatus.READY,
                     onActivate = { viewModel.activate(model.id) },
                     onDelete = { viewModel.delete(model.id) },
-                    onEditAgent = { if (agent != null) editAgent = agent },
-                    onDefaultAgent = { if (agent != null) viewModel.setDefaultAgent(agent.id) },
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }
@@ -238,14 +229,6 @@ fun ModelsScreen(viewModel: ModelsViewModel, onBack: () -> Unit) {
             preview = it,
             onDismiss = viewModel::dismissPreview,
             onConfirm = viewModel::confirmImport,
-        )
-    }
-
-    editAgent?.let { agent ->
-        AgentDialog(
-            agent = agent,
-            onDismiss = { editAgent = null },
-            onSave = { viewModel.saveAgent(it); editAgent = null },
         )
     }
 }
@@ -487,12 +470,9 @@ private fun IntegrationTestCard(
 @Composable
 private fun ModelCard(
     model: AiModelEntity,
-    agent: AgentEntity?,
     loaded: Boolean,
     onActivate: () -> Unit,
     onDelete: () -> Unit,
-    onEditAgent: () -> Unit,
-    onDefaultAgent: () -> Unit,
 ) {
     val provider = model.catalogProvider()
 
@@ -542,39 +522,10 @@ private fun ModelCard(
                     }
                 )
             }
-            if (agent != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(agent.name, fontWeight = FontWeight.SemiBold)
-                        Text(if (agent.isDefault) "Agente padrão" else "Agente disponível", style = MaterialTheme.typography.bodySmall)
-                    }
-                    IconButton(onClick = onEditAgent) { Icon(Icons.Default.Edit, "Editar agente") }
-                    Switch(checked = agent.isDefault, onCheckedChange = { if (it) onDefaultAgent() })
-                }
-            }
+            Text("Perfis Programador e Sem censura: escolha em Configurações.", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = onDelete) { Icon(Icons.Default.Delete, null); Text(" Excluir modelo") }
         }
     }
-}
-
-@Composable
-private fun AgentDialog(agent: AgentEntity, onDismiss: () -> Unit, onSave: (AgentEntity) -> Unit) {
-    var name by remember(agent.id) { mutableStateOf(agent.name) }
-    var prompt by remember(agent.id) { mutableStateOf(agent.systemPrompt) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Configurar agente") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                TextField(value = name, onValueChange = { name = it }, label = { Text("Nome") })
-                TextField(value = prompt, onValueChange = { prompt = it }, label = { Text("Instruções do agente") }, minLines = 5, maxLines = 10)
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(agent.copy(name = name.trim().ifBlank { agent.name }, systemPrompt = prompt.trim())) }) { Text("Salvar") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
-    )
 }
 
 private fun copy(context: Context, label: String, value: String) {

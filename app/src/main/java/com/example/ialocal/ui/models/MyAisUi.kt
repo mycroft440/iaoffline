@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
@@ -225,6 +227,7 @@ fun MyAisScreen(
     viewModel: ModelsViewModel,
     adsEnabled: Boolean,
     importProgress: AutomaticModelImportProgress,
+    onScanStorage: () -> Unit,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
 ) {
@@ -276,6 +279,45 @@ fun MyAisScreen(
             ) {
                 item(key = "my-ais-ad-top") {
                     InlineAdBanner(enabled = adsEnabled)
+                }
+                item(key = "my-ais-storage-search") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MyAiSurface, RoundedCornerShape(14.dp))
+                            .border(1.dp, MyAiBorder, RoundedCornerShape(14.dp))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Você pode ter IAs baixadas anteriormente. Clique em buscar para buscar IAs baixadas no seu telefone.",
+                            color = MyAiText,
+                            fontSize = 12.sp,
+                        )
+                        Button(onClick = onScanStorage, enabled = !importProgress.isRunning) {
+                            if (importProgress.isRunning) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Text(" Buscando...")
+                            } else {
+                                Text("Buscar")
+                            }
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.COMPLETED) {
+                            importProgress.summary?.let { summary ->
+                                Text(
+                                    "Busca concluída: ${summary.imported} importada(s), ${summary.alreadyInstalled} já instalada(s), ${summary.invalid} inválida(s), ${summary.failures} falha(s).",
+                                    color = MyAiMuted,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.PERMISSION_REQUIRED) {
+                            Text("Permita o acesso aos arquivos do aparelho e toque em Buscar novamente.", color = MyAiMuted, fontSize = 11.sp)
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.FAILED) {
+                            Text("A busca falhou. Tente novamente.", color = MyAiMuted, fontSize = 11.sp)
+                        }
+                    }
                 }
 
                 if (orderedModels.isEmpty()) {

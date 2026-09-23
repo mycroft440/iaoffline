@@ -1,7 +1,6 @@
 package com.example.ialocal.models
 
 import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -10,6 +9,9 @@ import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,73 +28,72 @@ internal fun catalogModelForFileName(fileName: String?): CatalogModel? {
 }
 
 /**
- * Keeps catalog GGUFs in shared Downloads so they survive app uninstall. Android treats files from
- * a previous installation as external to the new install, so recovery uses a one-time SAF folder
- * grant before copying the verified GGUF back into the private runtime library.
+ * Keeps verified catalog GGUFs in shared storage /IAs Offline so they survive app uninstall.
+ * Old Downloads folders remain readable through a one-time SAF grant for legacy restoration.
  */
 class PublicModelDownloads(context: Context) {
     private val appContext = context.applicationContext
     private val resolver = appContext.contentResolver
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
-    /**
-     * MediaStore only materializes a relative folder when it contains an item. A tiny read-me keeps
-     * the requested folder visible even before the first model is downloaded.
-     */
-    fun ensureFolder() {
+    /** Creates the visible folder after the user has granted access to shared storage. */
+    fun ensureFolder(): File {
         synchronized(folderLock) {
-            if (findOwnedByDisplayName(README_FILE_NAME, RELATIVE_PATH) != null) return
-
-            val values = baseValues(README_FILE_NAME, "text/plain").apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            check(Environment.isExternalStorageManager()) {
+                "Permita o acesso aos arquivos do aparelho para salvar as I.As em $FOLDER_NAME."
             }
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("Não foi possível criar a pasta pública de modelos.")
-            try {
+            val folder = File(Environment.getExternalStorageDirectory(), FOLDER_NAME)
+            check((folder.isDirectory || folder.mkdirs()) && folder.isDirectory) {
+                "Não foi possível criar a pasta $FOLDER_NAME no armazenamento interno."
+            }
+            val readme = File(folder, README_FILE_NAME)
+            if (!readme.exists()) {
                 val text = buildString {
                     appendLine("IAs Offline")
                     appendLine()
                     appendLine("Os modelos GGUF baixados pelo app ficam nesta pasta para sobreviver à desinstalação.")
-                    appendLine("Ao reinstalar o app, use Restaurar IAs e autorize esta pasta uma vez quando o Android solicitar.")
+                    appendLine("Ao reinstalar o app, abra Minhas I.As e toque em Buscar para recuperar seus modelos.")
                     appendLine("Antes de voltar a usar um arquivo, o app confere o SHA-256 e executa uma validação real de inferência.")
                 }
-                resolver.openOutputStream(uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
-                    ?: throw IllegalStateException("Não foi possível inicializar a pasta pública de modelos.")
-                markReady(uri)
-            } catch (t: Throwable) {
-                resolver.delete(uri, null, null)
-                throw t
+                readme.writeText(text)
             }
+            return folder
         }
     }
 
     suspend fun publishVerifiedModel(model: CatalogModel, source: File): Uri = withContext(Dispatchers.IO) {
         require(source.isFile && source.length() > 0L) { "O modelo verificado não está disponível para publicação." }
-        ensureFolder()
-
         synchronized(folderLock) {
-            // Only replace an item owned by the current installation. An orphan from a previous
-            // install requires SAF consent and is intentionally never deleted behind the user's back.
-            findOwnedByDisplayName(model.fileName, RELATIVE_PATH)?.let { resolver.delete(it.uri, null, null) }
-
-            val values = baseValues(model.fileName, "application/octet-stream").apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            val folder = ensureFolder()
+            val destination = File(folder, model.fileName)
+            val partial = File(folder, "${model.fileName}.part")
+            require(folder.usableSpace > source.length() + RESTORE_HEADROOM) {
+                "Espaço insuficiente para salvar ${model.displayName} em $FOLDER_NAME."
             }
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("Não foi possível salvar o modelo na pasta Downloads/$FOLDER_NAME.")
             try {
                 val copied = source.inputStream().buffered(MODEL_COPY_BUFFER).use { input ->
-                    resolver.openOutputStream(uri, "w")?.buffered(MODEL_COPY_BUFFER)?.use { output ->
-                        input.copyTo(output, MODEL_COPY_BUFFER)
-                    } ?: throw IllegalStateException("Não foi possível abrir o destino público do modelo.")
+                    FileOutputStream(partial).use { stream ->
+                        val output = stream.buffered(MODEL_COPY_BUFFER)
+                        val bytes = input.copyTo(output, MODEL_COPY_BUFFER)
+                        output.flush()
+                        stream.fd.sync()
+                        bytes
+                    }
                 }
                 require(copied == source.length()) {
-                    "A cópia para Downloads/$FOLDER_NAME ficou incompleta."
+                    "A cópia para $FOLDER_NAME ficou incompleta."
                 }
-                markReady(uri)
-                uri
+                try {
+                    Files.move(
+                        partial.toPath(), destination.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
+                    )
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(partial.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+                Uri.fromFile(destination)
             } catch (t: Throwable) {
-                resolver.delete(uri, null, null)
+                partial.delete()
                 throw t
             }
         }
@@ -100,21 +101,27 @@ class PublicModelDownloads(context: Context) {
 
     /** Ensures a verified download has a persistent shared copy before the private install proceeds. */
     suspend fun ensurePersistedVerifiedModel(model: CatalogModel, source: File): Uri = withContext(Dispatchers.IO) {
-        val existing = findOwnedByDisplayName(model.fileName, RELATIVE_PATH)
-        if (existing != null && existing.sizeBytes == source.length()) return@withContext existing.uri
+        val existing = File(ensureFolder(), model.fileName)
+        if (existing.isFile && existing.length() == source.length() && sha256(existing).equals(model.sha256, true)) {
+            return@withContext Uri.fromFile(existing)
+        }
         publishVerifiedModel(model, source)
     }
 
-    /** Best-effort metadata discovery. Reading an orphaned file still requires SAF after reinstall. */
+    /** Discovers models in the new folder and metadata for files in legacy Downloads folders. */
     fun discoverCatalogModels(): List<CatalogModel> {
         val result = linkedMapOf<String, CatalogModel>()
+        if (Environment.isExternalStorageManager()) {
+            File(Environment.getExternalStorageDirectory(), FOLDER_NAME).listFiles().orEmpty()
+                .forEach { file -> catalogModelForFileName(file.name)?.let { result[it.id] = it } }
+        }
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         try {
             resolver.query(
                 collection,
                 arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
                 "${MediaStore.MediaColumns.RELATIVE_PATH} IN (?, ?)",
-                arrayOf(RELATIVE_PATH, LEGACY_RELATIVE_PATH),
+                arrayOf(OLD_RELATIVE_PATH, LEGACY_RELATIVE_PATH),
                 null,
             )?.use { cursor ->
                 val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
@@ -195,7 +202,11 @@ class PublicModelDownloads(context: Context) {
     /** Deletes the persistent catalog copy when the user explicitly removes that IA inside the app. */
     suspend fun deletePersistedModel(model: CatalogModel) = withContext(Dispatchers.IO) {
         val failures = mutableListOf<String>()
-        listOf(RELATIVE_PATH, LEGACY_RELATIVE_PATH).forEach { path ->
+        if (Environment.isExternalStorageManager()) {
+            val saved = File(File(Environment.getExternalStorageDirectory(), FOLDER_NAME), model.fileName)
+            if (saved.exists() && !saved.delete()) failures += saved.absolutePath
+        }
+        listOf(OLD_RELATIVE_PATH, LEGACY_RELATIVE_PATH).forEach { path ->
             findOwnedByDisplayName(model.fileName, path)?.let { entry ->
                 if (resolver.delete(entry.uri, null, null) <= 0) failures += path
             }
@@ -212,7 +223,7 @@ class PublicModelDownloads(context: Context) {
         }
 
         check(failures.isEmpty()) {
-            "Não foi possível excluir a cópia persistente de ${model.displayName} em Downloads/$FOLDER_NAME."
+            "Não foi possível excluir a cópia persistente de ${model.displayName}."
         }
     }
 
@@ -222,7 +233,7 @@ class PublicModelDownloads(context: Context) {
             resolver.takePersistableUriPermission(treeUri, flags)
         } catch (security: SecurityException) {
             throw IllegalStateException(
-                "O Android não concedeu acesso persistente à pasta selecionada. Selecione Downloads/$FOLDER_NAME e tente novamente.",
+                "O Android não concedeu acesso persistente à pasta selecionada. Selecione $FOLDER_NAME e tente novamente.",
                 security,
             )
         }
@@ -236,13 +247,13 @@ class PublicModelDownloads(context: Context) {
     private fun modelFolders(treeUri: Uri): List<DocumentFile> {
         val tree = DocumentFile.fromTreeUri(appContext, treeUri)
             ?: throw IllegalArgumentException("Não foi possível abrir a pasta selecionada.")
-        if (!tree.isDirectory) throw IllegalArgumentException("Selecione a pasta $FOLDER_NAME dentro de Downloads.")
+        if (!tree.isDirectory) throw IllegalArgumentException("Selecione a pasta $FOLDER_NAME.")
 
         if (isModelFolderName(tree.name)) return listOf(tree)
 
         val folders = tree.listFiles().filter { it.isDirectory && isModelFolderName(it.name) }
         require(folders.isNotEmpty()) {
-            "Nenhuma pasta '$FOLDER_NAME' foi encontrada. Selecione Downloads/$FOLDER_NAME ou a pasta Downloads que a contém."
+            "Nenhuma pasta '$FOLDER_NAME' foi encontrada. Selecione $FOLDER_NAME ou uma pasta antiga em Downloads."
         }
         return folders
     }
@@ -251,15 +262,17 @@ class PublicModelDownloads(context: Context) {
         name?.equals(FOLDER_NAME, ignoreCase = true) == true ||
             name?.equals(LEGACY_FOLDER_NAME, ignoreCase = true) == true
 
-    private fun baseValues(displayName: String, mimeType: String) = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-        put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_PATH)
-    }
-
-    private fun markReady(uri: Uri) {
-        val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-        resolver.update(uri, ready, null, null)
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(MODEL_COPY_BUFFER).use { input ->
+            val buffer = ByteArray(MODEL_COPY_BUFFER)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun findOwnedByDisplayName(displayName: String, relativePath: String): OwnedEntry? {
@@ -288,7 +301,7 @@ class PublicModelDownloads(context: Context) {
     companion object {
         const val FOLDER_NAME = "IAs Offline"
         const val LEGACY_FOLDER_NAME = "modelos de I.A offline"
-        val RELATIVE_PATH: String = "${Environment.DIRECTORY_DOWNLOADS}/$FOLDER_NAME/"
+        val OLD_RELATIVE_PATH: String = "${Environment.DIRECTORY_DOWNLOADS}/$FOLDER_NAME/"
         val LEGACY_RELATIVE_PATH: String = "${Environment.DIRECTORY_DOWNLOADS}/$LEGACY_FOLDER_NAME/"
         private const val README_FILE_NAME = "LEIA-ME.txt"
         private const val MODEL_COPY_BUFFER = 1024 * 1024

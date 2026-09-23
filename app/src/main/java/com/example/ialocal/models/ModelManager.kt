@@ -66,14 +66,13 @@ class ModelManager(
         }
     }
 
-    /** Metadata-only detection; Android may hide orphaned Downloads rows after a reinstall. */
+    /** Finds catalog models in the shared folder and in older Downloads folders. */
     suspend fun discoverPersistedCatalogModels(): List<CatalogModel> = withContext(Dispatchers.IO) {
         persistentDownloads.discoverCatalogModels()
     }
 
     /**
-     * Restores catalog GGUFs from Downloads/IAs Offline without network access. The selected tree
-     * grants the new installation access to files that survived the previous app uninstall.
+     * Restores catalog GGUFs from a selected legacy folder without network access.
      */
     suspend fun restorePersistedModels(
         treeUri: Uri,
@@ -84,7 +83,7 @@ class ModelManager(
         }
         val candidates = persistentDownloads.catalogFilesFromTree(treeUri)
         require(candidates.isNotEmpty()) {
-            "Nenhum GGUF reconhecido do catálogo foi encontrado em Downloads/${PublicModelDownloads.FOLDER_NAME}."
+            "Nenhum GGUF reconhecido do catálogo foi encontrado na pasta selecionada."
         }
 
         val installedCatalogIds = repository.getModels()
@@ -105,7 +104,7 @@ class ModelManager(
 
             val staging = File(stagingDir, "${catalogModel.id}.gguf")
             try {
-                onProgress("Validando ${catalogModel.displayName} salvo em Downloads…")
+                onProgress("Validando ${catalogModel.displayName} salvo no aparelho…")
                 persistentDownloads.copyVerifiedModelToStaging(candidate, staging)
 
                 onProgress("Restaurando ${catalogModel.displayName} no app…")
@@ -167,7 +166,7 @@ class ModelManager(
                 phase = ModelDownloadPhase.VERIFYING_FILE,
                 downloadedBytes = file.length(),
                 totalBytes = file.length(),
-                message = "Salvando cópia permanente em Downloads/${PublicModelDownloads.FOLDER_NAME}…",
+                message = "Salvando cópia permanente em ${PublicModelDownloads.FOLDER_NAME}…",
             )
             persistentDownloads.ensurePersistedVerifiedModel(catalogModel, file)
 
@@ -259,7 +258,7 @@ class ModelManager(
             val verified = verifyAndActivate(imported.id)
             _downloadState.value = _downloadState.value.copy(
                 phase = ModelDownloadPhase.COMPLETE,
-                message = "${catalogModel.displayName} instalado, verificado e salvo em Downloads/${PublicModelDownloads.FOLDER_NAME}.",
+                message = "${catalogModel.displayName} instalado, verificado e salvo em ${PublicModelDownloads.FOLDER_NAME}.",
             )
             verified
         } catch (cancel: CancellationException) {

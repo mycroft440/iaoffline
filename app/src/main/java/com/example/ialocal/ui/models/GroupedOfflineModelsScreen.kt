@@ -106,6 +106,7 @@ private data class CatalogCompatibility(
 fun GroupedOfflineModelsScreen(
     viewModel: ModelsViewModel,
     adsEnabled: Boolean,
+    onEnsureStorageAccess: (() -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
@@ -209,7 +210,9 @@ fun GroupedOfflineModelsScreen(
                         state = download.takeIf { it.catalogId == catalogModel.id },
                         installedModel = installed,
                         anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id,
-                        onInstall = { viewModel.downloadCatalogModel(catalogModel.id) },
+                        onInstall = {
+                            onEnsureStorageAccess { viewModel.downloadCatalogModel(catalogModel.id) }
+                        },
                         onPause = viewModel::cancelDownload,
                         onEnd = viewModel::endDownload,
                         onDelete = { installed?.let { viewModel.delete(it.id) } },
