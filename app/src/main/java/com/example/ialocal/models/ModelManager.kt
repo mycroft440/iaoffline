@@ -266,6 +266,9 @@ class ModelManager(
         }
     }
 
+    private suspend fun installedCatalogModel(catalogModel: CatalogModel): AiModelEntity? =
+        repository.getModels().firstOrNull { it.apiModelId.startsWith(catalogModel.apiIdPrefix) }
+
     private fun discardDownloadFiles(catalogId: String) {
         val downloadDir = File(appContext.filesDir, "model-downloads")
         File(downloadDir, "$catalogId.part").delete()
@@ -283,6 +286,17 @@ class ModelManager(
     suspend fun downloadAndVerify(catalogId: String): AiModelEntity {
         check(!_downloadState.value.isBusy) { "Já existe um download ou verificação de modelo em andamento." }
         val catalogModel = ModelCatalog.requireById(catalogId)
+        // Android can restart the download service after the app was killed during the final test
+        // (e.g. out of memory). The model is already registered by then, so never download it again.
+        installedCatalogModel(catalogModel)?.let { installed ->
+            _downloadState.value = ModelDownloadState(
+                catalogId = catalogId,
+                phase = ModelDownloadPhase.COMPLETE,
+                message = "${catalogModel.displayName} já está instalada.",
+            )
+            logger?.info("MODEL_DOWNLOAD", "Download ignorado: ${catalogModel.displayName} já está instalada.")
+            return installed
+        }
         return try {
             val file = downloader.download(catalogModel) { _downloadState.value = it }
             _downloadState.value = _downloadState.value.copy(

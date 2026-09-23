@@ -1119,7 +1119,7 @@ private fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (prov
 private fun groupedDownloadStatus(state: ModelDownloadState, progress: String?): String = when (state.phase) {
     ModelDownloadPhase.IDLE -> state.message ?: "Pronto para instalar"
     ModelDownloadPhase.CHECKING -> "Preparando instalação"
-    ModelDownloadPhase.DOWNLOADING -> "Gravando pesos neurais${progress?.let { " · $it" } ?: ""}"
+    ModelDownloadPhase.DOWNLOADING -> "Baixando${progress?.let { " · $it" } ?: ""}"
     ModelDownloadPhase.VERIFYING_FILE -> "Verificando arquivo"
     ModelDownloadPhase.IMPORTING -> "Registrando I.A"
     ModelDownloadPhase.VERIFYING_MODEL -> "Testando I.A no aparelho"
