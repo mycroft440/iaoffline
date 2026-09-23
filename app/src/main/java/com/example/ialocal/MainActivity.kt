@@ -274,6 +274,7 @@ private fun LocalAiApp(
             )
             ChatWithDeepThinkScreen(
                 viewModel = vm,
+                adsEnabled = adsManager.adsReady,
                 onOpenConversation = { targetId ->
                     if (targetId != id) {
                         navController.navigate("chat/$targetId") {

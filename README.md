@@ -72,7 +72,7 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 ### Banners AdMob
 
-Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). O build `debug` usa exclusivamente os IDs de teste do Google.
+Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
 
 Para habilitar anúncios reais em um build `release`, configure os dois valores abaixo no ambiente de build. Sem ambos, a release não solicita anúncios:
 

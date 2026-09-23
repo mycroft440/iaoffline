@@ -9,6 +9,7 @@ fun ChatWithDeepThinkScreen(
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
+    adsEnabled: Boolean,
 ) {
     PixelPerfectHtmlChatScreen(
         viewModel = viewModel,
@@ -16,5 +17,6 @@ fun ChatWithDeepThinkScreen(
         onOpenHistory = onOpenHistory,
         onOpenModels = onOpenModels,
         onOpenSettings = onOpenSettings,
+        adsEnabled = adsEnabled,
     )
 }

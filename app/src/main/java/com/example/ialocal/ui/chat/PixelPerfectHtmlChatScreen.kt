@@ -103,6 +103,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.ChatAdSchedule
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.audio.AudioRecorder
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
@@ -147,6 +149,7 @@ fun PixelPerfectHtmlChatScreen(
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
+    adsEnabled: Boolean,
 ) {
     val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
@@ -284,6 +287,7 @@ fun PixelPerfectHtmlChatScreen(
             ExactChatBody(
                 selectedAgent = selectedAgent,
                 profileName = selectedProfile.displayName,
+                adsEnabled = adsEnabled,
                 selectedModel = selectedModel,
                 messages = messages,
                 listState = listState,
@@ -604,6 +608,7 @@ private fun ExactDrawer(
 private fun ExactChatBody(
     selectedAgent: AgentEntity?,
     profileName: String,
+    adsEnabled: Boolean,
     selectedModel: AiModelEntity?,
     messages: List<MessageWithAttachments>,
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -635,6 +640,13 @@ private fun ExactChatBody(
     } else {
         null
     }
+    val bannerMessageIds = remember(messages) {
+        ChatAdSchedule.assistantIdsWithBanner(
+            messages,
+            isUser = { it.message.role == MessageRole.USER.name },
+            id = { it.message.id },
+        )
+    }
 
     Column(Modifier.fillMaxSize().background(PBg)) {
         ExactTopBar(
@@ -664,7 +676,13 @@ private fun ExactChatBody(
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
                             ExactLoading()
                         } else {
-                            ExactMessage(item = item, canRerun = !generating) { onRerun(item.message.id) }
+                            ExactMessage(
+                                item = item,
+                                canRerun = !generating,
+                                showAd = adsEnabled &&
+                                    item.message.id in bannerMessageIds &&
+                                    item.message.status != MessageStatus.SENDING.name,
+                            ) { onRerun(item.message.id) }
                         }
                     }
                     if (generating && sendingAssistantId == null) item { ExactLoading() }
@@ -838,8 +856,12 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
 }
 
 @Composable
-private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, onRerun: () -> Unit) {
-    if (item.message.role == MessageRole.USER.name) ExactUserMessage(item) else ExactAssistantMessage(item, canRerun, onRerun)
+private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
+    if (item.message.role == MessageRole.USER.name) {
+        ExactUserMessage(item)
+    } else {
+        ExactAssistantMessage(item, canRerun, showAd, onRerun)
+    }
 }
 
 @Composable
@@ -902,7 +924,7 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 }
 
 @Composable
-private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, onRerun: () -> Unit) {
+private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
     val parsed = remember(item.message.content) { exactParseAssistant(item.message.content) }
     var reasoningOpen by remember(item.message.id) { mutableStateOf(true) }
     val clipboard = LocalClipboardManager.current
@@ -971,19 +993,13 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
             }
 
             if (parsed.answer.isNotBlank()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
-                    color = PCard,
-                    border = BorderStroke(1.dp, PBorder),
-                ) {
-                    Text(
-                        parsed.answer,
-                        modifier = Modifier.padding(16.dp),
-                        fontSize = 13.5.sp,
-                        lineHeight = 20.sp,
-                        color = PText2,
-                    )
+                if (showAd) {
+                    val (beforeAd, afterAd) = remember(parsed.answer) { ChatAdSchedule.splitForBanner(parsed.answer) }
+                    if (beforeAd.isNotBlank()) ExactAnswerBubble(beforeAd)
+                    InlineAdBanner(enabled = true)
+                    if (afterAd.isNotBlank()) ExactAnswerBubble(afterAd)
+                } else {
+                    ExactAnswerBubble(parsed.answer)
                 }
                 Row(
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -1002,6 +1018,24 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ExactAnswerBubble(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+        color = PCard,
+        border = BorderStroke(1.dp, PBorder),
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(16.dp),
+            fontSize = 13.5.sp,
+            lineHeight = 20.sp,
+            color = PText2,
+        )
     }
 }
 
