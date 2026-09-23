@@ -52,6 +52,16 @@ class ReasoningStreamSplitterTest {
     }
 
     @Test
+    fun reasoningAndAnalysisTags() {
+        val parts = feed(ReasoningStreamSplitter(expectReasoning = false), "<reasoning>r</reas", "oning>x")
+        assertEquals("r", reasoning(parts))
+        assertEquals("x", answer(parts))
+        val analysis = feed(ReasoningStreamSplitter(expectReasoning = false), "<analysis>a</analysis>y")
+        assertEquals("a", reasoning(analysis))
+        assertEquals("y", answer(analysis))
+    }
+
+    @Test
     fun emptyReasoningFromNoThinkSwitch() {
         val splitter = ReasoningStreamSplitter(expectReasoning = false)
         val parts = feed(splitter, "<think>\n\n</think>\n\nResposta direta")
