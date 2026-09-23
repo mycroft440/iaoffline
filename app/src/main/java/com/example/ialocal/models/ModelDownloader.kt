@@ -105,6 +105,16 @@ class ModelDownloader(
         )
         onState(initial)
 
+        // A catalog update can point the same entry at another file (e.g. a smaller quantization).
+        // Staged bytes from the previous file must not be resumed or hashed as the new one.
+        val source = File(downloadDir, "${model.id}.source")
+        val stagedFor = runCatching { source.readText().trim() }.getOrNull()
+        if (stagedFor != null && !stagedFor.equals(model.sha256, ignoreCase = true)) {
+            partial.delete()
+            complete.delete()
+        }
+        source.writeText(model.sha256)
+
         if (complete.isFile) {
             onState(initial.copy(phase = ModelDownloadPhase.VERIFYING_FILE, message = "Verificando download existente…"))
             if (sha256(complete).equals(model.sha256, ignoreCase = true)) {

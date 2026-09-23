@@ -273,6 +273,7 @@ class ModelManager(
         val downloadDir = File(appContext.filesDir, "model-downloads")
         File(downloadDir, "$catalogId.part").delete()
         File(downloadDir, "$catalogId.gguf").delete()
+        File(downloadDir, "$catalogId.source").delete()
     }
 
     fun pauseBackgroundDownload() {
