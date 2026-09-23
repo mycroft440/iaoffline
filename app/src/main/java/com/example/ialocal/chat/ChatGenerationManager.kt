@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 data class QueuedChatMessage(
@@ -55,6 +57,12 @@ class ChatGenerationManager(
     private val _activeGenerations = MutableStateFlow(0)
     val activeGenerations: StateFlow<Int> = _activeGenerations.asStateFlow()
 
+    /**
+     * At most [MAX_CONCURRENT_ANSWERS] conversations are answered at once. The semaphore is fair, so
+     * a message sent from a third conversation waits and is answered in the order it arrived.
+     */
+    private val answerSlots = Semaphore(MAX_CONCURRENT_ANSWERS)
+
     class Session internal constructor() {
         internal val _isGenerating = MutableStateFlow(false)
         val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
@@ -65,6 +73,9 @@ class ChatGenerationManager(
         internal val _resolvedAgentId = MutableStateFlow<String?>(null)
         /** The agent actually used by the latest generation in this conversation. */
         val resolvedAgentId: StateFlow<String?> = _resolvedAgentId.asStateFlow()
+        internal val _waitingForSlot = MutableStateFlow(false)
+        /** True while this conversation's message waits for other conversations to be answered. */
+        val waitingForSlot: StateFlow<Boolean> = _waitingForSlot.asStateFlow()
         internal var job: Job? = null
         internal var queuedTarget: GenerationTarget? = null
     }
@@ -88,15 +99,18 @@ class ChatGenerationManager(
             session.queuedTarget = target
         } else {
             launchGeneration(conversationId, session, target, "Falha ao gerar a resposta.") {
+                // The message shows up in the chat right away, even if it has to wait for a slot.
                 val historyBeforeSend = repository.getMessages(conversationId).map(::toAiMessage)
                 repository.addMessage(conversationId, MessageRole.USER, outgoing.content, outgoing.attachments)
-                generateAssistant(
-                    conversationId,
-                    session,
-                    target,
-                    historyBeforeSend + AiChatMessage("user", outgoing.content),
-                    outgoing.attachments,
-                )
+                awaitAnswerSlot(session) {
+                    generateAssistant(
+                        conversationId,
+                        session,
+                        target,
+                        historyBeforeSend + AiChatMessage("user", outgoing.content),
+                        outgoing.attachments,
+                    )
+                }
             }
         }
     }
@@ -114,7 +128,7 @@ class ChatGenerationManager(
                 snapshot[it].message.role == MessageRole.USER.name
             } ?: return@launchGeneration
             val history = snapshot.take(userIndex + 1).map(::toAiMessage)
-            generateAssistant(conversationId, session, target, history, emptyList())
+            awaitAnswerSlot(session) { generateAssistant(conversationId, session, target, history, emptyList()) }
         }
     }
 
@@ -168,6 +182,18 @@ class ChatGenerationManager(
                 startNextQueued(conversationId, session, target)
                 _activeGenerations.value -= 1
             }
+        }
+    }
+
+    private suspend fun awaitAnswerSlot(session: Session, block: suspend () -> Unit) {
+        session._waitingForSlot.value = true
+        try {
+            answerSlots.withPermit {
+                session._waitingForSlot.value = false
+                block()
+            }
+        } finally {
+            session._waitingForSlot.value = false
         }
     }
 
@@ -277,6 +303,7 @@ class ChatGenerationManager(
     }
 
     companion object {
+        const val MAX_CONCURRENT_ANSWERS = 2
         private const val MAX_HISTORY_ATTACHMENT_PER_FILE = 4_000
         private const val MAX_HISTORY_ATTACHMENT_CHARS = 6_000
     }

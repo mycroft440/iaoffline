@@ -163,6 +163,7 @@ fun PixelPerfectHtmlChatScreen(
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val attachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val generating by viewModel.isGenerating.collectAsStateWithLifecycle()
+    val waitingForSlot by viewModel.waitingForSlot.collectAsStateWithLifecycle()
     val processing by viewModel.isProcessingAttachments.collectAsStateWithLifecycle()
     val queued by viewModel.queuedMessages.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -304,6 +305,7 @@ fun PixelPerfectHtmlChatScreen(
                 attachments = attachments,
                 queued = queued,
                 generating = generating,
+                waitingForSlot = waitingForSlot,
                 processing = processing,
                 recording = recording,
                 deepThinkSupported = deepThinkSupported,
@@ -625,6 +627,7 @@ private fun ExactChatBody(
     attachments: List<PendingAttachment>,
     queued: List<QueuedChatMessage>,
     generating: Boolean,
+    waitingForSlot: Boolean,
     processing: Boolean,
     recording: Boolean,
     deepThinkSupported: Boolean,
@@ -700,7 +703,7 @@ private fun ExactChatBody(
                             ) { onRerun(item.message.id) }
                         }
                     }
-                    if (generating && sendingAssistantId == null) item { ExactLoading() }
+                    if (generating && sendingAssistantId == null) item { ExactLoading(waitingForSlot = waitingForSlot) }
                 }
             }
         }
@@ -1115,7 +1118,7 @@ private fun ExactInlineAction(label: String, enabled: Boolean = true, onClick: (
 }
 
 @Composable
-private fun ExactLoading(startedAt: Long? = null) {
+private fun ExactLoading(startedAt: Long? = null, waitingForSlot: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(0.96f),
         verticalAlignment = Alignment.Top,
@@ -1137,7 +1140,11 @@ private fun ExactLoading(startedAt: Long? = null) {
                 Spacer(Modifier.width(8.dp))
                 val elapsed = startedAt?.let { rememberElapsedMs(it) }
                 Text(
-                    "Preparando a resposta…${elapsed?.let { " ${formatExactDuration(it)}" }.orEmpty()}",
+                    if (waitingForSlot) {
+                        "Na fila: aguardando outras conversas serem respondidas…"
+                    } else {
+                        "Preparando a resposta…${elapsed?.let { " ${formatExactDuration(it)}" }.orEmpty()}"
+                    },
                     fontSize = 12.sp,
                     color = PText2,
                 )

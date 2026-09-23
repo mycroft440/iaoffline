@@ -67,6 +67,8 @@ class ChatViewModel(
     // Generation lives in the app-scoped manager so leaving this screen never cancels an answer.
     private val generation = generationManager.session(conversationId)
     val isGenerating: StateFlow<Boolean> = generation.isGenerating
+    /** The message is waiting while other conversations are being answered. */
+    val waitingForSlot: StateFlow<Boolean> = generation.waitingForSlot
     private val _isProcessingAttachments = MutableStateFlow(false); val isProcessingAttachments = _isProcessingAttachments.asStateFlow()
     val queuedMessages: StateFlow<List<QueuedChatMessage>> = generation.queued
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()
