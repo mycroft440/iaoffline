@@ -8,6 +8,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.BuildConfig
+import com.example.ialocal.ads.InlineAdBanner
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,6 +86,7 @@ private data class HtmlHardwareSnapshot(
 @Composable
 fun HtmlAiHomeScreen(
     viewModel: ModelsViewModel,
+    adsEnabled: Boolean,
     onStartChat: () -> Unit,
     onOpenChats: () -> Unit,
     onOpenOfflineModels: () -> Unit,
@@ -124,6 +128,7 @@ fun HtmlAiHomeScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(HtmlBg)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -162,6 +167,7 @@ fun HtmlAiHomeScreen(
                     onClick = onOpenApi,
                 )
             }
+            InlineAdBanner(enabled = adsEnabled)
         }
     }
 

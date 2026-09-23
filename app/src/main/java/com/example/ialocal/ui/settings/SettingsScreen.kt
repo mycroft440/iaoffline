@@ -52,6 +52,8 @@ fun SettingsScreen(
     onScanStorage: () -> Unit,
     selectedProfile: BuiltInProfile,
     onSelectProfile: (BuiltInProfile) -> Unit,
+    privacyOptionsRequired: Boolean,
+    onPrivacyOptions: () -> Unit,
     onBack: () -> Unit,
 ) {
     val selected by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -125,6 +127,22 @@ fun SettingsScreen(
                     Column(Modifier.padding(start = 8.dp)) {
                         Text(profile.displayName, fontWeight = FontWeight.SemiBold)
                         Text(profile.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            if (privacyOptionsRequired) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Privacidade dos anúncios", style = MaterialTheme.typography.titleSmall)
+                            OutlinedButton(onClick = onPrivacyOptions) {
+                                Text("Gerenciar opções de privacidade")
+                            }
+                        }
                     }
                 }
             }

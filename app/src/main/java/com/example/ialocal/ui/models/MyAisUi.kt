@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.AutomaticModelImportProgress
@@ -224,6 +225,7 @@ private fun MyAiPreviewCard(
 @Composable
 fun MyAisScreen(
     viewModel: ModelsViewModel,
+    adsEnabled: Boolean,
     importProgress: AutomaticModelImportProgress,
     onScanStorage: () -> Unit,
     onBack: () -> Unit,
@@ -275,6 +277,9 @@ fun MyAisScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                item(key = "my-ais-ad-top") {
+                    InlineAdBanner(enabled = adsEnabled)
+                }
                 item(key = "my-ais-storage-search") {
                     Column(
                         modifier = Modifier
@@ -340,6 +345,10 @@ fun MyAisScreen(
                             )
                         }
                     }
+                }
+
+                item(key = "my-ais-ad-bottom") {
+                    InlineAdBanner(enabled = adsEnabled)
                 }
                 item { Spacer(Modifier.height(20.dp)) }
             }

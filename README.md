@@ -27,6 +27,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
+Os banners de publicidade usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece.
+
 Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os perfis **Programador** e **Sem censura** aparecem no seletor de perfil do chat mesmo antes de haver um modelo e também são gerenciados em **Configurações**, acessível pelo menu das três barras no chat.
 
 ## Editor de código e diagnósticos
@@ -67,6 +69,19 @@ Quando o usuário exclui explicitamente uma IA do catálogo dentro do aplicativo
 A biblioteca privada e os downloads parciais são excluídos do backup e da transferência de dados do Android para evitar cópias de vários gigabytes. Enquanto uma IA do catálogo estiver instalada, existe uma cópia persistente em `IAs Offline` e uma cópia privada para o runtime, portanto é necessário espaço para ambas.
 
 ## Build
+
+### Banners AdMob
+
+Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). O build `debug` usa exclusivamente os IDs de teste do Google.
+
+Para habilitar anúncios reais em um build `release`, configure os dois valores abaixo no ambiente de build. Sem ambos, a release não solicita anúncios:
+
+```bash
+export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
+export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
+```
+
+Use os IDs da sua conta AdMob. No GitHub Actions, cadastre os mesmos valores como secrets `ADMOB_APP_ID` e `ADMOB_BANNER_AD_UNIT_ID`; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste os banners e o fluxo de consentimento em um aparelho antes de publicar o APK.
 
 Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 
