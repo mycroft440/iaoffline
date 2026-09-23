@@ -22,6 +22,7 @@ import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.models.BuiltInProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -71,6 +73,7 @@ class ChatViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val agentUsageCounts: StateFlow<Map<String, Int>> = modelRepository.agentUsageCounts
+    val selectedProfile: StateFlow<BuiltInProfile> = modelRepository.selectedProfile
 
     private val _draft = MutableStateFlow(""); val draft: StateFlow<String> = _draft.asStateFlow()
     private val _pendingAttachments = MutableStateFlow<List<PendingAttachment>>(emptyList()); val pendingAttachments = _pendingAttachments.asStateFlow()
@@ -80,26 +83,26 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
+    private val _selectedModelId = MutableStateFlow(initialModelId)
     private var generationJob: Job? = null
 
     init {
         viewModelScope.launch {
-            runCatching {
-                when {
-                    !initialModelId.isNullOrBlank() -> selectModelInternal(initialModelId, recordUsage = false)
-                    else -> {
-                        val defaultAgent = modelRepository.getDefaultAgent()
-                        if (defaultAgent != null) {
-                            _selectedAgentId.value = defaultAgent.id
-                        } else {
-                            modelRepository.getModels().firstOrNull()?.let { model ->
-                                selectModelInternal(model.id, recordUsage = false)
-                            }
-                        }
+            combine(modelRepository.models, selectedProfile, _selectedModelId) { installed, _, requestedId ->
+                requestedId?.takeIf { id -> installed.any { it.id == id } }
+                    ?: installed.firstOrNull { it.isActive }?.id
+                    ?: installed.firstOrNull()?.id
+            }.collect { modelId ->
+                runCatching {
+                    if (modelId == null) {
+                        _selectedAgentId.value = null
+                        repository.setConversationAgent(conversationId, null)
+                    } else {
+                        selectModelInternal(modelId, recordUsage = false)
                     }
+                }.onFailure {
+                    _error.value = it.message ?: "Não foi possível preparar a IA selecionada."
                 }
-            }.onFailure {
-                _error.value = it.message ?: "Não foi possível preparar a IA selecionada."
             }
         }
     }
@@ -116,6 +119,11 @@ class ChatViewModel(
             }
             runCatching {
                 val agent = requireNotNull(modelRepository.getAgent(agentId)) { "Perfil não encontrado." }
+                val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
+                    "Somente Programador e Sem censura estão disponíveis."
+                }
+                modelRepository.setSelectedProfile(profile)
+                _selectedModelId.value = agent.modelId
                 _selectedAgentId.value = agent.id
                 modelRepository.recordAgentUse(agent.id)
                 repository.setConversationAgent(conversationId, agent.id)
@@ -134,7 +142,10 @@ class ChatViewModel(
 
     fun selectModel(modelId: String) {
         viewModelScope.launch {
-            runCatching { selectModelInternal(modelId, recordUsage = true) }
+            runCatching {
+                selectModelInternal(modelId, recordUsage = true)
+                _selectedModelId.value = modelId
+            }
                 .onFailure {
                     _error.value = it.message ?: "Não foi possível selecionar o modelo."
                 }
@@ -145,9 +156,7 @@ class ChatViewModel(
         requireNotNull(modelRepository.getModel(modelId)) { "Modelo não encontrado." }
         modelRepository.ensureStarterProfiles(modelId)
         val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
-        val agent = modelAgents.firstOrNull { it.isDefault }
-            ?: modelAgents.maxByOrNull { modelRepository.agentUsageCounts.value[it.id] ?: 0 }
-            ?: modelAgents.firstOrNull()
+        val agent = modelAgents.firstOrNull { it.name == selectedProfile.value.displayName }
             ?: throw IllegalStateException("Nenhum perfil foi encontrado para este modelo.")
         _selectedAgentId.value = agent.id
         if (recordUsage) modelRepository.recordAgentUse(agent.id)
@@ -340,10 +349,20 @@ class ChatViewModel(
         attachments: List<PendingAttachment>,
     ) {
         val preferredAgentId = _selectedAgentId.value ?: conversation.value?.agentId
-        val preferredAgent = if (preferredAgentId != null) {
+        var preferredAgent = if (preferredAgentId != null) {
             modelRepository.getAgent(preferredAgentId)
         } else {
             null
+        }
+        if (preferredAgent?.name != selectedProfile.value.displayName) {
+            val modelId = _selectedModelId.value ?: preferredAgent?.modelId
+                ?: modelRepository.getModels().firstOrNull()?.id
+            preferredAgent = modelId?.let { id ->
+                modelRepository.ensureStarterProfiles(id)
+                modelRepository.getAgents().firstOrNull {
+                    it.modelId == id && it.name == selectedProfile.value.displayName
+                }
+            }
         }
         if (preferredAgent != null) {
             val selectedModel = requireNotNull(modelRepository.getModel(preferredAgent.modelId)) {
@@ -354,7 +373,7 @@ class ChatViewModel(
             }
         }
 
-        val agent = modelRepository.resolveAgentForUse(preferredAgentId)
+        val agent = modelRepository.resolveAgentForUse(preferredAgent?.id)
             ?: throw IllegalStateException("Nenhum perfil com modelo local disponível pôde ser preparado para uso.")
         val agentId = agent.id
         _selectedAgentId.value = agentId

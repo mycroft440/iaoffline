@@ -78,6 +78,28 @@ interface ModelDao {
     @Query("DELETE FROM agents WHERE id = :id")
     suspend fun deleteAgent(id: String)
 
+    @Query("UPDATE conversations SET agentId = :replacementId WHERE agentId IN (SELECT id FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds))")
+    suspend fun replaceLegacyConversationAgents(modelId: String, keepIds: List<String>, replacementId: String)
+
+    @Query("UPDATE conversations SET agentId = :replacementId WHERE agentId IN (SELECT id FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds) AND name IN (:currentName, :oldName))")
+    suspend fun preserveUncensoredConversations(
+        modelId: String,
+        keepIds: List<String>,
+        replacementId: String,
+        currentName: String,
+        oldName: String,
+    )
+
+    @Query("DELETE FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds)")
+    suspend fun deleteLegacyAgents(modelId: String, keepIds: List<String>)
+
+    @Transaction
+    suspend fun keepOnlyProfiles(modelId: String, keepIds: List<String>, programmerId: String, uncensoredId: String, oldUncensoredName: String) {
+        preserveUncensoredConversations(modelId, keepIds, uncensoredId, "Sem censura", oldUncensoredName)
+        replaceLegacyConversationAgents(modelId, keepIds, programmerId)
+        deleteLegacyAgents(modelId, keepIds)
+    }
+
     @Query("DELETE FROM ai_models WHERE id = :id")
     suspend fun deleteModel(id: String)
 }
