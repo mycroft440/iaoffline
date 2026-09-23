@@ -8,6 +8,7 @@ import com.arm.aichat.InferenceEngine
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
+import com.example.ialocal.models.ModelCatalog
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -153,10 +154,21 @@ class LlamaCppRuntime(
         if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error) unloadLocked()
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
-        val lowMemory = RuntimeLimits.needsLowMemoryMode(File(model.filePath).length(), deviceTotalMemory())
-        // Read by the patched native loader: file-backed weights and a 4K context for large models.
-        runCatching { Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true) }
-        loadedContextTokens = if (lowMemory) RuntimeLimits.LOW_MEMORY_CONTEXT_TOKENS else RuntimeLimits.NATIVE_CONTEXT_TOKENS
+        val experimental = ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
+            ?.isExperimental == true
+        val lowMemory = experimental ||
+            RuntimeLimits.needsLowMemoryMode(File(model.filePath).length(), deviceTotalMemory())
+        loadedContextTokens = when {
+            experimental -> RuntimeLimits.EXPERIMENTAL_CONTEXT_TOKENS
+            lowMemory -> RuntimeLimits.LOW_MEMORY_CONTEXT_TOKENS
+            else -> RuntimeLimits.NATIVE_CONTEXT_TOKENS
+        }
+        // Read by the patched native loader: file-backed weights and a smaller first context for
+        // models that do not fit comfortably in RAM.
+        runCatching {
+            Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true)
+            Os.setenv(CONTEXT_TOKENS_ENV, loadedContextTokens.toString(), true)
+        }
         logger?.info(
             "MODEL_LOAD",
             "Carregando ${model.name} (${model.filePath})" +
@@ -252,6 +264,7 @@ class LlamaCppRuntime(
     companion object {
         const val FIXED_TEMPERATURE = 0.3f
         private const val LOW_MEMORY_ENV = "IAOFFLINE_LOW_MEMORY"
+        private const val CONTEXT_TOKENS_ENV = "IAOFFLINE_CONTEXT_TOKENS"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
 }

@@ -58,7 +58,10 @@ class ModelsViewModel(
             DownloadItemUi(catalogModel, entry.status, displayState(entry, catalogModel, live))
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val catalog = manager.catalog.filter { it.totalParametersBillions < 15.0 }
+    // Large models are hidden, except the MoE ones that can run slowly from storage (experimental).
+    val catalog = manager.catalog.filter {
+        it.totalParametersBillions < CatalogModel.EXPERIMENTAL_MIN_TOTAL_BILLIONS || it.isExperimental
+    }
 
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()

@@ -33,6 +33,17 @@ data class CatalogModel(
 
     val apiIdPrefix: String
         get() = "local-catalog-$id-"
+
+    /**
+     * Large mixture-of-experts models: too big for a phone's RAM, but each word only uses a few
+     * billion parameters, so they can run slowly by reading weights from storage.
+     */
+    val isExperimental: Boolean
+        get() = activeParametersBillions != null && totalParametersBillions >= EXPERIMENTAL_MIN_TOTAL_BILLIONS
+
+    companion object {
+        const val EXPERIMENTAL_MIN_TOTAL_BILLIONS = 15.0
+    }
 }
 
 /**
@@ -190,6 +201,20 @@ object ModelCatalog {
             activeParametersBillions = 3.3,
             description = "Qwen especializado em programação e agentes, com aproximadamente 3,3B parâmetros ativos por token.",
         ),
+        CatalogModel(
+            id = "qwen3.6-35b-a3b-q3-k-m",
+            displayName = "Qwen3.6 35B-A3B",
+            provider = ModelProvider.ALIBABA,
+            repository = "unsloth/Qwen3.6-35B-A3B-GGUF",
+            fileName = "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 16_600_710_112L,
+            sha256 = "1b715841683f960bd9a49f008181bd910ee169b78d4cf465b6fde7f4d929ff99",
+            recommendedRamBytes = 22_000_000_000L,
+            totalParametersBillions = 34.7,
+            activeParametersBillions = 3.0,
+            description = "Qwen3.6 MoE com 35B no total e só 3B ativos por palavra. Experimental no celular: roda lendo os pesos do armazenamento, com contexto reduzido, e é lento.",
+        ),
 
         CatalogModel(
             id = "nemotron-nano-9b-v2-q4-k-m",
@@ -216,6 +241,20 @@ object ModelCatalog {
             recommendedRamBytes = 6_200_000_000L,
             totalParametersBillions = 3.97,
             description = "Modelo NVIDIA de 4B com arquitetura híbrida Mamba-Transformer e raciocínio. GGUF oficial da NVIDIA, leve para celulares com 6 GB de RAM ou mais.",
+        ),
+        CatalogModel(
+            id = "nemotron3-nano-30b-a3b-q3-k-m",
+            displayName = "Nemotron 3 Nano 30B-A3B",
+            provider = ModelProvider.NVIDIA,
+            repository = "bartowski/nvidia_Nemotron-3-Nano-30B-A3B-GGUF",
+            fileName = "nvidia_Nemotron-3-Nano-30B-A3B-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 18_987_122_912L,
+            sha256 = "1b282e9ddf8622bf318dd9fadcc76cea1bac8815fbbef5bd76581336ba3f27b0",
+            recommendedRamBytes = 24_000_000_000L,
+            totalParametersBillions = 31.6,
+            activeParametersBillions = 3.2,
+            description = "Nemotron 3 Nano MoE híbrido da NVIDIA: 32B no total e cerca de 3B ativos, com raciocínio. Experimental no celular: lento e com contexto reduzido.",
         ),
 
         CatalogModel(
@@ -362,6 +401,20 @@ object ModelCatalog {
             recommendedRamBytes = 8_100_000_000L,
             totalParametersBillions = 8.0,
             description = "Granite 4.1 8B para tarefas gerais, agentes, código e RAG, com quantização oficial pronta para llama.cpp.",
+        ),
+        CatalogModel(
+            id = "granite4.0-h-tiny-q3-k-m",
+            displayName = "Granite 4.0 H Tiny 7B-A1B",
+            provider = ModelProvider.IBM,
+            repository = "ibm-granite/granite-4.0-h-tiny-GGUF",
+            fileName = "granite-4.0-h-tiny-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 3_353_039_456L,
+            sha256 = "c3efd337efd2f4cba36b30e9eddbecf88249f05dbc7042239aea13950c1ca525",
+            recommendedRamBytes = 6_000_000_000L,
+            totalParametersBillions = 6.9,
+            activeParametersBillions = 1.0,
+            description = "Granite 4.0 H Tiny da IBM: MoE híbrido com 7B no total e 1B ativo, muito rápido para o tamanho e econômico em memória.",
         ),
 
         CatalogModel(

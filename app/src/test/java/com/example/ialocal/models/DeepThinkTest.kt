@@ -97,6 +97,22 @@ class DeepThinkTest {
     }
 
     @Test
+    fun newMoeModelsAreClassified() {
+        assertEquals(
+            DeepThinkControlMode.REASONING_MODEL,
+            DeepThinkSupport.capability(model("Qwen3.6 35B-A3B", "local-catalog-qwen3.6-35b-a3b-q3-k-m-1")).mode,
+        )
+        assertEquals(
+            DeepThinkControlMode.NONE,
+            DeepThinkSupport.capability(model("Nemotron 3 Nano 30B-A3B", "local-catalog-nemotron3-nano-30b-a3b-q3-k-m-1")).mode,
+        )
+        assertEquals(
+            DeepThinkControlMode.NONE,
+            DeepThinkSupport.capability(model("Granite 4.0 H Tiny 7B-A1B", "local-catalog-granite4.0-h-tiny-q3-k-m-1")).mode,
+        )
+    }
+
+    @Test
     fun nemotronNanoV2IsHybrid() {
         val model = model("Nemotron Nano 9B v2", "local-catalog-nemotron-nano-9b-v2-q4-k-m-1")
         assertEquals(DeepThinkControlMode.HYBRID_THINKING, DeepThinkSupport.capability(model).mode)
