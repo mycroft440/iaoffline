@@ -190,7 +190,7 @@ class AutomaticModelImporter(
                         }
 
                         try {
-                            repository.importGguf(preview)
+                            repository.importGguf(preview, catalogModel)
                             installed = repository.getModels().toMutableList()
                             markProcessed(fingerprint)
                             imported += 1
