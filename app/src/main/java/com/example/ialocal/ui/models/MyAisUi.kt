@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.AutomaticModelImportPhase
+import com.example.ialocal.models.AutomaticModelImportStep
 import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelProvider
@@ -362,7 +363,14 @@ private fun ModelStorageImportProgress(progress: AutomaticModelImportProgress) {
         AutomaticModelImportPhase.DISCOVERING -> "Procurando arquivos GGUF no armazenamento interno..."
         AutomaticModelImportPhase.IMPORTING -> if (progress.total > 0) {
             val current = (progress.processed + 1).coerceAtMost(progress.total)
-            "Processando IA $current de ${progress.total}"
+            val name = progress.currentModelName
+            when {
+                name != null && progress.currentStep == AutomaticModelImportStep.IMPORTING ->
+                    "Importando $name para o app... ($current de ${progress.total})"
+                name != null && progress.currentStep == AutomaticModelImportStep.FOUND ->
+                    "IA encontrada: $name. Verificando o arquivo... ($current de ${progress.total})"
+                else -> "Processando arquivo $current de ${progress.total}"
+            }
         } else {
             "Nenhum arquivo GGUF encontrado."
         }

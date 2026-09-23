@@ -6,14 +6,17 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -22,6 +25,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.ads.AdsManager
 import com.example.ialocal.data.ThemeMode
+import com.example.ialocal.models.AutomaticModelImportEvent
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.models.PublicModelDownloads
 import com.example.ialocal.ui.chat.ChatViewModel
@@ -85,8 +89,24 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        showStorageImportNotices()
         runInitialStorageScanOnce()
         adsManager.start(this)
+    }
+
+    /** Tells the user, on any screen, when an AI is found in storage and when it is imported. */
+    private fun showStorageImportNotices() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                container.automaticModelImporter.events.collect { event ->
+                    val message = when (event) {
+                        is AutomaticModelImportEvent.Found -> "IA encontrada no armazenamento: ${event.modelName}"
+                        is AutomaticModelImportEvent.Importing -> "Importando ${event.modelName} para o app..."
+                    }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     private fun runInitialStorageScanOnce() {

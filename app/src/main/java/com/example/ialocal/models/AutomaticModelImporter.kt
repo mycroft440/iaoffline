@@ -11,8 +11,11 @@ import java.util.ArrayDeque
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -38,6 +41,21 @@ enum class AutomaticModelImportPhase {
     FAILED,
 }
 
+/** What is happening to the file currently being processed. */
+enum class AutomaticModelImportStep {
+    /** A new AI was found in storage and is being checked. */
+    FOUND,
+    /** The AI is being copied into the app. */
+    IMPORTING,
+}
+
+/** One-off notices for the user, emitted as the scan progresses. */
+sealed interface AutomaticModelImportEvent {
+    val modelName: String
+    data class Found(override val modelName: String) : AutomaticModelImportEvent
+    data class Importing(override val modelName: String) : AutomaticModelImportEvent
+}
+
 enum class AutomaticModelScanMode {
     QUICK,
     FULL,
@@ -49,6 +67,9 @@ data class AutomaticModelImportProgress(
     val total: Int = 0,
     val currentFileName: String? = null,
     val summary: AutomaticModelImportSummary? = null,
+    val currentStep: AutomaticModelImportStep? = null,
+    /** Friendly name of the AI in [currentFileName], when one was found. */
+    val currentModelName: String? = null,
 ) {
     val isRunning: Boolean
         get() = phase == AutomaticModelImportPhase.DISCOVERING ||
@@ -82,6 +103,8 @@ class AutomaticModelImporter(
     private val _progress = MutableStateFlow(AutomaticModelImportProgress())
 
     val progress: StateFlow<AutomaticModelImportProgress> = _progress.asStateFlow()
+    private val _events = MutableSharedFlow<AutomaticModelImportEvent>(extraBufferCapacity = 16)
+    val events: SharedFlow<AutomaticModelImportEvent> = _events.asSharedFlow()
 
     fun startScan(mode: AutomaticModelScanMode = AutomaticModelScanMode.FULL) {
         if (_progress.value.isRunning) return
@@ -152,6 +175,13 @@ class AutomaticModelImporter(
                             return@forEachIndexed
                         }
 
+                        val modelName = catalogModel?.displayName ?: file.nameWithoutExtension
+                        _progress.value = _progress.value.copy(
+                            currentStep = AutomaticModelImportStep.FOUND,
+                            currentModelName = modelName,
+                        )
+                        _events.tryEmit(AutomaticModelImportEvent.Found(modelName))
+
                         if (catalogModel != null) {
                             val checksum = runCatching { fileSha256(file) }.getOrElse { error ->
                                 failures += 1
@@ -192,6 +222,8 @@ class AutomaticModelImporter(
                             return@forEachIndexed
                         }
 
+                        _progress.value = _progress.value.copy(currentStep = AutomaticModelImportStep.IMPORTING)
+                        _events.tryEmit(AutomaticModelImportEvent.Importing(modelName))
                         try {
                             repository.importGguf(preview, catalogModel)
                             installed = repository.getModels().toMutableList()
@@ -210,6 +242,8 @@ class AutomaticModelImporter(
                             processed = index + 1,
                             total = candidates.size,
                             currentFileName = null,
+                            currentStep = null,
+                            currentModelName = null,
                         )
                     }
                 }
