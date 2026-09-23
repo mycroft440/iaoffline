@@ -19,6 +19,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - SHA-256 fixado no app para cada GGUF do catálogo antes de qualquer carregamento nativo.
 - Importação manual de outros arquivos `.gguf` continua disponível.
 - Validação do cabeçalho GGUF, ABI, espaço disponível e estimativa de RAM.
+- Modelos grandes para a RAM do aparelho (arquivo acima de 30% da memória total, como 8B em celulares de 12 GB) carregam em modo de pouca memória: pesos mapeados do arquivo, sem a cópia reempacotada em RAM, e contexto de 4096 tokens. É um pouco mais lento, mas evita que o Android feche o app.
+- Se o app for fechado inesperadamente, na abertura seguinte ele mostra o motivo registrado pelo Android (falha nativa, falta de memória, erro) com detalhes para copiar.
 - Um modelo só vira `VERIFIED` e pode ser ativado após uma inferência real no dispositivo.
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.
