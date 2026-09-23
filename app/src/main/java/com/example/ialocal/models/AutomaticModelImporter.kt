@@ -140,7 +140,10 @@ class AutomaticModelImporter(
 
                     try {
                         val fingerprint = fingerprint(file)
-                        if (preferences.getBoolean(fingerprint, false)) return@forEachIndexed
+                        // A manual search must find a file again after its app-private copy was removed.
+                        if (mode == AutomaticModelScanMode.QUICK && preferences.getBoolean(fingerprint, false)) {
+                            return@forEachIndexed
+                        }
 
                         val catalogModel = catalogModelForFileName(file.name)
                         if (catalogModel != null && installed.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) }) {
