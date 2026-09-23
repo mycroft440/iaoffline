@@ -104,6 +104,7 @@ class ModelDownloadService : Service() {
         val catalogId = activeCatalogId ?: manager.downloadState.value.catalogId
         activeJob?.cancel(CancellationException("Download pausado pelo limite do Android."))
         manager.markDownloadPausedBySystem(catalogId)
+        manager.onTransferServiceStopped()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf(startId)
     }
@@ -118,12 +119,14 @@ class ModelDownloadService : Service() {
         if (activeJob?.isActive == true) return
 
         val catalog = runCatching { ModelCatalog.requireById(catalogId) }.getOrElse {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            // Unknown id (e.g. removed from the catalog in an update): drop it and move on.
+            manager.forgetDownload(catalogId)
+            continueWithNextOrStop()
             return
         }
         activeCatalogId = catalogId
         userStopInProgress.set(false)
+        manager.onTransferStarted(catalogId)
 
         val initial = manager.downloadState.value.takeIf { it.catalogId == catalogId }
             ?: ModelDownloadState(
@@ -163,15 +166,21 @@ class ModelDownloadService : Service() {
                 activeJob = null
                 if (!stoppedByUserOrSystem) {
                     withContext(Dispatchers.Main) {
-                        val finalState = manager.downloadState.value
-                        runCatching {
-                            notificationManager.notify(
-                                NOTIFICATION_ID,
-                                buildNotification(finalState, ongoing = false),
-                            )
+                        // Installed or failed: record it and go straight to the next queued download.
+                        val next = manager.onTransferFinished(catalogId)
+                        if (next != null) {
+                            startDownload(next)
+                        } else {
+                            val finalState = manager.downloadState.value
+                            runCatching {
+                                notificationManager.notify(
+                                    NOTIFICATION_ID,
+                                    buildNotification(finalState, ongoing = false),
+                                )
+                            }
+                            stopForeground(STOP_FOREGROUND_DETACH)
+                            stopSelf()
                         }
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                        stopSelf()
                     }
                 }
             }
@@ -185,10 +194,7 @@ class ModelDownloadService : Service() {
         serviceScope.launch {
             job?.join()
             manager.markDownloadPausedByUser(activeCatalogId ?: manager.downloadState.value.catalogId)
-            withContext(Dispatchers.Main) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            withContext(Dispatchers.Main) { continueWithNextOrStop() }
         }
     }
 
@@ -200,10 +206,18 @@ class ModelDownloadService : Service() {
         serviceScope.launch {
             job?.join()
             catalogId?.let { manager.discardDownload(it) }
-            withContext(Dispatchers.Main) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            withContext(Dispatchers.Main) { continueWithNextOrStop() }
+        }
+    }
+
+    /** After a pause or an ended download, the next queued one runs in this same service. */
+    private fun continueWithNextOrStop() {
+        val next = manager.claimNextQueued()
+        if (next != null) {
+            startDownload(next)
+        } else {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 

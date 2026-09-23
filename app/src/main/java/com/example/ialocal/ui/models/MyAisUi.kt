@@ -54,6 +54,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.AutomaticModelImportPhase
+import com.example.ialocal.models.DownloadEntryStatus
+import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.AutomaticModelImportStep
 import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.CatalogModel
@@ -229,10 +231,12 @@ fun MyAisScreen(
     adsEnabled: Boolean,
     importProgress: AutomaticModelImportProgress,
     onScanStorage: () -> Unit,
+    onEnsureStorageAccess: (() -> Unit) -> Unit,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
 ) {
     val models by viewModel.models.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val orderedModels = remember(models) { models.sortedBy { it.importedAt } }
 
     Scaffold(containerColor = MyAiBg) { padding ->
@@ -321,6 +325,28 @@ fun MyAisScreen(
                     }
                 }
 
+                if (downloads.isNotEmpty()) {
+                    item(key = "my-ais-downloads-title") {
+                        Text(
+                            "Downloads (${downloads.size})",
+                            modifier = Modifier.padding(top = 4.dp),
+                            color = MyAiText,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    downloads.forEach { download ->
+                        item(key = "my-ais-download-${download.model.id}") {
+                            MyAiDownloadCard(
+                                download = download,
+                                onPause = viewModel::cancelDownload,
+                                onResume = { onEnsureStorageAccess { viewModel.resumeDownload(download.model.id) } },
+                                onRemove = { viewModel.removeDownload(download.model.id) },
+                            )
+                        }
+                    }
+                }
+
                 if (orderedModels.isEmpty()) {
                     item(key = "my-ais-empty") {
                         Box(
@@ -355,6 +381,117 @@ fun MyAisScreen(
             }
         }
     }
+}
+
+/** A requested download: progress, what is happening, and the actions that fit its state. */
+@Composable
+private fun MyAiDownloadCard(
+    download: DownloadItemUi,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val state = download.state
+    val total = state.totalBytes?.takeIf { it > 0 }
+    val fraction = state.progress
+    val accent = when (download.status) {
+        DownloadEntryStatus.FAILED -> MyAiDanger
+        DownloadEntryStatus.PAUSED, DownloadEntryStatus.QUEUED -> MyAiMuted
+        DownloadEntryStatus.ACTIVE -> MyAiActive
+    }
+    val title = when (download.status) {
+        DownloadEntryStatus.ACTIVE -> when (state.phase) {
+            ModelDownloadPhase.DOWNLOADING -> "Baixando"
+            ModelDownloadPhase.VERIFYING_FILE -> "Verificando o arquivo"
+            ModelDownloadPhase.IMPORTING -> "Instalando"
+            ModelDownloadPhase.VERIFYING_MODEL -> "Testando no aparelho"
+            else -> "Preparando"
+        }
+        DownloadEntryStatus.QUEUED -> "Na fila"
+        DownloadEntryStatus.PAUSED -> "Pausado"
+        DownloadEntryStatus.FAILED -> "Falhou"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MyAiSurface, RoundedCornerShape(14.dp))
+            .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                download.model.displayName,
+                modifier = Modifier.weight(1f),
+                color = MyAiText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(title, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        if (download.status == DownloadEntryStatus.ACTIVE && (fraction == null || state.phase != ModelDownloadPhase.DOWNLOADING)) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = accent, trackColor = MyAiElevated)
+        } else {
+            LinearProgressIndicator(
+                progress = { fraction ?: 0f },
+                modifier = Modifier.fillMaxWidth(),
+                color = accent,
+                trackColor = MyAiElevated,
+            )
+        }
+
+        Text(
+            buildString {
+                append(formatDownloadBytes(state.downloadedBytes))
+                total?.let { append(" de ").append(formatDownloadBytes(it)) }
+                fraction?.let { append(" · ").append((it * 100).toInt()).append("%") }
+            },
+            color = MyAiMuted,
+            fontSize = 10.5.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        state.message?.takeIf { it.isNotBlank() }?.let { message ->
+            Text(
+                message,
+                color = if (download.status == DownloadEntryStatus.FAILED) MyAiDanger else MyAiMuted,
+                fontSize = 11.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (download.status) {
+                DownloadEntryStatus.ACTIVE -> {
+                    TextButton(onClick = onRemove) { Text("Encerrar", color = MyAiMuted) }
+                    Button(onClick = onPause, enabled = state.phase == ModelDownloadPhase.DOWNLOADING) {
+                        Text("Pausar")
+                    }
+                }
+                DownloadEntryStatus.QUEUED -> {
+                    TextButton(onClick = onRemove) { Text("Remover da fila", color = MyAiMuted) }
+                }
+                DownloadEntryStatus.PAUSED -> {
+                    TextButton(onClick = onRemove) { Text("Encerrar", color = MyAiMuted) }
+                    Button(onClick = onResume) { Text("Continuar") }
+                }
+                DownloadEntryStatus.FAILED -> {
+                    TextButton(onClick = onRemove) { Text("Remover", color = MyAiMuted) }
+                    Button(onClick = onResume) { Text("Tentar novamente") }
+                }
+            }
+        }
+    }
+}
+
+private fun formatDownloadBytes(bytes: Long): String {
+    val gb = bytes / (1024.0 * 1024.0 * 1024.0)
+    return if (gb >= 1.0) String.format(java.util.Locale.getDefault(), "%.2f GB", gb)
+    else String.format(java.util.Locale.getDefault(), "%.0f MB", bytes / (1024.0 * 1024.0))
 }
 
 @Composable

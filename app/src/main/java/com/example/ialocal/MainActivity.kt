@@ -90,6 +90,8 @@ class MainActivity : ComponentActivity() {
         }
 
         showStorageImportNotices()
+        // Downloads interrupted by the app being killed pick up from their partial files.
+        container.modelManager.resumeQueueAfterRestart()
         runInitialStorageScanOnce()
         adsManager.start(this)
     }
@@ -206,6 +208,7 @@ private fun LocalAiApp(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
                 onScanStorage = onScanStorage,
+                onEnsureStorageAccess = onEnsureStorageAccess,
                 importProgress = importProgress,
                 onBack = { navController.popBackStack() },
                 onOpenChat = { modelId ->

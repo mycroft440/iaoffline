@@ -60,6 +60,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
+import com.example.ialocal.models.DownloadEntryStatus
 import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelProvider
@@ -110,7 +111,7 @@ fun GroupedOfflineModelsScreen(
     onBack: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
-    val download by viewModel.downloadState.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -207,14 +208,16 @@ fun GroupedOfflineModelsScreen(
                     HtmlCatalogInstallCard(
                         model = catalogModel,
                         hardware = hardware,
-                        state = download.takeIf { it.catalogId == catalogModel.id },
+                        download = downloads.firstOrNull { it.model.id == catalogModel.id },
                         installedModel = installed,
-                        anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id,
                         onInstall = {
                             onEnsureStorageAccess { viewModel.downloadCatalogModel(catalogModel.id) }
                         },
                         onPause = viewModel::cancelDownload,
-                        onEnd = viewModel::endDownload,
+                        onResume = {
+                            onEnsureStorageAccess { viewModel.resumeDownload(catalogModel.id) }
+                        },
+                        onRemove = { viewModel.removeDownload(catalogModel.id) },
                         onDelete = { installed?.let { viewModel.delete(it.id) } },
                     )
                 }
@@ -456,18 +459,20 @@ private fun ProviderCatalogHeader(
 private fun HtmlCatalogInstallCard(
     model: CatalogModel,
     hardware: CatalogHardwareSnapshot,
-    state: ModelDownloadState?,
+    download: DownloadItemUi?,
     installedModel: AiModelEntity?,
-    anotherOperationRunning: Boolean,
     onInstall: () -> Unit,
     onPause: () -> Unit,
-    onEnd: () -> Unit,
+    onResume: () -> Unit,
+    onRemove: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val installed = installedModel != null
-    val busy = state?.isBusy == true
-    val paused = state?.phase == ModelDownloadPhase.CANCELLED
-    val failed = state?.phase == ModelDownloadPhase.ERROR
+    val state = download?.state
+    val busy = download?.status == DownloadEntryStatus.ACTIVE
+    val queued = download?.status == DownloadEntryStatus.QUEUED
+    val paused = download?.status == DownloadEntryStatus.PAUSED
+    val failed = download?.status == DownloadEntryStatus.FAILED
     val progressFraction = (state?.progress ?: 0f).coerceIn(0f, 1f)
     val compatibility = catalogCompatibility(model, hardware)
     val providerMeta = providerUiMeta(model.provider)
@@ -564,7 +569,7 @@ private fun HtmlCatalogInstallCard(
             overflow = TextOverflow.Ellipsis,
         )
 
-        if (state != null && state.phase != ModelDownloadPhase.IDLE) {
+        if (state != null && !installed) {
             DownloadStatePanel(
                 state = state,
                 progressFraction = progressFraction,
@@ -611,7 +616,7 @@ private fun HtmlCatalogInstallCard(
                             background = SolidColor(Color(0xE61E293B)),
                             foreground = CatalogMuted,
                             border = CatalogBorderLight.copy(alpha = 0.55f),
-                            onClick = onEnd,
+                            onClick = onRemove,
                         )
                         CatalogActionButton(
                             text = if (state?.phase == ModelDownloadPhase.DOWNLOADING) "Pausar" else "Instalando",
@@ -621,6 +626,31 @@ private fun HtmlCatalogInstallCard(
                             border = CatalogCyan.copy(alpha = 0.42f),
                             enabled = state?.phase == ModelDownloadPhase.DOWNLOADING,
                             onClick = onPause,
+                        )
+                    }
+                }
+
+                queued -> {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        CatalogActionButton(
+                            text = "Remover",
+                            modifier = Modifier.weight(1f),
+                            background = SolidColor(Color(0xE61E293B)),
+                            foreground = CatalogMuted,
+                            border = CatalogBorderLight.copy(alpha = 0.55f),
+                            onClick = onRemove,
+                        )
+                        CatalogActionButton(
+                            text = "Na fila",
+                            modifier = Modifier.weight(1.15f),
+                            background = SolidColor(CatalogCyan.copy(alpha = 0.12f)),
+                            foreground = CatalogCyanLight,
+                            border = CatalogCyan.copy(alpha = 0.32f),
+                            enabled = false,
+                            onClick = {},
                         )
                     }
                 }
@@ -636,15 +666,15 @@ private fun HtmlCatalogInstallCard(
                             background = SolidColor(Color(0xE61E293B)),
                             foreground = CatalogMuted,
                             border = CatalogBorderLight.copy(alpha = 0.55f),
-                            onClick = onEnd,
+                            onClick = onRemove,
                         )
                         CatalogActionButton(
-                            text = "Continuar",
+                            text = if (failed) "Tentar novamente" else "Continuar",
                             modifier = Modifier.weight(1.15f),
                             background = Brush.horizontalGradient(listOf(CatalogCyan, Color(0xFF3B82F6))),
                             foreground = Color(0xFF041014),
                             border = CatalogCyan.copy(alpha = 0.45f),
-                            onClick = onInstall,
+                            onClick = onResume,
                         )
                     }
                 }
@@ -660,7 +690,6 @@ private fun HtmlCatalogInstallCard(
                         },
                         foreground = if (compatibility.canRunComfortably) Color(0xFF041014) else CatalogAmber,
                         border = if (compatibility.canRunComfortably) CatalogCyan.copy(alpha = 0.45f) else CatalogAmber.copy(alpha = 0.35f),
-                        enabled = !anotherOperationRunning,
                         onClick = onInstall,
                     )
                 }
@@ -813,7 +842,7 @@ private fun DownloadStatePanel(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (state.phase == ModelDownloadPhase.DOWNLOADING) {
+            if (state.phase == ModelDownloadPhase.DOWNLOADING || progressFraction > 0f) {
                 Text(
                     text = progressText,
                     color = CatalogCyanLight,
@@ -823,7 +852,7 @@ private fun DownloadStatePanel(
             }
         }
 
-        if (state.phase == ModelDownloadPhase.DOWNLOADING) {
+        if (state.phase == ModelDownloadPhase.DOWNLOADING || progressFraction > 0f) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1088,7 +1117,7 @@ private fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (prov
 }
 
 private fun groupedDownloadStatus(state: ModelDownloadState, progress: String?): String = when (state.phase) {
-    ModelDownloadPhase.IDLE -> "Pronto para instalar"
+    ModelDownloadPhase.IDLE -> state.message ?: "Pronto para instalar"
     ModelDownloadPhase.CHECKING -> "Preparando instalação"
     ModelDownloadPhase.DOWNLOADING -> "Gravando pesos neurais${progress?.let { " · $it" } ?: ""}"
     ModelDownloadPhase.VERIFYING_FILE -> "Verificando arquivo"
@@ -1096,7 +1125,7 @@ private fun groupedDownloadStatus(state: ModelDownloadState, progress: String?):
     ModelDownloadPhase.VERIFYING_MODEL -> "Testando I.A no aparelho"
     ModelDownloadPhase.COMPLETE -> state.message ?: "Instalação concluída"
     ModelDownloadPhase.ERROR -> state.message ?: "Falha na instalação"
-    ModelDownloadPhase.CANCELLED -> "Instalação pausada"
+    ModelDownloadPhase.CANCELLED -> "Instalação pausada${progress?.let { " · $it" } ?: ""}"
 }
 
 private fun groupedFormatParameters(value: Double): String =
