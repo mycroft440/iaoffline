@@ -13,7 +13,6 @@ import com.example.ialocal.runtime.ModelRuntime
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOf
 
 data class AgentRunResult(
     val agent: AgentEntity,
@@ -179,19 +178,14 @@ class AiOrchestrator(
                         }
 
                         AgentStreamRoundMode.LIVE_ANSWER -> {
-                            if (reasoningBlockOpen) {
-                                emit("</think>")
-                                reasoningBlockOpen = false
-                            }
-                            if (current.length > liveEmittedUntil) {
+                            if (!reasoningBlockOpen && current.length > liveEmittedUntil) {
                                 emit(current.substring(liveEmittedUntil))
                                 liveEmittedUntil = current.length
                             }
                         }
 
                         AgentStreamRoundMode.BUFFERED,
-                        AgentStreamRoundMode.UNDECIDED,
-                        -> Unit
+                        AgentStreamRoundMode.UNDECIDED -> Unit
                     }
                 }
 
@@ -226,8 +220,7 @@ class AiOrchestrator(
                         }
 
                         AgentStreamRoundMode.BUFFERED,
-                        AgentStreamRoundMode.UNDECIDED,
-                        -> {
+                        AgentStreamRoundMode.UNDECIDED -> {
                             if (reasoningBlockOpen) {
                                 emit("</think>")
                                 reasoningBlockOpen = false
@@ -235,7 +228,13 @@ class AiOrchestrator(
                             if (finalOutput.isNotEmpty()) emit(finalOutput)
                         }
 
-                        AgentStreamRoundMode.LIVE_ANSWER -> Unit
+                        AgentStreamRoundMode.LIVE_ANSWER -> {
+                            if (reasoningBlockOpen) {
+                                emit("</think>")
+                                reasoningBlockOpen = false
+                                if (finalOutput.isNotEmpty()) emit(finalOutput)
+                            }
+                        }
                     }
                     return@flow
                 }
