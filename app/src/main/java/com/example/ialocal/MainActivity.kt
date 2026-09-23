@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.ialocal.ads.AdsManager
 import com.example.ialocal.data.ThemeMode
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.ui.chat.ChatViewModel
@@ -38,6 +39,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var container: AppContainer
+    private lateinit var adsManager: AdsManager
     private var pendingStorageScanMode = AutomaticModelScanMode.FULL
 
     private val storageAccessLauncher = registerForActivityResult(
@@ -51,6 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         container = (application as LocalAiApplication).container
+        adsManager = AdsManager(applicationContext)
 
         setContent {
             val themeMode by container.themeRepository.themeMode.collectAsStateWithLifecycle(
@@ -59,13 +62,16 @@ class MainActivity : ComponentActivity() {
             LocalAiTheme(themeMode = themeMode) {
                 LocalAiApp(
                     container = container,
+                    adsManager = adsManager,
                     onScanStorage = { requestStorageScan(AutomaticModelScanMode.FULL) },
+                    onPrivacyOptions = { adsManager.showPrivacyOptions(this) },
                     onExitApp = { finish() },
                 )
             }
         }
 
         runInitialStorageScanOnce()
+        adsManager.start(this)
     }
 
     private fun runInitialStorageScanOnce() {
@@ -106,7 +112,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalAiApp(
     container: AppContainer,
+    adsManager: AdsManager,
     onScanStorage: () -> Unit,
+    onPrivacyOptions: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -126,6 +134,7 @@ private fun LocalAiApp(
             val scope = rememberCoroutineScope()
             HtmlAiHomeScreen(
                 viewModel = vm,
+                adsEnabled = adsManager.adsReady,
                 onStartChat = {
                     scope.launch {
                         val conversationId = container.chatRepository.createConversation()
@@ -157,6 +166,7 @@ private fun LocalAiApp(
             val scope = rememberCoroutineScope()
             MyAisScreen(
                 viewModel = vm,
+                adsEnabled = adsManager.adsReady,
                 importProgress = importProgress,
                 onBack = { navController.popBackStack() },
                 onOpenChat = { modelId ->
@@ -197,6 +207,7 @@ private fun LocalAiApp(
             )
             GroupedOfflineModelsScreen(
                 viewModel = vm,
+                adsEnabled = adsManager.adsReady,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -292,6 +303,8 @@ private fun LocalAiApp(
                 viewModel = vm,
                 importProgress = importProgress,
                 onScanStorage = onScanStorage,
+                privacyOptionsRequired = adsManager.privacyOptionsRequired,
+                onPrivacyOptions = onPrivacyOptions,
                 onBack = { navController.popBackStack() },
             )
         }

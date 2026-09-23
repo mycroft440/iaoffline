@@ -49,6 +49,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     importProgress: AutomaticModelImportProgress,
     onScanStorage: () -> Unit,
+    privacyOptionsRequired: Boolean,
+    onPrivacyOptions: () -> Unit,
     onBack: () -> Unit,
 ) {
     val selected by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -98,6 +100,22 @@ fun SettingsScreen(
             item { ThemeOption("Seguir o sistema", ThemeMode.SYSTEM, selected, viewModel::setTheme) }
             item { ThemeOption("Claro", ThemeMode.LIGHT, selected, viewModel::setTheme) }
             item { ThemeOption("Escuro", ThemeMode.DARK, selected, viewModel::setTheme) }
+
+            if (privacyOptionsRequired) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Privacidade dos anúncios", style = MaterialTheme.typography.titleSmall)
+                            OutlinedButton(onClick = onPrivacyOptions) {
+                                Text("Gerenciar opções de privacidade")
+                            }
+                        }
+                    }
+                }
+            }
 
             item {
                 Text(

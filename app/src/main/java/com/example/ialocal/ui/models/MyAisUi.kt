@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.AutomaticModelImportProgress
@@ -222,6 +223,7 @@ private fun MyAiPreviewCard(
 @Composable
 fun MyAisScreen(
     viewModel: ModelsViewModel,
+    adsEnabled: Boolean,
     importProgress: AutomaticModelImportProgress,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
@@ -267,16 +269,25 @@ fun MyAisScreen(
                 ModelStorageImportProgress(importProgress)
             }
 
-            if (orderedModels.isEmpty() && !importProgress.isRunning) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Nenhuma IA instalada.", color = MyAiMuted, fontSize = 13.sp)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item(key = "my-ais-ad-top") {
+                    InlineAdBanner(enabled = adsEnabled)
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+
+                if (orderedModels.isEmpty() && !importProgress.isRunning) {
+                    item(key = "my-ais-empty") {
+                        Box(
+                            Modifier.fillMaxWidth().height(160.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("Nenhuma IA instalada.", color = MyAiMuted, fontSize = 13.sp)
+                        }
+                    }
+                } else {
                     orderedModels.forEach { model ->
                         item(key = model.id) {
                             val catalogModel = catalogModelFor(model, viewModel.catalog)
@@ -288,8 +299,12 @@ fun MyAisScreen(
                             )
                         }
                     }
-                    item { Spacer(Modifier.height(20.dp)) }
                 }
+
+                item(key = "my-ais-ad-bottom") {
+                    InlineAdBanner(enabled = adsEnabled)
+                }
+                item { Spacer(Modifier.height(20.dp)) }
             }
         }
     }
