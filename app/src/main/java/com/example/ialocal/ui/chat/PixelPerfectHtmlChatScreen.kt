@@ -113,6 +113,7 @@ import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
+import com.example.ialocal.models.BuiltInProfile
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
@@ -169,6 +170,7 @@ fun PixelPerfectHtmlChatScreen(
     val recorder = remember { AudioRecorder(context) }
 
     var recording by remember { mutableStateOf(false) }
+    var profileOpen by remember { mutableStateOf(false) }
     var modelOpen by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     var pendingAudio by remember { mutableStateOf<android.net.Uri?>(null) }
@@ -293,7 +295,7 @@ fun PixelPerfectHtmlChatScreen(
                 recording = recording,
                 deepThinkSupported = deepThinkSupported,
                 onMenu = { scope.launch { drawerState.open() } },
-                onProfile = onOpenSettings,
+                onProfile = { profileOpen = true },
                 onModel = { modelOpen = true },
                 onNew = { viewModel.createConversation(onOpenConversation) },
                 onDraftChange = viewModel::setDraft,
@@ -308,6 +310,29 @@ fun PixelPerfectHtmlChatScreen(
                 onRerun = viewModel::rerunAssistant,
                 onRemoveAttachment = viewModel::removePendingAttachment,
                 onRemoveQueued = viewModel::removeQueuedMessage,
+            )
+        }
+    }
+
+    if (profileOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { profileOpen = false },
+            containerColor = PSurface,
+            contentColor = PText,
+            scrimColor = Color.Black.copy(alpha = 0.70f),
+            dragHandle = null,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        ) {
+            ExactProfilesSheet(
+                selected = selectedProfile,
+                onSelect = {
+                    viewModel.selectProfile(it)
+                    profileOpen = false
+                },
+                onManage = {
+                    profileOpen = false
+                    onOpenSettings()
+                },
             )
         }
     }
@@ -1378,6 +1403,54 @@ private fun ExactDeepThinkOption(
             }
             if (selected) Icon(Icons.Default.CheckCircle, null, tint = accent, modifier = Modifier.size(14.dp))
         }
+    }
+}
+
+@Composable
+private fun ExactProfilesSheet(
+    selected: BuiltInProfile,
+    onSelect: (BuiltInProfile) -> Unit,
+    onManage: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("</>", fontSize = 16.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color(0xFF818CF8))
+            Spacer(Modifier.width(8.dp))
+            Text("Selecionar Perfil de IA", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        }
+        BuiltInProfile.entries.forEach { profile ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().clickable { onSelect(profile) },
+                shape = RoundedCornerShape(12.dp),
+                color = PCard,
+                border = BorderStroke(1.dp, if (profile == selected) PIndigo.copy(alpha = 0.40f) else PBorder),
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        modifier = Modifier.size(32.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = PIndigo.copy(alpha = 0.20f),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("</>", fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color(0xFF818CF8))
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(profile.displayName, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        Text(profile.description, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color(0xFF94A3B8))
+                    }
+                    if (profile == selected) Icon(Icons.Default.Check, null, tint = Color(0xFF818CF8), modifier = Modifier.size(12.dp))
+                }
+            }
+        }
+        TextButton(onClick = onManage, modifier = Modifier.fillMaxWidth()) {
+            Text("Gerenciar perfis em Configurações", fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 

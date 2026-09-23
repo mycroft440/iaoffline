@@ -110,6 +110,11 @@ class ChatViewModel(
     fun setDraft(value: String) { _draft.value = value }
     fun clearError() { _error.value = null }
 
+    /** Works without an installed model; the matching agent is picked once a model exists. */
+    fun selectProfile(profile: BuiltInProfile) {
+        modelRepository.setSelectedProfile(profile)
+    }
+
     fun selectAgent(agentId: String?) {
         viewModelScope.launch {
             if (agentId == null) {

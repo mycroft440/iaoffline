@@ -27,7 +27,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
-Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os perfis **Programador** e **Sem censura** aparecem no chat mesmo antes de haver um modelo; a seleção é gerenciada em **Configurações**, acessível pelo menu das três barras no chat.
+Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os perfis **Programador** e **Sem censura** aparecem no seletor de perfil do chat mesmo antes de haver um modelo e também são gerenciados em **Configurações**, acessível pelo menu das três barras no chat.
 
 ## Editor de código e diagnósticos
 
