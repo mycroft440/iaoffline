@@ -88,6 +88,8 @@ PY
 # 6. If model loading succeeds but an 8K context cannot be allocated, retry with
 #    4K and 2K contexts. This keeps smaller-memory phones usable instead of
 #    reporting the model itself as incompatible.
+# 7. When the app sets IAOFFLINE_LOW_MEMORY=1 (model large for the device RAM),
+#    skip the repacked CPU buffers from the start and begin with a 4K context.
 python3 - "${AI_CHAT_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -104,7 +106,7 @@ def replace_once(old: str, new: str) -> None:
 
 replace_once(
     "#include <string>\n#include <unistd.h>",
-    "#include <string>\n#include <mutex>\n#include <unistd.h>",
+    "#include <string>\n#include <mutex>\n#include <cstdlib>\n#include <unistd.h>",
 )
 replace_once(
     "static common_sampler                   * g_sampler;\n\nextern \"C\"\nJNIEXPORT void JNICALL\nJava_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {\n    // Set llama log handler to Android\n    llama_log_set(aichat_android_log_callback, nullptr);",
@@ -115,6 +117,11 @@ replace_once(
     "static void clear_native_error() {\n"
     "    std::lock_guard<std::mutex> lock(g_native_error_mutex);\n"
     "    g_last_native_error.clear();\n"
+    "}\n\n"
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n"
+    "static bool iaoffline_low_memory_mode() {\n"
+    "    const char *value = getenv(\"IAOFFLINE_LOW_MEMORY\");\n"
+    "    return value != nullptr && value[0] == '1';\n"
     "}\n\n"
     "static void append_native_error(const char *text) {\n"
     "    if (text == nullptr || text[0] == '\\0') return;\n"
@@ -160,7 +167,13 @@ replace_once(
     "    // and keep the first attempt on the portable mmap path.\n"
     "    model_params.n_gpu_layers = 0;\n"
     "    model_params.split_mode = LLAMA_SPLIT_MODE_NONE;\n"
-    "    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;\n\n"
+    "    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;\n"
+    "    if (iaoffline_low_memory_mode()) {\n"
+    "        // Repacked CPU buffers copy every weight into anonymous memory; without them the\n"
+    "        // weights stay file-backed and the kernel can page them instead of killing the app.\n"
+    "        model_params.use_extra_bufts = false;\n"
+    "        LOGi(\"%s: low-memory mode: mmap without extra buffers\", __func__);\n"
+    "    }\n\n"
     "    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);",
 )
 replace_once(
@@ -190,8 +203,9 @@ replace_once(
 replace_once(
     "    auto *context = init_context(g_model);\n"
     "    if (!context) { return 1; }",
-    "    auto *context = init_context(g_model, DEFAULT_CONTEXT_SIZE);\n"
-    "    if (!context) {\n"
+    "    const bool low_memory = iaoffline_low_memory_mode();\n"
+    "    auto *context = init_context(g_model, low_memory ? 4096 : DEFAULT_CONTEXT_SIZE);\n"
+    "    if (!context && !low_memory) {\n"
     "        LOGw(\"%s: 8192-token context allocation failed; retrying with 4096\", __func__);\n"
     "        context = init_context(g_model, 4096);\n"
     "    }\n"

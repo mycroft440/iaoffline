@@ -1,11 +1,14 @@
 package com.example.ialocal.runtime
 
+import android.app.ActivityManager
 import android.content.Context
+import android.system.Os
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -35,6 +38,8 @@ class LlamaCppRuntime(
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
     private var loadedModelId: String? = null
+    /** Context the native side was asked to allocate for the loaded model. */
+    private var loadedContextTokens = RuntimeLimits.NATIVE_CONTEXT_TOKENS
     /** setSystemPrompt can only be called directly after a load in the pinned binding. */
     private var requestSessionConsumed = false
 
@@ -87,8 +92,8 @@ class LlamaCppRuntime(
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
                 messages = messages,
-                contextTokens = model.contextLength,
-                maxOutputTokens = maxTokens.coerceIn(16, 4096),
+                contextTokens = minOf(model.contextLength, loadedContextTokens),
+                maxOutputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
             )
             if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
 
@@ -99,7 +104,7 @@ class LlamaCppRuntime(
             var emitted = 0
             engine.sendUserPrompt(
                 message = prepared.latestUser,
-                predictLength = maxTokens.coerceIn(16, 4096),
+                predictLength = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
             ).collect { chunk ->
                 if (chunk.isNotEmpty()) {
                     emitted += chunk.length
@@ -148,7 +153,15 @@ class LlamaCppRuntime(
         if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error) unloadLocked()
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
-        logger?.info("MODEL_LOAD", "Carregando ${model.name} (${model.filePath})")
+        val lowMemory = RuntimeLimits.needsLowMemoryMode(File(model.filePath).length(), deviceTotalMemory())
+        // Read by the patched native loader: file-backed weights and a 4K context for large models.
+        runCatching { Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true) }
+        loadedContextTokens = if (lowMemory) RuntimeLimits.LOW_MEMORY_CONTEXT_TOKENS else RuntimeLimits.NATIVE_CONTEXT_TOKENS
+        logger?.info(
+            "MODEL_LOAD",
+            "Carregando ${model.name} (${model.filePath})" +
+                if (lowMemory) " em modo de pouca memória (contexto $loadedContextTokens)" else "",
+        )
         try {
             engine.loadModel(model.filePath)
             loadedModelId = model.id
@@ -163,6 +176,11 @@ class LlamaCppRuntime(
             logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}: $message", t)
             throw IllegalStateException(message, t)
         }
+    }
+
+    private fun deviceTotalMemory(): Long {
+        val activityManager = appContext.getSystemService(ActivityManager::class.java) ?: return 0L
+        return ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo).totalMem
     }
 
     private suspend fun awaitEngineInitialized() {
@@ -233,6 +251,7 @@ class LlamaCppRuntime(
 
     companion object {
         const val FIXED_TEMPERATURE = 0.3f
+        private const val LOW_MEMORY_ENV = "IAOFFLINE_LOW_MEMORY"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
 }

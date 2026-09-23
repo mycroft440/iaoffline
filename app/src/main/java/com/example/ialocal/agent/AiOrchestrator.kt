@@ -5,14 +5,13 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
-import com.example.ialocal.models.DeepThinkLevel
+import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.ModelRuntime
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
 
 data class AgentRunResult(
     val agent: AgentEntity,
@@ -61,187 +60,86 @@ class AiOrchestrator(
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
     ): AgentRunResult {
-        val agent = resolveAgent(agentId)
-        val model = models.getModel(agent.modelId)
-            ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
-        requireVerified(model)
-
-        val capability = DeepThinkSupport.capability(model)
-        val deepThinkLevel = if (capability.supported && deepThinkStore.isEnabled(agent.id)) {
-            deepThinkStore.getLevel(agent.id)
-        } else {
-            DeepThinkLevel.AUTO
-        }
-        val effectiveMaxTokens = DeepThinkSupport.effectiveMaxTokens(
-            maxTokensOverride ?: agent.maxTokens,
-            deepThinkLevel,
-        )
-
-        val working = messages.toMutableList()
         val toolsUsed = mutableListOf<String>()
-        val systemPrompt = agent.systemPrompt + tools.promptInstructions()
-        repeat(MAX_TOOL_ROUNDS) {
-            val output = runtime.complete(
-                model = model,
-                systemPrompt = systemPrompt,
-                messages = working,
-                temperature = temperatureOverride ?: agent.temperature,
-                maxTokens = effectiveMaxTokens,
-            )
-            val call = tools.parseCall(output) ?: return AgentRunResult(agent, model, output, toolsUsed)
-            val result = tools.execute(call)
-            toolsUsed += call.name
-            working += AiChatMessage("assistant", output)
-            working += AiChatMessage(
-                "user",
-                "[RESULTADO DA FERRAMENTA ${call.name}]\n$result\n\nUse este resultado para continuar atendendo a solicitação original.",
-            )
+        val (agent, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {
+            toolsUsed += it
         }
-        throw IllegalStateException("O agente atingiu o limite de $MAX_TOOL_ROUNDS chamadas de ferramentas sem produzir uma resposta final.")
+        val output = chunks.toList().joinToString("").trim()
+        return AgentRunResult(agent, model, output, toolsUsed)
     }
 
+    /**
+     * Streams a profile run as it is generated. Reasoning is re-emitted inside one canonical
+     * `<think>…</think>` block (across tool rounds) so the chat can show it live; an answer that
+     * starts like a tool call is held back until it is known not to be one.
+     */
     suspend fun streamAgent(
         agentId: String?,
         messages: List<AiChatMessage>,
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
     ): Pair<AiModelEntity, Flow<String>> {
+        val (_, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {}
+        return model to chunks
+    }
+
+    private data class PreparedAgent(val agent: AgentEntity, val model: AiModelEntity, val chunks: Flow<String>)
+
+    private suspend fun prepareAgent(
+        agentId: String?,
+        messages: List<AiChatMessage>,
+        maxTokensOverride: Int?,
+        temperatureOverride: Float?,
+        onToolUsed: (String) -> Unit,
+    ): PreparedAgent {
         val agent = resolveAgent(agentId)
         val model = models.getModel(agent.modelId)
             ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
         requireVerified(model)
 
         val capability = DeepThinkSupport.capability(model)
-        val deepThinkLevel = if (capability.supported && deepThinkStore.isEnabled(agent.id)) {
-            deepThinkStore.getLevel(agent.id)
-        } else {
-            DeepThinkLevel.AUTO
-        }
-        val effectiveMaxTokens = DeepThinkSupport.effectiveMaxTokens(
-            maxTokensOverride ?: agent.maxTokens,
-            deepThinkLevel,
+        val deepThinkEnabled = deepThinkStore.isEnabled(agent.id)
+        val plan = DeepThinkSupport.plan(
+            model = model,
+            baseMaxTokens = maxTokensOverride ?: agent.maxTokens,
+            enabled = deepThinkEnabled,
+            level = deepThinkStore.getLevel(agent.id),
         )
-        val effectiveTemperature = temperatureOverride ?: agent.temperature
-        val systemPrompt = agent.systemPrompt + tools.promptInstructions()
+        val expectReasoning = capability.mode == DeepThinkControlMode.REASONING_MODEL ||
+            (capability.mode == DeepThinkControlMode.HYBRID_THINKING && deepThinkEnabled)
+        val systemPrompt = agent.systemPrompt + tools.promptInstructions() + plan.systemSuffix
+        val temperature = temperatureOverride ?: agent.temperature
 
-        return model to flow {
-            val working = messages.toMutableList()
-            var reasoningBlockOpen = false
-
-            repeat(MAX_TOOL_ROUNDS) {
-                val output = StringBuilder()
-                var mode = AgentStreamRoundMode.UNDECIDED
-                var reasoningPayloadStart = -1
-                var reasoningEmittedUntil = -1
-                var liveEmittedUntil = 0
-
+        val chunks = agentStream(
+            expectReasoning = expectReasoning,
+            maxRounds = MAX_TOOL_ROUNDS,
+            messages = messages,
+            generate = { working ->
                 runtime.streamComplete(
                     model = model,
                     systemPrompt = systemPrompt,
-                    messages = working,
-                    temperature = effectiveTemperature,
-                    maxTokens = effectiveMaxTokens,
-                ).collect { token ->
-                    output.append(token)
-                    val current = output.toString()
-                    if (mode == AgentStreamRoundMode.UNDECIDED) {
-                        mode = classifyAgentStreamRound(current)
-                    }
-
-                    when (mode) {
-                        AgentStreamRoundMode.REASONING -> {
-                            val open = REASONING_OPEN.find(current)
-                            if (open != null) {
-                                if (reasoningPayloadStart < 0) {
-                                    reasoningPayloadStart = open.range.last + 1
-                                    reasoningEmittedUntil = reasoningPayloadStart
-                                    if (!reasoningBlockOpen) {
-                                        emit("<think>")
-                                        reasoningBlockOpen = true
-                                    } else {
-                                        emit("\n\n")
-                                    }
-                                }
-
-                                val close = REASONING_CLOSE.find(current, reasoningPayloadStart)
-                                val safeEnd = if (close != null) {
-                                    close.range.first
-                                } else {
-                                    (current.length - trailingReasoningClosePrefixLength(current))
-                                        .coerceAtLeast(reasoningPayloadStart)
-                                }
-                                if (safeEnd > reasoningEmittedUntil) {
-                                    emit(current.substring(reasoningEmittedUntil, safeEnd))
-                                    reasoningEmittedUntil = safeEnd
-                                }
-                            }
-                        }
-
-                        AgentStreamRoundMode.LIVE_ANSWER -> {
-                            if (!reasoningBlockOpen && current.length > liveEmittedUntil) {
-                                emit(current.substring(liveEmittedUntil))
-                                liveEmittedUntil = current.length
-                            }
-                        }
-
-                        AgentStreamRoundMode.BUFFERED,
-                        AgentStreamRoundMode.UNDECIDED -> Unit
-                    }
+                    messages = withUserSuffix(working, plan.userSuffix),
+                    temperature = temperature,
+                    maxTokens = plan.maxTokens,
+                )
+            },
+            toolRound = { answer ->
+                tools.parseCall(answer)?.let { call ->
+                    val output = tools.execute(call)
+                    onToolUsed(call.name)
+                    ToolRoundResult(call.name, output)
                 }
+            },
+        )
+        return PreparedAgent(agent, model, chunks)
+    }
 
-                val finalOutput = output.toString()
-                val call = tools.parseCall(finalOutput)
-                if (call != null) {
-                    val result = tools.execute(call)
-                    working += AiChatMessage("assistant", finalOutput)
-                    working += AiChatMessage(
-                        "user",
-                        "[RESULTADO DA FERRAMENTA ${call.name}]\n$result\n\nUse este resultado para continuar atendendo a solicitação original.",
-                    )
-                } else {
-                    when (mode) {
-                        AgentStreamRoundMode.REASONING -> {
-                            val close = if (reasoningPayloadStart >= 0) {
-                                REASONING_CLOSE.find(finalOutput, reasoningPayloadStart)
-                            } else {
-                                null
-                            }
-                            val reasoningEnd = close?.range?.first ?: finalOutput.length
-                            if (reasoningEmittedUntil >= 0 && reasoningEnd > reasoningEmittedUntil) {
-                                emit(finalOutput.substring(reasoningEmittedUntil, reasoningEnd))
-                            }
-                            if (reasoningBlockOpen) {
-                                emit("</think>")
-                                reasoningBlockOpen = false
-                            }
-                            if (close != null && close.range.last + 1 < finalOutput.length) {
-                                emit(finalOutput.substring(close.range.last + 1))
-                            }
-                        }
-
-                        AgentStreamRoundMode.BUFFERED,
-                        AgentStreamRoundMode.UNDECIDED -> {
-                            if (reasoningBlockOpen) {
-                                emit("</think>")
-                                reasoningBlockOpen = false
-                            }
-                            if (finalOutput.isNotEmpty()) emit(finalOutput)
-                        }
-
-                        AgentStreamRoundMode.LIVE_ANSWER -> {
-                            if (reasoningBlockOpen) {
-                                emit("</think>")
-                                reasoningBlockOpen = false
-                                if (finalOutput.isNotEmpty()) emit(finalOutput)
-                            }
-                        }
-                    }
-                    return@flow
-                }
-            }
-
-            if (reasoningBlockOpen) emit("</think>")
-            throw IllegalStateException("O agente atingiu o limite de $MAX_TOOL_ROUNDS chamadas de ferramentas sem produzir uma resposta final.")
+    private fun withUserSuffix(messages: List<AiChatMessage>, suffix: String): List<AiChatMessage> {
+        if (suffix.isEmpty()) return messages
+        val lastUser = messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
+        if (lastUser < 0) return messages
+        return messages.mapIndexed { index, message ->
+            if (index == lastUser) message.copy(content = message.content.trimEnd() + suffix) else message
         }
     }
 
@@ -265,54 +163,5 @@ class AiOrchestrator(
         }
     }
 
-    companion object {
-        private const val MAX_TOOL_ROUNDS = 4
-        private val REASONING_OPEN = Regex("(?is)<(?:think(?:ing)?|reasoning|analysis)>")
-        private val REASONING_CLOSE = Regex("(?is)</(?:think(?:ing)?|reasoning|analysis)>")
-        private val REASONING_OPEN_TAGS = listOf("<think>", "<thinking>", "<reasoning>", "<analysis>")
-        private val REASONING_CLOSE_TAGS = listOf("</think>", "</thinking>", "</reasoning>", "</analysis>")
-
-        private fun classifyAgentStreamRound(content: String): AgentStreamRoundMode {
-            val trimmed = content.trimStart()
-            if (trimmed.isEmpty()) return AgentStreamRoundMode.UNDECIDED
-            val normalized = trimmed.lowercase()
-
-            if (REASONING_OPEN_TAGS.any { tag -> tag.startsWith(normalized) }) {
-                return AgentStreamRoundMode.UNDECIDED
-            }
-            if (REASONING_OPEN_TAGS.any { tag -> normalized.startsWith(tag) }) {
-                return AgentStreamRoundMode.REASONING
-            }
-
-            if (normalized == "`" || normalized == "``") {
-                return AgentStreamRoundMode.UNDECIDED
-            }
-            if (normalized.startsWith("{") || normalized.startsWith("```")) {
-                return AgentStreamRoundMode.BUFFERED
-            }
-            return AgentStreamRoundMode.LIVE_ANSWER
-        }
-
-        private fun trailingReasoningClosePrefixLength(content: String): Int {
-            val normalized = content.lowercase()
-            var best = 0
-            REASONING_CLOSE_TAGS.forEach { tag ->
-                val maxLength = minOf(tag.length - 1, normalized.length)
-                for (length in maxLength downTo 1) {
-                    if (normalized.endsWith(tag.take(length))) {
-                        best = maxOf(best, length)
-                        break
-                    }
-                }
-            }
-            return best
-        }
-    }
-
-    private enum class AgentStreamRoundMode {
-        UNDECIDED,
-        REASONING,
-        LIVE_ANSWER,
-        BUFFERED,
-    }
+    companion object { private const val MAX_TOOL_ROUNDS = 4 }
 }

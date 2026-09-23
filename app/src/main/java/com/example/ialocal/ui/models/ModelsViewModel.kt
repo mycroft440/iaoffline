@@ -12,6 +12,11 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.diagnostics.IntegrationTestState
+import com.example.ialocal.models.CatalogModel
+import com.example.ialocal.models.DownloadEntry
+import com.example.ialocal.models.DownloadEntryStatus
+import com.example.ialocal.models.ModelDownloadPhase
+import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
@@ -20,8 +25,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** One requested download as shown in the catalog and in Minhas I.As. */
+data class DownloadItemUi(
+    val model: CatalogModel,
+    val status: DownloadEntryStatus,
+    val state: ModelDownloadState,
+)
 
 class ModelsViewModel(
     private val repository: ModelRepository,
@@ -37,6 +50,14 @@ class ModelsViewModel(
     val serverState: StateFlow<ApiServerState> = apiServer.state
     val runtimeState: StateFlow<RuntimeState> = manager.runtimeState
     val downloadState = manager.downloadState
+
+    /** Every requested download with what to show for it; the live state feeds the active one. */
+    val downloads: StateFlow<List<DownloadItemUi>> = combine(manager.downloadQueue, manager.downloadState) { queue, live ->
+        queue.entries.mapNotNull { entry ->
+            val catalogModel = manager.catalog.firstOrNull { it.id == entry.catalogId } ?: return@mapNotNull null
+            DownloadItemUi(catalogModel, entry.status, displayState(entry, catalogModel, live))
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val catalog = manager.catalog.filter { it.totalParametersBillions < 15.0 }
 
     private val _isImporting = MutableStateFlow(false)
@@ -90,11 +111,58 @@ class ModelsViewModel(
         }
     }
 
+    /** Starts the download now, or queues it behind the one in progress. */
     fun downloadCatalogModel(catalogId: String) {
-        if (_isImporting.value || _operationText.value != null || manager.downloadState.value.isBusy) return
         _error.value = null
-        runCatching { manager.startBackgroundDownload(catalogId) }
+        runCatching { manager.enqueueDownload(catalogId) }
             .onFailure { _error.value = it.message ?: "Não foi possível iniciar o download em segundo plano." }
+    }
+
+    /** Continues a paused download, or retries a failed one, from its saved partial file. */
+    fun resumeDownload(catalogId: String) {
+        _error.value = null
+        runCatching { manager.resumeDownload(catalogId) }
+            .onFailure { _error.value = it.message ?: "Não foi possível continuar o download." }
+    }
+
+    /** Takes a download off the list and deletes its partial file; an active one is ended. */
+    fun removeDownload(catalogId: String) {
+        manager.removeDownload(catalogId)
+    }
+
+    private fun displayState(entry: DownloadEntry, catalogModel: CatalogModel, live: ModelDownloadState): ModelDownloadState {
+        if (entry.status == DownloadEntryStatus.ACTIVE && live.catalogId == entry.catalogId) return live
+        val saved = manager.savedDownloadBytes(entry.catalogId)
+        return when (entry.status) {
+            DownloadEntryStatus.ACTIVE -> ModelDownloadState(
+                catalogId = entry.catalogId,
+                phase = ModelDownloadPhase.CHECKING,
+                downloadedBytes = saved,
+                totalBytes = catalogModel.approximateSizeBytes,
+                message = "Preparando download…",
+            )
+            DownloadEntryStatus.QUEUED -> ModelDownloadState(
+                catalogId = entry.catalogId,
+                phase = ModelDownloadPhase.IDLE,
+                downloadedBytes = saved,
+                totalBytes = catalogModel.approximateSizeBytes,
+                message = "Na fila. Começa assim que o download atual for instalado.",
+            )
+            DownloadEntryStatus.PAUSED -> ModelDownloadState(
+                catalogId = entry.catalogId,
+                phase = ModelDownloadPhase.CANCELLED,
+                downloadedBytes = saved,
+                totalBytes = catalogModel.approximateSizeBytes,
+                message = entry.message ?: "Download pausado. Toque em Continuar para retomar do ponto salvo.",
+            )
+            DownloadEntryStatus.FAILED -> ModelDownloadState(
+                catalogId = entry.catalogId,
+                phase = ModelDownloadPhase.ERROR,
+                downloadedBytes = saved,
+                totalBytes = catalogModel.approximateSizeBytes,
+                message = entry.message ?: "O download falhou.",
+            )
+        }
     }
 
     /** Pauses the foreground-service transfer while preserving the partial file for HTTP Range resume. */

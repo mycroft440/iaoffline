@@ -5,28 +5,37 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.runtime.RuntimeLimits
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
+import java.io.IOException
 import java.io.InputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -238,33 +247,84 @@ class LocalApiServer(
             val result = orchestrator.runAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
             result.model to result.output
         } else {
-            orchestrator.chatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
+            orchestrator.chatCompletion(p.model, p.messages, p.maxTokens ?: DEFAULT_MAX_TOKENS, p.temperature)
         }
         return HttpResponse(200, fullCompletionJson(model.apiModelId, output).toString())
     }
 
-    private suspend fun writeChatStream(socket: Socket, body: String) {
+    private suspend fun writeChatStream(socket: Socket, body: String) = coroutineScope {
+        val generation = launch { streamChatResponse(socket, body) }
+        // Nothing else is sent after the request body, so a read only returns when the app closes
+        // the connection (its Stop button). Cancel the native generation right away in that case so
+        // the model is released for the next question instead of finishing an unwanted answer.
+        val disconnectWatcher = launch(Dispatchers.IO) {
+            val input = socket.getInputStream()
+            while (true) {
+                val next = try {
+                    input.read()
+                } catch (_: SocketTimeoutException) {
+                    continue // Only the read timed out; a long answer is still legitimately running.
+                } catch (_: IOException) {
+                    -1
+                }
+                if (next < 0) {
+                    generation.cancel()
+                    break
+                }
+            }
+        }
+        generation.join()
+        runCatching { socket.shutdownInput() }
+        disconnectWatcher.cancel()
+    }
+
+    private suspend fun streamChatResponse(socket: Socket, body: String) {
         val out = BufferedOutputStream(socket.getOutputStream())
         var headersSent = false
         try {
             val p = parseChat(body)
-            val (model, chunks) = if (p.agentId != null) {
-                orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
-            } else {
-                val stream = orchestrator.streamChatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
-                stream.model to stream.chunks
-            }
-            val id = "chatcmpl-${UUID.randomUUID()}"
-            val created = System.currentTimeMillis() / 1000
+            // Headers go out immediately so the client's read timeout only measures silence. Loading
+            // a model or holding back a possible tool call can be silent for a while, so keep-alive
+            // comments are written in between; the mutex keeps them from interleaving with events.
             writeSseHeaders(out)
             headersSent = true
-            writeSse(out, chunkJson(id, created, model.apiModelId, JSONObject().put("role", "assistant"), JSONObject.NULL))
-            chunks.collect { token ->
-                writeSse(out, chunkJson(id, created, model.apiModelId, JSONObject().put("content", token), JSONObject.NULL))
+            val writeLock = Mutex()
+            coroutineScope {
+                val keepAlive = launch {
+                    while (true) {
+                        delay(KEEP_ALIVE_INTERVAL_MS)
+                        writeLock.withLock { writeSseComment(out) }
+                    }
+                }
+                try {
+                    val (model, chunks) = if (p.agentId != null) {
+                        orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
+                    } else {
+                        val stream = orchestrator.streamChatCompletion(
+                            p.model,
+                            p.messages,
+                            p.maxTokens ?: DEFAULT_MAX_TOKENS,
+                            p.temperature,
+                        )
+                        stream.model to stream.chunks
+                    }
+                    val id = "chatcmpl-${UUID.randomUUID()}"
+                    val created = System.currentTimeMillis() / 1000
+                    suspend fun send(data: String) = writeLock.withLock { writeSse(out, data) }
+                    send(chunkJson(id, created, model.apiModelId, JSONObject().put("role", "assistant"), JSONObject.NULL))
+                    chunks.collect { token ->
+                        send(chunkJson(id, created, model.apiModelId, JSONObject().put("content", token), JSONObject.NULL))
+                    }
+                    send(chunkJson(id, created, model.apiModelId, JSONObject(), "stop"))
+                    send("[DONE]")
+                } finally {
+                    keepAlive.cancelAndJoin()
+                }
             }
-            writeSse(out, chunkJson(id, created, model.apiModelId, JSONObject(), "stop"))
-            writeSse(out, "[DONE]")
             logger?.info("API_RESPONSE", "POST /v1/chat/completions -> 200 SSE")
+        } catch (cancel: CancellationException) {
+            logger?.info("API_RESPONSE", "Cliente encerrou o streaming; geração cancelada")
+            throw cancel
         } catch (t: Throwable) {
             logger?.error("API_RESPONSE", "Falha durante SSE", t)
             runCatching {
@@ -313,7 +373,8 @@ class LocalApiServer(
             model = json.optString("model").takeIf { it.isNotBlank() },
             agentId = json.optString("agent_id").takeIf { it.isNotBlank() },
             messages = parseMessages(json.getJSONArray("messages")),
-            maxTokens = json.optInt("max_tokens", 1024).coerceIn(16, 4096),
+            // Absent means "use the profile budget" for agent runs.
+            maxTokens = if (json.has("max_tokens")) json.getInt("max_tokens").coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS) else null,
             temperature = requestedTemperature,
         )
     }
@@ -364,6 +425,12 @@ class LocalApiServer(
                 "Cache-Control: no-cache\r\n" +
                 "Connection: close\r\n\r\n").toByteArray(StandardCharsets.UTF_8)
         )
+        out.flush()
+    }
+
+    /** SSE comment line; clients skip it, but it keeps the connection from looking idle. */
+    private fun writeSseComment(out: BufferedOutputStream) {
+        out.write(": keep-alive\n\n".toByteArray(StandardCharsets.UTF_8))
         out.flush()
     }
 
@@ -457,7 +524,7 @@ class LocalApiServer(
         val model: String?,
         val agentId: String?,
         val messages: List<AiChatMessage>,
-        val maxTokens: Int,
+        val maxTokens: Int?,
         val temperature: Float,
     )
 
@@ -465,5 +532,7 @@ class LocalApiServer(
         private const val MAX_HEADER_BYTES = 64 * 1024
         private const val MAX_BODY_BYTES = 4 * 1024 * 1024
         private const val MAX_ACTIVE_CLIENTS = 8
+        private const val KEEP_ALIVE_INTERVAL_MS = 15_000L
+        private const val DEFAULT_MAX_TOKENS = 1024
     }
 }

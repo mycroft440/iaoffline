@@ -2,6 +2,7 @@ package com.example.ialocal.models
 
 import android.content.Context
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.runtime.RuntimeLimits
 
 enum class DeepThinkLevel(val storedValue: Int, val label: String, val minimumOutputTokens: Int) {
     AUTO(0, "Automático", 0),
@@ -29,26 +30,34 @@ data class DeepThinkCapability(
     val supported: Boolean get() = mode != DeepThinkControlMode.NONE
 }
 
+/** How a model is asked to reason for one request. */
+data class ReasoningPlan(
+    val maxTokens: Int,
+    /** Text appended to the system prompt, e.g. Nemotron's `/no_think`. */
+    val systemSuffix: String = "",
+    /** Text appended to the latest user message, e.g. Qwen3's `/no_think`. */
+    val userSuffix: String = "",
+)
+
 object DeepThinkSupport {
     fun capability(model: AiModelEntity): DeepThinkCapability {
         val identity = "${model.name} ${model.apiModelId} ${model.architecture.orEmpty()}".lowercase()
 
         return when {
-            identity.contains("qwen3-coder") || identity.contains("qwen3 coder") -> DeepThinkCapability(
+            identity.contains("qwen3-coder") || identity.contains("qwen3 coder") ||
+                QWEN3_NON_THINKING.containsMatchIn(identity) -> DeepThinkCapability(
                 DeepThinkControlMode.NONE,
-                "Esta variante Qwen Coder não oferece modo DeepThink.",
+                "Esta variante não oferece modo DeepThink.",
             )
-            identity.contains("deepseek-r1") || identity.contains("deepseek r1") -> DeepThinkCapability(
+            ALWAYS_REASONING.containsMatchIn(identity) -> DeepThinkCapability(
                 DeepThinkControlMode.REASONING_MODEL,
-                "Modelo compatível com DeepThink. O nível ajusta o orçamento de geração disponível.",
+                "Este modelo sempre raciocina antes de responder; o raciocínio não pode ser desligado.",
             )
-            identity.contains("phi-4-reasoning") || identity.contains("phi 4 reasoning") -> DeepThinkCapability(
-                DeepThinkControlMode.REASONING_MODEL,
-                "Modelo compatível com DeepThink. O nível ajusta o orçamento de geração disponível.",
-            )
-            identity.contains("qwen3") || identity.contains("qwen-3") -> DeepThinkCapability(
+            // Qwen3 and Nemotron Nano v2 accept the /think and /no_think switches. Qwen3.5 and
+            // later dropped them, so those always reason (matched above).
+            QWEN3_HYBRID.containsMatchIn(identity) || NEMOTRON_V2.containsMatchIn(identity) -> DeepThinkCapability(
                 DeepThinkControlMode.HYBRID_THINKING,
-                "Modelo híbrido compatível com DeepThink. O nível ajusta o orçamento de geração disponível.",
+                "Modelo híbrido: o DeepThink liga ou desliga o raciocínio e ajusta o orçamento de geração.",
             )
             else -> DeepThinkCapability(
                 DeepThinkControlMode.NONE,
@@ -57,10 +66,42 @@ object DeepThinkSupport {
         }
     }
 
+    /**
+     * Resolves the token budget and thinking switch for a request. Models that always reason get the
+     * largest budget, because a truncated reasoning never reaches the answer. Hybrid models reason
+     * only when the user enabled DeepThink; otherwise they are explicitly told not to think.
+     */
+    fun plan(model: AiModelEntity, baseMaxTokens: Int, enabled: Boolean, level: DeepThinkLevel): ReasoningPlan {
+        val capability = capability(model)
+        return when (capability.mode) {
+            DeepThinkControlMode.NONE -> ReasoningPlan(effectiveMaxTokens(baseMaxTokens, DeepThinkLevel.AUTO))
+            DeepThinkControlMode.REASONING_MODEL -> ReasoningPlan(RuntimeLimits.MAX_OUTPUT_TOKENS)
+            DeepThinkControlMode.HYBRID_THINKING -> if (enabled) {
+                ReasoningPlan(effectiveMaxTokens(baseMaxTokens, level))
+            } else {
+                val identity = "${model.name} ${model.apiModelId}".lowercase()
+                val nemotron = NEMOTRON_V2.containsMatchIn(identity)
+                ReasoningPlan(
+                    maxTokens = effectiveMaxTokens(baseMaxTokens, DeepThinkLevel.AUTO),
+                    systemSuffix = if (nemotron) "\n/no_think" else "",
+                    userSuffix = if (nemotron) "" else " /no_think",
+                )
+            }
+        }
+    }
+
+    private val QWEN3_NON_THINKING = Regex("qwen3[^a-z]*[\\w.-]*instruct-2507")
+    private val ALWAYS_REASONING = Regex(
+        "deepseek[- ]r1|phi[- ]4[- ]reasoning|reasoning|magistral|qwq|olmo[- ]?3[\\w .-]*think|" +
+            "qwen3[.]\\d|qwen3[\\w.-]*thinking-2507",
+    )
+    private val QWEN3_HYBRID = Regex("qwen-?3(?![.\\d])")
+    private val NEMOTRON_V2 = Regex("nemotron[\\w .-]*nano[\\w .-]*v2")
+
     fun effectiveMaxTokens(baseMaxTokens: Int, level: DeepThinkLevel): Int {
-        val base = baseMaxTokens.coerceIn(16, 4096)
+        val base = baseMaxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
         if (level == DeepThinkLevel.AUTO) return base
-        return maxOf(base, level.minimumOutputTokens).coerceAtMost(4096)
+        return maxOf(base, level.minimumOutputTokens).coerceAtMost(RuntimeLimits.MAX_OUTPUT_TOKENS)
     }
 }
 

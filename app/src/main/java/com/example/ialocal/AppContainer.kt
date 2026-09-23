@@ -7,6 +7,7 @@ import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.api.ApiSettingsRepository
 import com.example.ialocal.api.LocalApiAiGateway
 import com.example.ialocal.api.LocalApiServer
+import com.example.ialocal.chat.ChatGenerationManager
 import com.example.ialocal.data.AppDatabase
 import com.example.ialocal.data.ChatRepository
 import com.example.ialocal.data.ThemeRepository
@@ -61,6 +62,13 @@ class AppContainer(context: Context) {
         apiSettings,
         attachmentContextBuilder,
         diagnostics,
+    )
+    val chatGenerationManager = ChatGenerationManager(
+        appContext,
+        chatRepository,
+        aiGateway,
+        modelRepository,
+        modelManager,
     )
 
     init {

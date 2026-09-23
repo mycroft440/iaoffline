@@ -54,6 +54,19 @@ class ModelManager(
     private val _downloadState = MutableStateFlow(ModelDownloadState())
     val downloadState: StateFlow<ModelDownloadState> = _downloadState.asStateFlow()
 
+    private val queuePreferences = appContext.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+    private val queueLock = Any()
+    // Loaded in a fresh process, so an ACTIVE entry was interrupted; it goes back to the front of the line.
+    private val _downloadQueue = MutableStateFlow(
+        DownloadQueue.decode(queuePreferences.getString(KEY_QUEUE, null)).recoverInterrupted(),
+    )
+    /** Every download the user asked for, in order: the active one, the waiting ones, paused and failed. */
+    val downloadQueue: StateFlow<DownloadQueue> = _downloadQueue.asStateFlow()
+
+    /** True while [ModelDownloadService] owns a transfer (including the pause between queued ones). */
+    @Volatile internal var transferRunning = false
+        private set
+
     suspend fun inspect(uri: Uri): ModelImportPreview = repository.inspectForImport(uri)
 
     suspend fun importAndVerify(preview: ModelImportPreview): AiModelEntity {
@@ -143,10 +156,123 @@ class ModelManager(
         )
     }
 
-    /** Starts a foreground-service-owned transfer so leaving the screen does not cancel it. */
-    fun startBackgroundDownload(catalogId: String) {
+    /**
+     * Adds a catalog model to the download queue. Downloads run one at a time in a foreground service,
+     * so leaving the screen does not cancel them; the next queued one starts as soon as the current
+     * one is installed (or fails).
+     */
+    fun enqueueDownload(catalogId: String) {
         ModelCatalog.requireById(catalogId)
-        ModelDownloadService.start(appContext, catalogId)
+        updateQueue { it.enqueue(catalogId) }
+        startNextIfIdle()
+    }
+
+    /** Continues a paused or failed download from its partial file, ahead of the waiting ones. */
+    fun resumeDownload(catalogId: String) {
+        ModelCatalog.requireById(catalogId)
+        updateQueue { it.resume(catalogId) }
+        startNextIfIdle()
+    }
+
+    /** Removes a download from the list, discarding its partial file; an active one is ended first. */
+    fun removeDownload(catalogId: String) {
+        if (_downloadQueue.value.entry(catalogId)?.status == DownloadEntryStatus.ACTIVE) {
+            ModelDownloadService.end(appContext, catalogId)
+            return
+        }
+        updateQueue { it.remove(catalogId) }
+        discardDownloadFiles(catalogId)
+        if (_downloadState.value.catalogId == catalogId && !_downloadState.value.isBusy) {
+            _downloadState.value = ModelDownloadState()
+        }
+    }
+
+    /** After the app process was killed mid-download, continues the queue from the saved files. */
+    fun resumeQueueAfterRestart() {
+        if (transferRunning || _downloadState.value.isBusy) return
+        startNextIfIdle()
+    }
+
+    /** Bytes already saved for a download that is not running, to show its progress. */
+    fun savedDownloadBytes(catalogId: String): Long {
+        val downloadDir = File(appContext.filesDir, "model-downloads")
+        val complete = File(downloadDir, "$catalogId.gguf")
+        return if (complete.isFile) complete.length() else File(downloadDir, "$catalogId.part").length()
+    }
+
+    private fun startNextIfIdle() {
+        val next = synchronized(queueLock) {
+            if (transferRunning || _downloadQueue.value.active != null) return
+            _downloadQueue.value.nextQueued?.catalogId
+        } ?: return
+        runCatching { ModelDownloadService.start(appContext, next) }
+            .onFailure { error ->
+                updateQueue { it.markFailed(next, error.message ?: "Não foi possível iniciar o download em segundo plano.") }
+            }
+    }
+
+    /** Called by the service when it takes ownership of a transfer. */
+    internal fun onTransferStarted(catalogId: String) {
+        synchronized(queueLock) {
+            transferRunning = true
+            updateQueue { it.markActive(catalogId) }
+        }
+    }
+
+    /**
+     * Called by the service when a transfer ended on its own (installed or failed). Records the
+     * outcome and claims the next queued download, if any, for the same service to run.
+     */
+    internal fun onTransferFinished(catalogId: String): String? {
+        val state = _downloadState.value
+        updateQueue { queue ->
+            if (state.catalogId == catalogId && state.phase == ModelDownloadPhase.COMPLETE) {
+                queue.remove(catalogId)
+            } else {
+                queue.markFailed(catalogId, state.message ?: "O download foi interrompido.")
+            }
+        }
+        return claimNextQueued()
+    }
+
+    /** Marks the next waiting download active for the running service, or releases the service. */
+    internal fun claimNextQueued(): String? = synchronized(queueLock) {
+        val next = _downloadQueue.value.nextQueued?.catalogId
+        if (next != null) {
+            updateQueue { it.markActive(next) }
+        } else {
+            transferRunning = false
+        }
+        next
+    }
+
+    /** Drops an entry the service cannot run, whatever its status. */
+    internal fun forgetDownload(catalogId: String) {
+        updateQueue { it.remove(catalogId) }
+        discardDownloadFiles(catalogId)
+    }
+
+    /** Called when the service stops without claiming a next download (e.g. Android's time limit). */
+    internal fun onTransferServiceStopped() {
+        transferRunning = false
+    }
+
+    private fun updateQueue(change: (DownloadQueue) -> DownloadQueue) {
+        synchronized(queueLock) {
+            val updated = change(_downloadQueue.value)
+            if (updated == _downloadQueue.value) return
+            _downloadQueue.value = updated
+            queuePreferences.edit().putString(KEY_QUEUE, updated.encode()).apply()
+        }
+    }
+
+    private suspend fun installedCatalogModel(catalogModel: CatalogModel): AiModelEntity? =
+        repository.getModels().firstOrNull { it.apiModelId.startsWith(catalogModel.apiIdPrefix) }
+
+    private fun discardDownloadFiles(catalogId: String) {
+        val downloadDir = File(appContext.filesDir, "model-downloads")
+        File(downloadDir, "$catalogId.part").delete()
+        File(downloadDir, "$catalogId.gguf").delete()
     }
 
     fun pauseBackgroundDownload() {
@@ -160,6 +286,17 @@ class ModelManager(
     suspend fun downloadAndVerify(catalogId: String): AiModelEntity {
         check(!_downloadState.value.isBusy) { "Já existe um download ou verificação de modelo em andamento." }
         val catalogModel = ModelCatalog.requireById(catalogId)
+        // Android can restart the download service after the app was killed during the final test
+        // (e.g. out of memory). The model is already registered by then, so never download it again.
+        installedCatalogModel(catalogModel)?.let { installed ->
+            _downloadState.value = ModelDownloadState(
+                catalogId = catalogId,
+                phase = ModelDownloadPhase.COMPLETE,
+                message = "${catalogModel.displayName} já está instalada.",
+            )
+            logger?.info("MODEL_DOWNLOAD", "Download ignorado: ${catalogModel.displayName} já está instalada.")
+            return installed
+        }
         return try {
             val file = downloader.download(catalogModel) { _downloadState.value = it }
             _downloadState.value = _downloadState.value.copy(
@@ -219,29 +356,26 @@ class ModelManager(
 
     internal fun markDownloadPausedByUser(catalogId: String?) {
         val current = _downloadState.value
+        val message = "Download pausado. Toque em Continuar para retomar do ponto salvo."
         if (catalogId == null || current.catalogId == catalogId) {
-            _downloadState.value = current.copy(
-                phase = ModelDownloadPhase.CANCELLED,
-                message = "Download pausado pelo usuário. Toque em Continuar para retomar do ponto salvo.",
-            )
+            _downloadState.value = current.copy(phase = ModelDownloadPhase.CANCELLED, message = message)
         }
+        (catalogId ?: current.catalogId)?.let { id -> updateQueue { it.markPaused(id, message) } }
     }
 
     internal fun markDownloadPausedBySystem(catalogId: String?) {
         val current = _downloadState.value
+        val message = "O Android pausou o download por um limite do sistema. Toque em Continuar para retomar do ponto salvo."
         if (catalogId == null || current.catalogId == catalogId) {
-            _downloadState.value = current.copy(
-                phase = ModelDownloadPhase.CANCELLED,
-                message = "O Android pausou o download por um limite do sistema. Toque em Continuar para retomar do ponto salvo.",
-            )
+            _downloadState.value = current.copy(phase = ModelDownloadPhase.CANCELLED, message = message)
         }
+        (catalogId ?: current.catalogId)?.let { id -> updateQueue { it.markPaused(id, message) } }
     }
 
     /** Ends the pending transfer and discards only downloader-owned files, never an installed model. */
     internal fun discardDownload(catalogId: String) {
-        val downloadDir = File(appContext.filesDir, "model-downloads")
-        File(downloadDir, "$catalogId.part").delete()
-        File(downloadDir, "$catalogId.gguf").delete()
+        discardDownloadFiles(catalogId)
+        updateQueue { it.remove(catalogId) }
         _downloadState.value = ModelDownloadState()
         logger?.info("MODEL_DOWNLOAD", "Download encerrado pelo usuário: $catalogId")
     }
@@ -330,6 +464,11 @@ class ModelManager(
     }
 
     suspend fun unload() = runtime.unload()
+
+    private companion object {
+        const val QUEUE_PREFS = "model_download_queue"
+        const val KEY_QUEUE = "entries"
+    }
 
     private fun catalogIdForInstalledModel(model: AiModelEntity): String? =
         ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }?.id

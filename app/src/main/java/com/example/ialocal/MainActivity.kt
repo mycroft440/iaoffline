@@ -1,19 +1,29 @@
 package com.example.ialocal
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -22,6 +32,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.ads.AdsManager
 import com.example.ialocal.data.ThemeMode
+import com.example.ialocal.diagnostics.LastExitReport
+import com.example.ialocal.diagnostics.LastExitReporter
+import com.example.ialocal.models.AutomaticModelImportEvent
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.models.PublicModelDownloads
 import com.example.ialocal.ui.chat.ChatViewModel
@@ -40,11 +53,13 @@ import com.example.ialocal.ui.settings.SettingsViewModel
 import com.example.ialocal.ui.theme.LocalAiTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var container: AppContainer
     private lateinit var adsManager: AdsManager
     private var pendingStorageAction: (() -> Unit)? = null
+    private var lastExitReport by mutableStateOf<LastExitReport?>(null)
 
     // ComponentActivity owns the Activity Result registry; this activity does not use Fragment.
     @SuppressLint("InvalidFragmentVersionForActivityResult")
@@ -82,11 +97,60 @@ class MainActivity : ComponentActivity() {
                     onPrivacyOptions = { adsManager.showPrivacyOptions(this) },
                     onExitApp = { finish() },
                 )
+                lastExitReport?.let { report ->
+                    AlertDialog(
+                        onDismissRequest = { lastExitReport = null },
+                        title = { Text("O app foi fechado inesperadamente") },
+                        text = {
+                            Text(
+                                report.summary + "\n\nSe isso aconteceu ao usar uma IA, copie os detalhes e envie para análise.",
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    val clipboard = getSystemService(ClipboardManager::class.java)
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("Detalhes do fechamento", report.details))
+                                    Toast.makeText(this@MainActivity, "Detalhes copiados.", Toast.LENGTH_SHORT).show()
+                                    lastExitReport = null
+                                },
+                            ) { Text("Copiar detalhes") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { lastExitReport = null }) { Text("Fechar") }
+                        },
+                    )
+                }
             }
         }
 
+        if (savedInstanceState == null) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val report = LastExitReporter(applicationContext, container.diagnostics).takeUnreportedExit()
+                if (report != null) withContext(Dispatchers.Main) { lastExitReport = report }
+            }
+        }
+
+        showStorageImportNotices()
+        // Downloads interrupted by the app being killed pick up from their partial files.
+        container.modelManager.resumeQueueAfterRestart()
         runInitialStorageScanOnce()
         adsManager.start(this)
+    }
+
+    /** Tells the user, on any screen, when an AI is found in storage and when it is imported. */
+    private fun showStorageImportNotices() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                container.automaticModelImporter.events.collect { event ->
+                    val message = when (event) {
+                        is AutomaticModelImportEvent.Found -> "IA encontrada no armazenamento: ${event.modelName}"
+                        is AutomaticModelImportEvent.Importing -> "Importando ${event.modelName} para o app..."
+                    }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     private fun runInitialStorageScanOnce() {
@@ -186,6 +250,7 @@ private fun LocalAiApp(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
                 onScanStorage = onScanStorage,
+                onEnsureStorageAccess = onEnsureStorageAccess,
                 importProgress = importProgress,
                 onBack = { navController.popBackStack() },
                 onOpenChat = { modelId ->
@@ -265,11 +330,10 @@ private fun LocalAiApp(
                     conversationId = id,
                     initialModelId = initialModelId,
                     repository = container.chatRepository,
-                    aiGateway = container.aiGateway,
+                    generationManager = container.chatGenerationManager,
                     attachmentImporter = container.attachmentImporter,
                     attachmentProcessor = container.attachmentProcessor,
                     modelRepository = container.modelRepository,
-                    modelManager = container.modelManager,
                 ),
             )
             ChatWithDeepThinkScreen(

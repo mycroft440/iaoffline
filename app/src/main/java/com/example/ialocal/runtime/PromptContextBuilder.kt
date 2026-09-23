@@ -21,7 +21,10 @@ class PromptContextBuilder {
         require(latestUser.isNotBlank()) { "A última mensagem do usuário está vazia." }
 
         // Conservative approximation. Native context is 8192 in the pinned Android binding.
-        val usableInputTokens = (contextTokens - maxOutputTokens - TOKEN_HEADROOM).coerceAtLeast(1024)
+        // Reserve at most half the context for the answer so the history keeps room; a longer
+        // answer continues through the native context shift.
+        val reservedOutput = minOf(maxOutputTokens, contextTokens / 2)
+        val usableInputTokens = (contextTokens - reservedOutput - TOKEN_HEADROOM).coerceAtLeast(1024)
         val charBudget = usableInputTokens * APPROX_CHARS_PER_TOKEN
         val base = baseSystemPrompt.trim().ifBlank { DEFAULT_FALLBACK_SYSTEM }
         val historyBudget = (charBudget - base.length - latestUser.length - 512).coerceAtLeast(0)
