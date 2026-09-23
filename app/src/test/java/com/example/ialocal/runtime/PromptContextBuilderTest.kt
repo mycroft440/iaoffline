@@ -45,4 +45,22 @@ class PromptContextBuilderTest {
         assertTrue(result.truncated)
         assertEquals("agora", result.latestUser)
     }
+
+    @Test
+    fun maximumAnswerBudgetStillLeavesRoomForHistory() {
+        val history = "h".repeat(5000)
+        val result = builder.prepare(
+            baseSystemPrompt = "Sistema",
+            messages = listOf(
+                AiChatMessage("user", history),
+                AiChatMessage("assistant", "ok"),
+                AiChatMessage("user", "continue"),
+            ),
+            contextTokens = 8192,
+            maxOutputTokens = RuntimeLimits.MAX_OUTPUT_TOKENS,
+        )
+
+        assertFalse(result.truncated)
+        assertTrue(result.systemPrompt.contains(history))
+    }
 }

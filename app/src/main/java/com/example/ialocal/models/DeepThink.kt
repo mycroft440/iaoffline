@@ -2,6 +2,7 @@ package com.example.ialocal.models
 
 import android.content.Context
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.runtime.RuntimeLimits
 
 enum class DeepThinkLevel(val storedValue: Int, val label: String, val minimumOutputTokens: Int) {
     AUTO(0, "Automático", 0),
@@ -74,7 +75,7 @@ object DeepThinkSupport {
         val capability = capability(model)
         return when (capability.mode) {
             DeepThinkControlMode.NONE -> ReasoningPlan(effectiveMaxTokens(baseMaxTokens, DeepThinkLevel.AUTO))
-            DeepThinkControlMode.REASONING_MODEL -> ReasoningPlan(effectiveMaxTokens(baseMaxTokens, DeepThinkLevel.HIGH))
+            DeepThinkControlMode.REASONING_MODEL -> ReasoningPlan(RuntimeLimits.MAX_OUTPUT_TOKENS)
             DeepThinkControlMode.HYBRID_THINKING -> if (enabled) {
                 ReasoningPlan(effectiveMaxTokens(baseMaxTokens, level))
             } else {
@@ -98,9 +99,9 @@ object DeepThinkSupport {
     private val NEMOTRON_V2 = Regex("nemotron[\\w .-]*nano[\\w .-]*v2")
 
     fun effectiveMaxTokens(baseMaxTokens: Int, level: DeepThinkLevel): Int {
-        val base = baseMaxTokens.coerceIn(16, 4096)
+        val base = baseMaxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
         if (level == DeepThinkLevel.AUTO) return base
-        return maxOf(base, level.minimumOutputTokens).coerceAtMost(4096)
+        return maxOf(base, level.minimumOutputTokens).coerceAtMost(RuntimeLimits.MAX_OUTPUT_TOKENS)
     }
 }
 

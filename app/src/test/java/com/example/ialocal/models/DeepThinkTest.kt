@@ -52,7 +52,8 @@ class DeepThinkTest {
         assertEquals(1536, DeepThinkSupport.effectiveMaxTokens(1024, DeepThinkLevel.LOW))
         assertEquals(2560, DeepThinkSupport.effectiveMaxTokens(1024, DeepThinkLevel.MEDIUM))
         assertEquals(4096, DeepThinkSupport.effectiveMaxTokens(1024, DeepThinkLevel.HIGH))
-        assertEquals(4096, DeepThinkSupport.effectiveMaxTokens(9000, DeepThinkLevel.HIGH))
+        assertEquals(8192, DeepThinkSupport.effectiveMaxTokens(8192, DeepThinkLevel.LOW))
+        assertEquals(8192, DeepThinkSupport.effectiveMaxTokens(20_000, DeepThinkLevel.HIGH))
     }
 
     @Test
@@ -104,7 +105,7 @@ class DeepThinkTest {
         assertEquals("", enabled.userSuffix)
 
         val r1 = model("DeepSeek R1 Distill 7B", "local-catalog-deepseek-r1-distill-qwen-7b-1")
-        assertEquals(4096, DeepThinkSupport.plan(r1, 1024, enabled = false, level = DeepThinkLevel.AUTO).maxTokens)
+        assertEquals(8192, DeepThinkSupport.plan(r1, 1024, enabled = false, level = DeepThinkLevel.AUTO).maxTokens)
     }
 
     private fun model(name: String, apiModelId: String) = AiModelEntity(

@@ -88,7 +88,7 @@ class LlamaCppRuntime(
                 baseSystemPrompt = systemPrompt,
                 messages = messages,
                 contextTokens = model.contextLength,
-                maxOutputTokens = maxTokens.coerceIn(16, 4096),
+                maxOutputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
             )
             if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
 
@@ -99,7 +99,7 @@ class LlamaCppRuntime(
             var emitted = 0
             engine.sendUserPrompt(
                 message = prepared.latestUser,
-                predictLength = maxTokens.coerceIn(16, 4096),
+                predictLength = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
             ).collect { chunk ->
                 if (chunk.isNotEmpty()) {
                     emitted += chunk.length

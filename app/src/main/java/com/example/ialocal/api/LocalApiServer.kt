@@ -5,6 +5,7 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.runtime.RuntimeLimits
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
@@ -373,7 +374,7 @@ class LocalApiServer(
             agentId = json.optString("agent_id").takeIf { it.isNotBlank() },
             messages = parseMessages(json.getJSONArray("messages")),
             // Absent means "use the profile budget" for agent runs.
-            maxTokens = if (json.has("max_tokens")) json.getInt("max_tokens").coerceIn(16, 4096) else null,
+            maxTokens = if (json.has("max_tokens")) json.getInt("max_tokens").coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS) else null,
             temperature = requestedTemperature,
         )
     }
