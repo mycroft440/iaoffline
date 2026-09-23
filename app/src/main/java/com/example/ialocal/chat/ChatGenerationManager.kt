@@ -17,11 +17,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class QueuedChatMessage(
     val content: String,
@@ -212,8 +214,14 @@ class ChatGenerationManager(
 
         val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
         val startedAt = System.currentTimeMillis()
+        var reasoningStartedAt: Long? = null
         var reasoningEndedAt: Long? = null
-        var accumulated = ""
+        val accumulated = StringBuilder()
+        fun finalContent(): String {
+            val now = System.currentTimeMillis()
+            val reasoningMs = reasoningStartedAt?.let { start -> (reasoningEndedAt ?: now) - start }
+            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs)
+        }
         try {
             aiGateway.streamChat(
                 AiChatRequest(
@@ -223,19 +231,23 @@ class ChatGenerationManager(
                     agentId = agent.id,
                 )
             ).collect { chunk ->
-                accumulated += chunk
-                if (reasoningEndedAt == null && REASONING_CLOSE.containsMatchIn(accumulated)) {
+                accumulated.append(chunk)
+                val text = accumulated.toString()
+                if (reasoningStartedAt == null && AssistantContent.hasReasoningStarted(text)) {
+                    reasoningStartedAt = System.currentTimeMillis()
+                }
+                if (reasoningStartedAt != null && reasoningEndedAt == null && AssistantContent.hasReasoningEnded(text)) {
                     reasoningEndedAt = System.currentTimeMillis()
                 }
-                repository.updateMessageContent(replyId, accumulated)
+                repository.updateMessageContent(replyId, text)
             }
-            val elapsed = (reasoningEndedAt ?: System.currentTimeMillis()) - startedAt
-            repository.updateMessageContent(replyId, appendReasoningMetadata(accumulated, elapsed))
+            repository.updateMessageContent(replyId, finalContent())
             repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
         } catch (cancel: CancellationException) {
-            val elapsed = (reasoningEndedAt ?: System.currentTimeMillis()) - startedAt
-            repository.updateMessageContent(replyId, appendReasoningMetadata(accumulated, elapsed))
-            repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
+            withContext(NonCancellable) {
+                repository.updateMessageContent(replyId, finalContent())
+                repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
+            }
             throw cancel
         } catch (t: Throwable) {
             repository.updateMessageStatus(replyId, MessageStatus.ERROR)
@@ -255,7 +267,7 @@ class ChatGenerationManager(
             }
         }
         val baseContent = if (item.message.role == MessageRole.ASSISTANT.name) {
-            assistantAnswerForHistory(item.message.content)
+            AssistantContent.answerForHistory(item.message.content)
         } else {
             item.message.content
         }
@@ -264,25 +276,8 @@ class ChatGenerationManager(
         return AiChatMessage(item.message.role.lowercase(), content)
     }
 
-    private fun assistantAnswerForHistory(raw: String): String {
-        val withoutMetadata = REASONING_METADATA.replace(raw, "").trim()
-        val tagged = REASONING_BLOCK.find(withoutMetadata)
-        if (tagged != null) {
-            return withoutMetadata.removeRange(tagged.range).trim()
-        }
-        return withoutMetadata
-    }
-
-    private fun appendReasoningMetadata(content: String, elapsedMs: Long): String {
-        val clean = REASONING_METADATA.replace(content, "").trimEnd()
-        return "$clean\n\n<!--nexus_reasoning_ms:${elapsedMs.coerceAtLeast(0L)}-->"
-    }
-
     companion object {
         private const val MAX_HISTORY_ATTACHMENT_PER_FILE = 4_000
         private const val MAX_HISTORY_ATTACHMENT_CHARS = 6_000
-        private val REASONING_CLOSE = Regex("(?is)</think(?:ing)?>")
-        private val REASONING_BLOCK = Regex("(?is)<think(?:ing)?>(.*?)</think(?:ing)?>")
-        private val REASONING_METADATA = Regex("(?is)\\s*<!--nexus_reasoning_ms:(\\d+)-->\\s*$")
     }
 }

@@ -33,6 +33,8 @@ Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downlo
 
 As respostas da I.A continuam sendo geradas quando o app vai para segundo plano, quando a tela é desligada ou quando o usuário sai da conversa. Enquanto houver uma resposta ou mensagens na fila, um serviço em primeiro plano mostra a notificação **Gerando resposta…** (com a ação **Parar**) e mantém a CPU ativa; ele é encerrado automaticamente quando a geração termina.
 
+Modelos que raciocinam mostram o raciocínio enquanto ele é gerado, num bloco **Raciocínio** que pode ser expandido ou recolhido; ao terminar, o bloco se recolhe e exibe quanto tempo o modelo raciocinou, e cada resposta mostra o tempo total (**Respondeu em …**). O seletor **DeepThink** aparece apenas nos modelos em que o raciocínio pode ser ligado e desligado (Qwen3 e Nemotron Nano v2); com ele desligado, o app envia `/no_think`. Modelos que sempre raciocinam (DeepSeek R1, Qwen3.5 e posteriores, variantes *Reasoning* e *Think*) não têm o seletor e recebem o orçamento máximo de 4096 tokens, para que o raciocínio não esgote o limite antes da resposta. O perfil **Programador** responde com até 2048 tokens; **Sem censura**, com até 1024.
+
 ## Editor de código e diagnósticos
 
 O editor separa sintaxe de análise por IA. Uma linguagem só recebe o estado **Sintaxe válida** depois que o parser formal correspondente conclui sem erros. Se a gramática não puder ser carregada, o estado é **Parser formal indisponível** — o app não presume que o código está correto.

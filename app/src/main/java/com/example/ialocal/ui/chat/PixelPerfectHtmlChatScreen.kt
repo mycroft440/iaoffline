@@ -78,6 +78,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -106,6 +107,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.ChatAdSchedule
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.audio.AudioRecorder
+import com.example.ialocal.chat.AssistantContent
 import com.example.ialocal.chat.QueuedChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
@@ -117,12 +119,14 @@ import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.models.BuiltInProfile
+import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -188,7 +192,11 @@ fun PixelPerfectHtmlChatScreen(
     val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
         ?: readyModels.firstOrNull { it.isActive }
         ?: readyModels.firstOrNull()
-    val deepThinkSupported = selectedModel?.let { DeepThinkSupport.capability(it).supported } == true
+    // The on/off control only makes sense where thinking can actually be switched; models that
+    // always reason still show their reasoning, just without the toggle.
+    val deepThinkSupported = selectedModel?.let {
+        DeepThinkSupport.capability(it).mode == DeepThinkControlMode.HYBRID_THINKING
+    } == true
 
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) {
@@ -664,7 +672,13 @@ private fun ExactChatBody(
                     modifier = Modifier.fillMaxSize(),
                     profile = profileName,
                     modelAvailable = selectedModel != null,
-                    deepThink = deepThinkSupported,
+                    reasoningNote = selectedModel?.let { model ->
+                        when (DeepThinkSupport.capability(model).mode) {
+                            DeepThinkControlMode.HYBRID_THINKING -> "DeepThink disponível para este modelo."
+                            DeepThinkControlMode.REASONING_MODEL -> "Este modelo raciocina antes de responder."
+                            DeepThinkControlMode.NONE -> null
+                        }
+                    },
                 )
             } else {
                 LazyColumn(
@@ -675,7 +689,7 @@ private fun ExactChatBody(
                 ) {
                     items(messages, key = { it.message.id }) { item ->
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
-                            ExactLoading()
+                            ExactLoading(startedAt = item.message.createdAt)
                         } else {
                             ExactMessage(
                                 item = item,
@@ -811,7 +825,7 @@ private fun StaggeredMenuIcon(modifier: Modifier, color: Color) {
 }
 
 @Composable
-private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Boolean, deepThink: Boolean) {
+private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Boolean, reasoningNote: String?) {
     Box(modifier.padding(horizontal = 24.dp, vertical = 24.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
@@ -835,7 +849,7 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
                 color = Color(0xFF94A3B8),
                 textAlign = TextAlign.Center,
             )
-            if (deepThink) {
+            if (reasoningNote != null) {
                 Spacer(Modifier.height(16.dp))
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -848,7 +862,7 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
                     ) {
                         Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFC084FC)))
                         Spacer(Modifier.width(6.dp))
-                        Text("DeepThink disponível para este modelo.", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFFD8B4FE))
+                        Text(reasoningNote, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFFD8B4FE))
                     }
                 }
             }
@@ -926,8 +940,12 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 
 @Composable
 private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
-    val parsed = remember(item.message.content) { exactParseAssistant(item.message.content) }
-    var reasoningOpen by remember(item.message.id) { mutableStateOf(true) }
+    val parsed = remember(item.message.content) { AssistantContent.parse(item.message.content) }
+    val sending = item.message.status == MessageStatus.SENDING.name
+    val thinking = sending && parsed.reasoningInProgress
+    // Open while the model is thinking so the reasoning can be followed live; folded once done.
+    var reasoningOpen by remember(item.message.id) { mutableStateOf(thinking) }
+    LaunchedEffect(thinking) { if (!thinking) reasoningOpen = false }
     val clipboard = LocalClipboardManager.current
 
     Row(
@@ -947,8 +965,14 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
         }
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!parsed.reasoning.isNullOrBlank()) {
+            if (parsed.reasoning != null) {
                 val accent = Color(0xFFFBBF24)
+                val elapsed = if (thinking) rememberElapsedMs(item.message.createdAt) else null
+                val title = when {
+                    thinking -> "Raciocinando… ${formatExactDuration(elapsed ?: 0L)}"
+                    parsed.reasoningMs != null -> "Raciocínio · ${formatExactDuration(parsed.reasoningMs)}"
+                    else -> "Raciocínio"
+                }
                 Surface(
                     modifier = Modifier.fillMaxWidth().clickable { reasoningOpen = !reasoningOpen },
                     shape = RoundedCornerShape(12.dp),
@@ -962,26 +986,37 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Psychology, null, tint = accent, modifier = Modifier.size(12.dp))
+                                if (thinking) {
+                                    CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = accent)
+                                } else {
+                                    Icon(Icons.Default.Psychology, null, tint = accent, modifier = Modifier.size(12.dp))
+                                }
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    "Pensamento (Máximo)${parsed.ms?.let { " · ${formatExactDuration(it)}" }.orEmpty()}",
+                                    title,
                                     fontSize = 12.sp,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Medium,
                                     color = accent,
                                 )
                             }
-                            Icon(
-                                if (reasoningOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                null,
-                                tint = accent,
-                                modifier = Modifier.size(14.dp),
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    if (reasoningOpen) "Ocultar" else "Mostrar",
+                                    fontSize = 11.sp,
+                                    color = accent.copy(alpha = 0.85f),
+                                )
+                                Icon(
+                                    if (reasoningOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    if (reasoningOpen) "Ocultar raciocínio" else "Mostrar raciocínio",
+                                    tint = accent,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
                         }
                         AnimatedVisibility(reasoningOpen) {
                             Text(
-                                parsed.reasoning,
+                                parsed.reasoning.ifBlank { "…" },
                                 modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.20f)).padding(12.dp),
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp,
@@ -1002,24 +1037,53 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                 } else {
                     ExactAnswerBubble(parsed.answer)
                 }
+            } else if (!sending && parsed.reasoning != null) {
+                Text(
+                    "O limite de geração acabou durante o raciocínio, antes da resposta. Tente regenerar ou reduzir o nível do DeepThink.",
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    fontSize = 12.sp,
+                    color = PMuted,
+                )
+            }
+
+            if (!sending && (parsed.answer.isNotBlank() || parsed.reasoning != null)) {
                 Row(
                     modifier = Modifier.padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    ExactInlineAction("Copiar") { clipboard.setText(AnnotatedString(parsed.answer)) }
-                    Text("·", fontSize = 12.sp, color = PMuted)
+                    if (parsed.answer.isNotBlank()) {
+                        ExactInlineAction("Copiar") { clipboard.setText(AnnotatedString(parsed.answer)) }
+                        Text("·", fontSize = 12.sp, color = PMuted)
+                    }
                     ExactInlineAction("Regenerar", enabled = canRerun, onClick = onRerun)
                     Text("·", fontSize = 12.sp, color = PMuted)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Bolt, null, tint = PEmerald.copy(alpha = 0.80f), modifier = Modifier.size(11.dp))
                         Spacer(Modifier.width(3.dp))
-                        Text("NPU Local", fontSize = 11.sp, color = PEmerald.copy(alpha = 0.80f))
+                        Text(
+                            parsed.responseMs?.let { "Respondeu em ${formatExactDuration(it)}" } ?: "NPU Local",
+                            fontSize = 11.sp,
+                            color = PEmerald.copy(alpha = 0.80f),
+                        )
                     }
                 }
             }
         }
     }
+}
+
+/** Milliseconds since [startedAt], refreshed every second while composed. */
+@Composable
+private fun rememberElapsedMs(startedAt: Long): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(startedAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    return (now - startedAt).coerceAtLeast(0L)
 }
 
 @Composable
@@ -1051,7 +1115,7 @@ private fun ExactInlineAction(label: String, enabled: Boolean = true, onClick: (
 }
 
 @Composable
-private fun ExactLoading() {
+private fun ExactLoading(startedAt: Long? = null) {
     Row(
         modifier = Modifier.fillMaxWidth(0.96f),
         verticalAlignment = Alignment.Top,
@@ -1071,7 +1135,12 @@ private fun ExactLoading() {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Color(0xFFC084FC))
                 Spacer(Modifier.width(8.dp))
-                Text("Pensando...", fontSize = 12.sp, color = PText2)
+                val elapsed = startedAt?.let { rememberElapsedMs(it) }
+                Text(
+                    "Preparando a resposta…${elapsed?.let { " ${formatExactDuration(it)}" }.orEmpty()}",
+                    fontSize = 12.sp,
+                    color = PText2,
+                )
             }
         }
     }
@@ -1559,46 +1628,16 @@ private fun ExactSquareIconButton(
     }
 }
 
-private data class ExactParsedAssistant(
-    val reasoning: String?,
-    val answer: String,
-    val ms: Long?,
-)
-
-private fun exactParseAssistant(raw: String): ExactParsedAssistant {
-    val metadata = EXACT_REASONING_METADATA.find(raw)
-    val ms = metadata?.groupValues?.getOrNull(1)?.toLongOrNull()
-    val clean = EXACT_REASONING_METADATA.replace(raw, "").trim()
-    val block = EXACT_REASONING_BLOCK.find(clean)
-    if (block != null) {
-        return ExactParsedAssistant(
-            reasoning = block.groupValues[1].trim(),
-            answer = clean.removeRange(block.range).trim(),
-            ms = ms,
-        )
-    }
-    val open = EXACT_REASONING_OPEN.find(clean)
-    if (open != null) {
-        return ExactParsedAssistant(
-            reasoning = clean.substring(open.range.last + 1).trim(),
-            answer = clean.substring(0, open.range.first).trim(),
-            ms = ms,
-        )
-    }
-    return ExactParsedAssistant(null, clean, ms)
-}
-
-private val EXACT_REASONING_OPEN = Regex("(?is)<think(?:ing)?>")
-private val EXACT_REASONING_BLOCK = Regex("(?is)<think(?:ing)?>(.*?)</think(?:ing)?>")
-private val EXACT_REASONING_METADATA = Regex("(?is)\\s*<!--nexus_reasoning_ms:(\\d+)-->\\s*$")
-
 private fun formatExactTime(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
 
 private fun formatExactDuration(ms: Long): String {
     val seconds = ms.coerceAtLeast(0L) / 1000.0
-    return if (seconds < 60.0) String.format(Locale.getDefault(), "%.1fs", seconds)
-    else "${(seconds / 60).toInt()}m ${(seconds % 60).toInt()}s"
+    return when {
+        seconds < 10.0 -> String.format(Locale.getDefault(), "%.1fs", seconds)
+        seconds < 60.0 -> "${seconds.toInt()}s"
+        else -> "${(seconds / 60).toInt()}m ${(seconds % 60).toInt()}s"
+    }
 }
 
 private fun exactHistoryGroup(timestamp: Long): String {

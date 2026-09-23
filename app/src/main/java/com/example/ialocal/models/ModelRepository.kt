@@ -222,7 +222,13 @@ class ModelRepository(
         val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
             "Os perfis disponíveis são Programador e Sem censura."
         }
-        dao.updateAgent(agent.copy(systemPrompt = profile.systemPrompt, updatedAt = System.currentTimeMillis()))
+        dao.updateAgent(
+            agent.copy(
+                systemPrompt = profile.systemPrompt,
+                maxTokens = profile.maxTokens,
+                updatedAt = System.currentTimeMillis(),
+            )
+        )
     }
 
     suspend fun createAgentProfile(
@@ -230,7 +236,6 @@ class ModelRepository(
         name: String,
         systemPrompt: String,
         temperature: Float = 0.3f,
-        maxTokens: Int = 1024,
     ): AgentEntity {
         requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
         val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName.equals(name.trim(), true) }) {
@@ -250,7 +255,7 @@ class ModelRepository(
             modelId = modelId,
             systemPrompt = cleanPrompt,
             temperature = temperature.coerceIn(0f, 2f),
-            maxTokens = maxTokens.coerceIn(16, 4096),
+            maxTokens = profile.maxTokens,
             isDefault = false,
             createdAt = now,
             updatedAt = now,
@@ -272,10 +277,16 @@ class ModelRepository(
                         BuiltInProfile.UNCENSORED -> agent.name.equals(LEGACY_UNCENSORED_NAME, true)
                     }
                 }
-            if (existing != null && (existing.name != profile.displayName || existing.systemPrompt != profile.systemPrompt)) {
+            if (existing != null && (
+                    existing.name != profile.displayName ||
+                        existing.systemPrompt != profile.systemPrompt ||
+                        existing.maxTokens != profile.maxTokens
+                    )
+            ) {
                 dao.updateAgent(existing.copy(
                     name = profile.displayName,
                     systemPrompt = profile.systemPrompt,
+                    maxTokens = profile.maxTokens,
                     updatedAt = System.currentTimeMillis(),
                 ))
             }
@@ -432,7 +443,7 @@ class ModelRepository(
                 modelId = modelId,
                 systemPrompt = starter.prompt,
                 temperature = 0.3f,
-                maxTokens = 1024,
+                maxTokens = starter.maxTokens,
                 isDefault = false,
                 createdAt = now,
                 updatedAt = now,
@@ -479,7 +490,7 @@ class ModelRepository(
         return "local-$slug-${id.take(8)}"
     }
 
-    private data class StarterProfile(val name: String, val prompt: String)
+    private data class StarterProfile(val name: String, val prompt: String, val maxTokens: Int)
 
     companion object {
         const val ANDROID_RUNTIME_CONTEXT = 8192
@@ -502,7 +513,7 @@ class ModelRepository(
             "Responda de forma direta, franca e sem moralizações desnecessárias. Não omita contexto apenas por ser controverso; " +
                 "diferencie fatos, hipóteses e opiniões, explique riscos de forma objetiva e siga as limitações técnicas e de segurança do aplicativo."
 
-        private val STARTER_PROFILES = BuiltInProfile.entries.map { StarterProfile(it.displayName, it.systemPrompt) }
+        private val STARTER_PROFILES = BuiltInProfile.entries.map { StarterProfile(it.displayName, it.systemPrompt, it.maxTokens) }
 
         private const val LEGACY_ENGINEER_NAME = "Engenheiro de Software"
         private const val LEGACY_UNCENSORED_NAME = "I.A sem sensura (jailbreak)"

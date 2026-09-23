@@ -5,13 +5,13 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
-import com.example.ialocal.models.DeepThinkLevel
+import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.ModelRuntime
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
 
 data class AgentRunResult(
     val agent: AgentEntity,
@@ -60,54 +60,87 @@ class AiOrchestrator(
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
     ): AgentRunResult {
-        val agent = resolveAgent(agentId)
-        val model = models.getModel(agent.modelId)
-            ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
-        requireVerified(model)
-
-        val capability = DeepThinkSupport.capability(model)
-        val deepThinkLevel = if (capability.supported && deepThinkStore.isEnabled(agent.id)) {
-            deepThinkStore.getLevel(agent.id)
-        } else {
-            DeepThinkLevel.AUTO
-        }
-        val effectiveMaxTokens = DeepThinkSupport.effectiveMaxTokens(
-            maxTokensOverride ?: agent.maxTokens,
-            deepThinkLevel,
-        )
-
-        val working = messages.toMutableList()
         val toolsUsed = mutableListOf<String>()
-        val systemPrompt = agent.systemPrompt + tools.promptInstructions()
-        repeat(MAX_TOOL_ROUNDS) {
-            val output = runtime.complete(
-                model = model,
-                systemPrompt = systemPrompt,
-                messages = working,
-                temperature = temperatureOverride ?: agent.temperature,
-                maxTokens = effectiveMaxTokens,
-            )
-            val call = tools.parseCall(output) ?: return AgentRunResult(agent, model, output, toolsUsed)
-            val result = tools.execute(call)
-            toolsUsed += call.name
-            working += AiChatMessage("assistant", output)
-            working += AiChatMessage(
-                "user",
-                "[RESULTADO DA FERRAMENTA ${call.name}]\n$result\n\nUse este resultado para continuar atendendo a solicitação original.",
-            )
+        val (agent, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {
+            toolsUsed += it
         }
-        throw IllegalStateException("O agente atingiu o limite de $MAX_TOOL_ROUNDS chamadas de ferramentas sem produzir uma resposta final.")
+        val output = chunks.toList().joinToString("").trim()
+        return AgentRunResult(agent, model, output, toolsUsed)
     }
 
+    /**
+     * Streams a profile run as it is generated. Reasoning is re-emitted inside one canonical
+     * `<think>…</think>` block (across tool rounds) so the chat can show it live; an answer that
+     * starts like a tool call is held back until it is known not to be one.
+     */
     suspend fun streamAgent(
         agentId: String?,
         messages: List<AiChatMessage>,
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
     ): Pair<AiModelEntity, Flow<String>> {
-        // Tool calls must be hidden from the user, so tool-capable runs are resolved first.
-        val result = runAgent(agentId, messages, maxTokensOverride, temperatureOverride)
-        return result.model to flowOf(result.output)
+        val (_, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {}
+        return model to chunks
+    }
+
+    private data class PreparedAgent(val agent: AgentEntity, val model: AiModelEntity, val chunks: Flow<String>)
+
+    private suspend fun prepareAgent(
+        agentId: String?,
+        messages: List<AiChatMessage>,
+        maxTokensOverride: Int?,
+        temperatureOverride: Float?,
+        onToolUsed: (String) -> Unit,
+    ): PreparedAgent {
+        val agent = resolveAgent(agentId)
+        val model = models.getModel(agent.modelId)
+            ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
+        requireVerified(model)
+
+        val capability = DeepThinkSupport.capability(model)
+        val deepThinkEnabled = deepThinkStore.isEnabled(agent.id)
+        val plan = DeepThinkSupport.plan(
+            model = model,
+            baseMaxTokens = maxTokensOverride ?: agent.maxTokens,
+            enabled = deepThinkEnabled,
+            level = deepThinkStore.getLevel(agent.id),
+        )
+        val expectReasoning = capability.mode == DeepThinkControlMode.REASONING_MODEL ||
+            (capability.mode == DeepThinkControlMode.HYBRID_THINKING && deepThinkEnabled)
+        val systemPrompt = agent.systemPrompt + tools.promptInstructions() + plan.systemSuffix
+        val temperature = temperatureOverride ?: agent.temperature
+
+        val chunks = agentStream(
+            expectReasoning = expectReasoning,
+            maxRounds = MAX_TOOL_ROUNDS,
+            messages = messages,
+            generate = { working ->
+                runtime.streamComplete(
+                    model = model,
+                    systemPrompt = systemPrompt,
+                    messages = withUserSuffix(working, plan.userSuffix),
+                    temperature = temperature,
+                    maxTokens = plan.maxTokens,
+                )
+            },
+            toolRound = { answer ->
+                tools.parseCall(answer)?.let { call ->
+                    val output = tools.execute(call)
+                    onToolUsed(call.name)
+                    ToolRoundResult(call.name, output)
+                }
+            },
+        )
+        return PreparedAgent(agent, model, chunks)
+    }
+
+    private fun withUserSuffix(messages: List<AiChatMessage>, suffix: String): List<AiChatMessage> {
+        if (suffix.isEmpty()) return messages
+        val lastUser = messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
+        if (lastUser < 0) return messages
+        return messages.mapIndexed { index, message ->
+            if (index == lastUser) message.copy(content = message.content.trimEnd() + suffix) else message
+        }
     }
 
     private suspend fun resolveModel(selector: String?): AiModelEntity {
