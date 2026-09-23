@@ -8,20 +8,26 @@ import com.example.ialocal.models.ModelRepository
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
+import java.io.IOException
 import java.io.InputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -243,21 +249,61 @@ class LocalApiServer(
         return HttpResponse(200, fullCompletionJson(model.apiModelId, output).toString())
     }
 
-    private suspend fun writeChatStream(socket: Socket, body: String) {
+    private suspend fun writeChatStream(socket: Socket, body: String) = coroutineScope {
+        val generation = launch { streamChatResponse(socket, body) }
+        // Nothing else is sent after the request body, so a read only returns when the app closes
+        // the connection (its Stop button). Cancel the native generation right away in that case so
+        // the model is released for the next question instead of finishing an unwanted answer.
+        val disconnectWatcher = launch(Dispatchers.IO) {
+            val input = socket.getInputStream()
+            while (true) {
+                val next = try {
+                    input.read()
+                } catch (_: SocketTimeoutException) {
+                    continue // Only the read timed out; a long answer is still legitimately running.
+                } catch (_: IOException) {
+                    -1
+                }
+                if (next < 0) {
+                    generation.cancel()
+                    break
+                }
+            }
+        }
+        generation.join()
+        runCatching { socket.shutdownInput() }
+        disconnectWatcher.cancel()
+    }
+
+    private suspend fun streamChatResponse(socket: Socket, body: String) {
         val out = BufferedOutputStream(socket.getOutputStream())
         var headersSent = false
         try {
             val p = parseChat(body)
+            // Headers go out immediately so the client's read timeout only measures silence, which
+            // the keep-alive comments below prevent while a profile run is computed in one piece.
+            writeSseHeaders(out)
+            headersSent = true
             val (model, chunks) = if (p.agentId != null) {
-                orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
+                coroutineScope {
+                    val keepAlive = launch {
+                        while (true) {
+                            delay(KEEP_ALIVE_INTERVAL_MS)
+                            writeSseComment(out)
+                        }
+                    }
+                    try {
+                        orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
+                    } finally {
+                        keepAlive.cancelAndJoin()
+                    }
+                }
             } else {
                 val stream = orchestrator.streamChatCompletion(p.model, p.messages, p.maxTokens, p.temperature)
                 stream.model to stream.chunks
             }
             val id = "chatcmpl-${UUID.randomUUID()}"
             val created = System.currentTimeMillis() / 1000
-            writeSseHeaders(out)
-            headersSent = true
             writeSse(out, chunkJson(id, created, model.apiModelId, JSONObject().put("role", "assistant"), JSONObject.NULL))
             chunks.collect { token ->
                 writeSse(out, chunkJson(id, created, model.apiModelId, JSONObject().put("content", token), JSONObject.NULL))
@@ -265,6 +311,9 @@ class LocalApiServer(
             writeSse(out, chunkJson(id, created, model.apiModelId, JSONObject(), "stop"))
             writeSse(out, "[DONE]")
             logger?.info("API_RESPONSE", "POST /v1/chat/completions -> 200 SSE")
+        } catch (cancel: CancellationException) {
+            logger?.info("API_RESPONSE", "Cliente encerrou o streaming; geração cancelada")
+            throw cancel
         } catch (t: Throwable) {
             logger?.error("API_RESPONSE", "Falha durante SSE", t)
             runCatching {
@@ -367,6 +416,12 @@ class LocalApiServer(
         out.flush()
     }
 
+    /** SSE comment line; clients skip it, but it keeps the connection from looking idle. */
+    private fun writeSseComment(out: BufferedOutputStream) {
+        out.write(": keep-alive\n\n".toByteArray(StandardCharsets.UTF_8))
+        out.flush()
+    }
+
     private fun writeSse(out: BufferedOutputStream, data: String) {
         out.write("data: $data\n\n".toByteArray(StandardCharsets.UTF_8))
         out.flush()
@@ -465,5 +520,6 @@ class LocalApiServer(
         private const val MAX_HEADER_BYTES = 64 * 1024
         private const val MAX_BODY_BYTES = 4 * 1024 * 1024
         private const val MAX_ACTIVE_CLIENTS = 8
+        private const val KEEP_ALIVE_INTERVAL_MS = 15_000L
     }
 }
