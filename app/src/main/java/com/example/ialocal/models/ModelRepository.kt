@@ -63,7 +63,7 @@ class ModelRepository(
         ModelImportPreview(uri, displayName, sourceSize, metadata, compatibility)
     }
 
-    suspend fun importGguf(preview: ModelImportPreview): AiModelEntity = withContext(Dispatchers.IO) {
+    suspend fun importGguf(preview: ModelImportPreview, catalog: CatalogModel? = null): AiModelEntity = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val modelDir = File(context.filesDir, "models/$id").apply { mkdirs() }
         val destination = File(modelDir, "model.gguf")
@@ -84,8 +84,8 @@ class ModelRepository(
                 id = id,
                 destination = destination,
                 fallbackName = preview.suggestedName,
-                preferredName = null,
-                apiIdPrefix = null,
+                preferredName = catalog?.displayName,
+                apiIdPrefix = catalog?.apiIdPrefix,
             )
         } catch (t: Throwable) {
             logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
