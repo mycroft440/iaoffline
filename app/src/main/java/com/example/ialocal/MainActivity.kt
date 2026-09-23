@@ -265,11 +265,10 @@ private fun LocalAiApp(
                     conversationId = id,
                     initialModelId = initialModelId,
                     repository = container.chatRepository,
-                    aiGateway = container.aiGateway,
+                    generationManager = container.chatGenerationManager,
                     attachmentImporter = container.attachmentImporter,
                     attachmentProcessor = container.attachmentProcessor,
                     modelRepository = container.modelRepository,
-                    modelManager = container.modelManager,
                 ),
             )
             ChatWithDeepThinkScreen(

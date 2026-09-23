@@ -83,6 +83,8 @@ class ChatRepository(
         dao.updateMessageContent(messageId, content)
     }
 
+    suspend fun getConversation(id: String): ConversationEntity? = dao.getConversation(id)
+
     suspend fun getMessages(conversationId: String): List<MessageWithAttachments> =
         dao.getMessages(conversationId)
 

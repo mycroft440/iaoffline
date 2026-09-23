@@ -104,6 +104,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.audio.AudioRecorder
+import com.example.ialocal.chat.QueuedChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.ConversationListItem
