@@ -11,7 +11,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
   - Qwen3 1.7B Q4_K_M
   - Qwen3 4B Q4_K_M
   - Qwen3 8B Q4_K_M
-  - Qwen3.8 27B Q4_K_M (opção avançada, ~19 GB; texto no app atual)
+  - Qwen3.8 27B Q3_K_XL (opção avançada, ~13 GB; texto no app atual)
 - Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
 - Fila de downloads: é possível escolher várias IAs enquanto outra baixa; elas baixam uma de cada vez e a próxima começa assim que a anterior é instalada (ou falha). **Minhas I.As** mostra cada download com o progresso e as ações Pausar, Continuar, Tentar novamente e Remover; a fila sobrevive ao fechamento do app e retoma dos arquivos parciais.
 - Modelos concluídos do catálogo são mantidos na pasta `IAs Offline` na raiz do armazenamento compartilhado do telefone para sobreviver à desinstalação.
