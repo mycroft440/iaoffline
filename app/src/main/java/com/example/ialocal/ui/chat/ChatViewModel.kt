@@ -13,6 +13,7 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ChatRepository
 import com.example.ialocal.data.ConversationEntity
 import com.example.ialocal.data.ConversationListItem
+import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.files.AttachmentContentProcessor
