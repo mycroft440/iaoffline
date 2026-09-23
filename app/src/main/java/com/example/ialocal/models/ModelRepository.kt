@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class ModelRepository(
@@ -29,8 +31,15 @@ class ModelRepository(
     val agents: Flow<List<AgentEntity>> = dao.observeAgents()
 
     private val agentUsagePreferences = context.getSharedPreferences(AGENT_USAGE_PREFS, Context.MODE_PRIVATE)
+    private val profilePreferences = context.getSharedPreferences(PROFILE_PREFS, Context.MODE_PRIVATE)
+    private val _selectedProfile = MutableStateFlow(
+        BuiltInProfile.entries.firstOrNull { it.name == profilePreferences.getString(PROFILE_KEY, null) }
+            ?: BuiltInProfile.PROGRAMMER
+    )
+    val selectedProfile: StateFlow<BuiltInProfile> = _selectedProfile.asStateFlow()
     private val _agentUsageCounts = MutableStateFlow(loadAgentUsageCounts())
     val agentUsageCounts: StateFlow<Map<String, Int>> = _agentUsageCounts.asStateFlow()
+    private val profileMigrationMutex = Mutex()
 
     suspend fun inspectForImport(uri: Uri): ModelImportPreview = withContext(Dispatchers.IO) {
         logger?.info("IMPORT", "Validando arquivo selecionado antes da cópia")
@@ -54,7 +63,7 @@ class ModelRepository(
         ModelImportPreview(uri, displayName, sourceSize, metadata, compatibility)
     }
 
-    suspend fun importGguf(preview: ModelImportPreview): AiModelEntity = withContext(Dispatchers.IO) {
+    suspend fun importGguf(preview: ModelImportPreview, catalog: CatalogModel? = null): AiModelEntity = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val modelDir = File(context.filesDir, "models/$id").apply { mkdirs() }
         val destination = File(modelDir, "model.gguf")
@@ -75,8 +84,8 @@ class ModelRepository(
                 id = id,
                 destination = destination,
                 fallbackName = preview.suggestedName,
-                preferredName = null,
-                apiIdPrefix = null,
+                preferredName = catalog?.displayName,
+                apiIdPrefix = catalog?.apiIdPrefix,
             )
         } catch (t: Throwable) {
             logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
@@ -191,6 +200,9 @@ class ModelRepository(
 
     suspend fun setDefaultAgent(id: String) {
         val agent = requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
+        val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
+            "Somente Programador e Sem censura podem ser perfis padrão."
+        }
         val model = requireNotNull(dao.getModel(agent.modelId)) { "O modelo deste agente não está mais disponível." }
         require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
             "Este perfil só pode ser definido como padrão depois que o modelo passar pelo teste real de inferência."
@@ -198,10 +210,19 @@ class ModelRepository(
         val now = System.currentTimeMillis()
         dao.clearDefaultAgent()
         dao.markAgentDefault(id, now)
+        setSelectedProfile(profile)
+    }
+
+    fun setSelectedProfile(profile: BuiltInProfile) {
+        profilePreferences.edit().putString(PROFILE_KEY, profile.name).apply()
+        _selectedProfile.value = profile
     }
 
     suspend fun updateAgent(agent: AgentEntity) {
-        dao.updateAgent(agent.copy(updatedAt = System.currentTimeMillis()))
+        val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
+            "Os perfis disponíveis são Programador e Sem censura."
+        }
+        dao.updateAgent(agent.copy(systemPrompt = profile.systemPrompt, updatedAt = System.currentTimeMillis()))
     }
 
     suspend fun createAgentProfile(
@@ -212,8 +233,11 @@ class ModelRepository(
         maxTokens: Int = 1024,
     ): AgentEntity {
         requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
-        val cleanName = name.trim().ifBlank { "Novo agente" }.take(80)
-        val cleanPrompt = systemPrompt.trim().ifBlank { DEFAULT_SYSTEM_PROMPT }
+        val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName.equals(name.trim(), true) }) {
+            "Somente os dois perfis predefinidos estão disponíveis."
+        }
+        val cleanName = profile.displayName
+        val cleanPrompt = profile.systemPrompt
         val existing = dao.getAgents().firstOrNull {
             it.modelId == modelId && it.name.equals(cleanName, ignoreCase = true)
         }
@@ -235,22 +259,26 @@ class ModelRepository(
         return agent
     }
 
-    suspend fun ensureStarterProfiles(modelId: String) {
+    suspend fun ensureStarterProfiles(modelId: String) = profileMigrationMutex.withLock {
         requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
         var modelAgents = dao.getAgents().filter { it.modelId == modelId }
 
-        val generatedAgent = modelAgents.firstOrNull {
-            it.name.endsWith(" · Agente") && it.systemPrompt == DEFAULT_SYSTEM_PROMPT
-        }
-        val hasEngineer = modelAgents.any { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
-        if (generatedAgent != null && !hasEngineer) {
-            dao.updateAgent(
-                generatedAgent.copy(
-                    name = SOFTWARE_ENGINEER_NAME,
-                    systemPrompt = SOFTWARE_ENGINEER_PROMPT,
+        BuiltInProfile.entries.forEach { profile ->
+            val existing = modelAgents.firstOrNull { it.name.equals(profile.displayName, true) }
+                ?: modelAgents.firstOrNull { agent ->
+                    when (profile) {
+                        BuiltInProfile.PROGRAMMER -> agent.name.equals(LEGACY_ENGINEER_NAME, true) ||
+                            (agent.name.endsWith(" · Agente") && agent.systemPrompt == DEFAULT_SYSTEM_PROMPT)
+                        BuiltInProfile.UNCENSORED -> agent.name.equals(LEGACY_UNCENSORED_NAME, true)
+                    }
+                }
+            if (existing != null && (existing.name != profile.displayName || existing.systemPrompt != profile.systemPrompt)) {
+                dao.updateAgent(existing.copy(
+                    name = profile.displayName,
+                    systemPrompt = profile.systemPrompt,
                     updatedAt = System.currentTimeMillis(),
-                )
-            )
+                ))
+            }
         }
 
         modelAgents = dao.getAgents().filter { it.modelId == modelId }
@@ -264,6 +292,17 @@ class ModelRepository(
                 modelAgents = dao.getAgents().filter { it.modelId == modelId }
             }
         }
+        val keepIds = BuiltInProfile.entries.map { profile ->
+            requireNotNull(modelAgents.firstOrNull { it.name == profile.displayName }).id
+        }
+        val removed = modelAgents.filter { it.id !in keepIds }
+        if (removed.isNotEmpty()) {
+            dao.keepOnlyProfiles(modelId, keepIds, keepIds.first(), keepIds.last(), LEGACY_UNCENSORED_NAME)
+            val editor = agentUsagePreferences.edit()
+            removed.forEach { editor.remove("count_${it.id}") }
+            editor.apply()
+            _agentUsageCounts.value = _agentUsageCounts.value - removed.map { it.id }.toSet()
+        }
     }
 
     fun recordAgentUse(id: String) {
@@ -274,6 +313,9 @@ class ModelRepository(
 
     suspend fun deleteAgent(id: String) = withContext(Dispatchers.IO) {
         val agent = dao.getAgent(id) ?: return@withContext
+        require(BuiltInProfile.entries.none { it.displayName == agent.name }) {
+            "Os dois perfis predefinidos são gerenciados em Configurações e não podem ser excluídos."
+        }
         dao.deleteAgent(id)
         agentUsagePreferences.edit().remove("count_$id").apply()
         _agentUsageCounts.value = _agentUsageCounts.value - id
@@ -351,7 +393,7 @@ class ModelRepository(
         repairVerifiedModelsWithoutAgents()
 
         val current = dao.getDefaultAgent()
-        if (current != null && isAgentVerified(current)) return current
+        if (current != null && current.name == _selectedProfile.value.displayName && isAgentVerified(current)) return current
 
         val verifiedModelIds = dao.getModels()
             .filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
@@ -361,7 +403,10 @@ class ModelRepository(
             ?: ensureActiveVerifiedModel()?.id?.takeIf { it in verifiedModelIds }
         val eligibleAgents = dao.getAgents().filter { it.modelId in verifiedModelIds }
         val targetAgents = targetModelId?.let { target -> eligibleAgents.filter { it.modelId == target } }.orEmpty()
-        val replacement = targetAgents.firstOrNull { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
+        val selectedName = _selectedProfile.value.displayName
+        val replacement = targetAgents.firstOrNull { it.name == selectedName }
+            ?: eligibleAgents.firstOrNull { it.name == selectedName }
+            ?: targetAgents.firstOrNull { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
             ?: targetAgents.firstOrNull()
             ?: eligibleAgents.firstOrNull { it.name.equals(SOFTWARE_ENGINEER_NAME, ignoreCase = true) }
             ?: eligibleAgents.firstOrNull()
@@ -374,18 +419,9 @@ class ModelRepository(
     }
 
     private suspend fun repairVerifiedModelsWithoutAgents() {
-        val allAgents = dao.getAgents()
-        val modelIdsWithAgents = allAgents.mapTo(hashSetOf()) { it.modelId }
         dao.getModels()
-            .filter {
-                it.verificationStatus == ModelVerificationStatus.VERIFIED.name &&
-                    it.id !in modelIdsWithAgents
-            }
-            .forEach { model ->
-                val repairedAgents = starterAgentsForModel(model.id, System.currentTimeMillis())
-                dao.insertAgentsAtomically(repairedAgents)
-                logger?.info("AGENT_REPAIR", "${repairedAgents.size} perfis iniciais restaurados para ${model.apiModelId}")
-            }
+            .filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
+            .forEach { ensureStarterProfiles(it.id) }
     }
 
     private fun starterAgentsForModel(modelId: String, now: Long): List<AgentEntity> =
@@ -451,7 +487,7 @@ class ModelRepository(
             "Você é um assistente de IA local. Responda com clareza, utilidade e honestidade. " +
                 "Quando não souber algo, diga que não sabe em vez de inventar."
 
-        const val SOFTWARE_ENGINEER_NAME = "Engenheiro de Software"
+        const val SOFTWARE_ENGINEER_NAME = "Programador"
         const val SOFTWARE_ENGINEER_PROMPT =
             "Você é um engenheiro de software sênior. Priorize soluções corretas, simples, testáveis e seguras. " +
                 "Ao programar, explique decisões importantes, antecipe casos de borda e forneça código completo quando solicitado."
@@ -461,17 +497,17 @@ class ModelRepository(
             "Você é um agente de auto empenho, focado em transformar objetivos em execução. " +
                 "Divida tarefas complexas em etapas concretas, mantenha o foco, verifique o próprio trabalho e proponha o próximo passo útil sem enrolação."
 
-        const val UNCENSORED_NAME = "I.A sem sensura (jailbreak)"
+        const val UNCENSORED_NAME = "Sem censura"
         const val UNCENSORED_PROMPT =
             "Responda de forma direta, franca e sem moralizações desnecessárias. Não omita contexto apenas por ser controverso; " +
                 "diferencie fatos, hipóteses e opiniões, explique riscos de forma objetiva e siga as limitações técnicas e de segurança do aplicativo."
 
-        private val STARTER_PROFILES = listOf(
-            StarterProfile(SOFTWARE_ENGINEER_NAME, SOFTWARE_ENGINEER_PROMPT),
-            StarterProfile(SELF_DRIVEN_NAME, SELF_DRIVEN_PROMPT),
-            StarterProfile(UNCENSORED_NAME, UNCENSORED_PROMPT),
-        )
+        private val STARTER_PROFILES = BuiltInProfile.entries.map { StarterProfile(it.displayName, it.systemPrompt) }
 
+        private const val LEGACY_ENGINEER_NAME = "Engenheiro de Software"
+        private const val LEGACY_UNCENSORED_NAME = "I.A sem sensura (jailbreak)"
+        private const val PROFILE_PREFS = "selected_builtin_profile"
+        private const val PROFILE_KEY = "profile"
         private const val AGENT_USAGE_PREFS = "agent_profile_usage"
         private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
     }

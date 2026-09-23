@@ -77,8 +77,7 @@ data class ModelDownloadState(
 
 /**
  * Downloads catalog GGUFs to resumable app-private storage and verifies their pinned SHA-256.
- * A user-visible Downloads copy is attempted only when there is enough spare storage; failure to
- * create that optional mirror never invalidates an otherwise verified private download.
+ * The verified file is moved to the runtime after ModelManager saves a persistent shared copy.
  */
 class ModelDownloader(
     context: Context,
@@ -87,7 +86,6 @@ class ModelDownloader(
 ) {
     private val appContext = context.applicationContext
     private val downloadDir = File(appContext.filesDir, "model-downloads")
-    private val publicDownloads = PublicModelDownloads(appContext)
 
     suspend fun download(
         model: CatalogModel,
@@ -110,7 +108,6 @@ class ModelDownloader(
         if (complete.isFile) {
             onState(initial.copy(phase = ModelDownloadPhase.VERIFYING_FILE, message = "Verificando download existente…"))
             if (sha256(complete).equals(model.sha256, ignoreCase = true)) {
-                publishVerifiedDownloadBestEffort(model, complete, onState)
                 return@withContext complete
             }
             complete.delete()
@@ -145,7 +142,6 @@ class ModelDownloader(
             )
             if (sha256(partial).equals(model.sha256, ignoreCase = true)) {
                 finalizeVerifiedDownload(partial, complete)
-                publishVerifiedDownloadBestEffort(model, complete, onState)
                 logger?.info("MODEL_DOWNLOAD", "Download interrompido já estava completo: ${model.displayName}")
                 return@withContext complete
             }
@@ -178,49 +174,8 @@ class ModelDownloader(
         }
 
         finalizeVerifiedDownload(partial, complete)
-        publishVerifiedDownloadBestEffort(model, complete, onState)
         logger?.info("MODEL_DOWNLOAD", "Download verificado: ${model.displayName} (${complete.length()} bytes)")
         complete
-    }
-
-    private suspend fun publishVerifiedDownloadBestEffort(
-        model: CatalogModel,
-        complete: File,
-        onState: (ModelDownloadState) -> Unit,
-    ) {
-        val requiredForPublicCopy = complete.length() + STORAGE_HEADROOM
-        if (appContext.filesDir.usableSpace <= requiredForPublicCopy) {
-            logger?.info(
-                "MODEL_DOWNLOAD",
-                "Cópia pública de ${model.displayName} ignorada: espaço livre reservado para a instalação privada.",
-            )
-            return
-        }
-
-        onState(
-            ModelDownloadState(
-                catalogId = model.id,
-                phase = ModelDownloadPhase.VERIFYING_FILE,
-                downloadedBytes = complete.length(),
-                totalBytes = complete.length(),
-                message = "Download verificado. Salvando cópia opcional em Downloads/${PublicModelDownloads.FOLDER_NAME}…",
-            )
-        )
-        try {
-            publicDownloads.publishVerifiedModel(model, complete)
-            logger?.info(
-                "MODEL_DOWNLOAD",
-                "Cópia pública salva em Downloads/${PublicModelDownloads.FOLDER_NAME}/${model.fileName}",
-            )
-        } catch (cancel: CancellationException) {
-            throw cancel
-        } catch (t: Throwable) {
-            logger?.error(
-                "MODEL_DOWNLOAD",
-                "Não foi possível criar a cópia pública de ${model.displayName}; a instalação privada continuará.",
-                t,
-            )
-        }
     }
 
     private suspend fun downloadWithRetries(

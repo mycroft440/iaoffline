@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelDownloadPhase
@@ -104,6 +105,8 @@ private data class CatalogCompatibility(
 @Composable
 fun GroupedOfflineModelsScreen(
     viewModel: ModelsViewModel,
+    adsEnabled: Boolean,
+    onEnsureStorageAccess: (() -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
@@ -168,6 +171,10 @@ fun GroupedOfflineModelsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            item(key = "catalog-ad-top") {
+                InlineAdBanner(enabled = adsEnabled)
+            }
+
             item(key = "company-selector") {
                 CompanySelectorSection(
                     catalog = viewModel.catalog,
@@ -203,12 +210,18 @@ fun GroupedOfflineModelsScreen(
                         state = download.takeIf { it.catalogId == catalogModel.id },
                         installedModel = installed,
                         anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id,
-                        onInstall = { viewModel.downloadCatalogModel(catalogModel.id) },
+                        onInstall = {
+                            onEnsureStorageAccess { viewModel.downloadCatalogModel(catalogModel.id) }
+                        },
                         onPause = viewModel::cancelDownload,
                         onEnd = viewModel::endDownload,
                         onDelete = { installed?.let { viewModel.delete(it.id) } },
                     )
                 }
+            }
+
+            item(key = "catalog-ad-bottom") {
+                InlineAdBanner(enabled = adsEnabled)
             }
 
             item { Spacer(Modifier.height(18.dp)) }

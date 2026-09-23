@@ -8,6 +8,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.BuildConfig
+import com.example.ialocal.ads.InlineAdBanner
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,12 +86,12 @@ private data class HtmlHardwareSnapshot(
 @Composable
 fun HtmlAiHomeScreen(
     viewModel: ModelsViewModel,
+    adsEnabled: Boolean,
     onStartChat: () -> Unit,
     onOpenChats: () -> Unit,
     onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
     onOpenSettings: () -> Unit,
-    onRestoreModels: () -> Unit,
     onOpenCodeEditor: () -> Unit,
     onExitApp: () -> Unit,
 ) {
@@ -125,6 +128,7 @@ fun HtmlAiHomeScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(HtmlBg)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -163,6 +167,7 @@ fun HtmlAiHomeScreen(
                     onClick = onOpenApi,
                 )
             }
+            InlineAdBanner(enabled = adsEnabled)
         }
     }
 
@@ -192,13 +197,20 @@ private fun HtmlStatusBar(clock: String, batteryPercent: Int) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = clock,
-            color = HtmlText,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = clock,
+                color = HtmlText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("iaoffline", color = HtmlText, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("v${BuildConfig.VERSION_NAME}", color = HtmlMuted, fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+            }
+        }
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -227,60 +239,10 @@ private fun HtmlAppHeader(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(10.dp)
-                    .background(HtmlActive, CircleShape)
-            )
-            Text(
-                text = "I.A Off-line",
-                color = HtmlText,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.3).sp,
-            )
-            Text(
-                text = "v${BuildConfig.VERSION_NAME}",
-                color = HtmlMuted,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .background(HtmlElevated, RoundedCornerShape(6.dp))
-                    .border(1.dp, HtmlBorder, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            )
-        }
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                modifier = Modifier
-                    .background(Color(0x3310B981), RoundedCornerShape(6.dp))
-                    .border(1.dp, Color(0x6659A98C), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(6.dp).background(Color(0xFF34D399), CircleShape))
-                Text(
-                    text = "LOCAL ACTIVE",
-                    color = Color(0xFF6EE7B7),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp,
-                )
-            }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
                     .size(36.dp)

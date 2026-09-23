@@ -7,6 +7,22 @@ plugins {
 val ciVersionCode = providers.environmentVariable("IA_VERSION_CODE").orNull?.toIntOrNull()
 val ciVersionName = providers.environmentVariable("IA_VERSION_NAME").orNull
 
+val testAdMobAppId = "ca-app-pub-3940256099942544~3347511713"
+val testBannerAdUnitId = "ca-app-pub-3940256099942544/9214589741"
+val productionAdMobAppId = providers.environmentVariable("ADMOB_APP_ID").orNull?.trim().orEmpty()
+val productionBannerAdUnitId = providers.environmentVariable("ADMOB_BANNER_AD_UNIT_ID").orNull?.trim().orEmpty()
+require(productionAdMobAppId.isEmpty() == productionBannerAdUnitId.isEmpty()) {
+    "Configure ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID juntos."
+}
+if (productionAdMobAppId.isNotEmpty()) {
+    require(Regex("ca-app-pub-\\d{16}~\\d{10}").matches(productionAdMobAppId)) {
+        "ADMOB_APP_ID não é um ID de aplicativo AdMob válido."
+    }
+    require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionBannerAdUnitId)) {
+        "ADMOB_BANNER_AD_UNIT_ID não é um ID de banner AdMob válido."
+    }
+}
+
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
 val releaseStorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
@@ -33,6 +49,7 @@ android {
         targetSdk = 36
         versionCode = ciVersionCode ?: 1
         versionName = ciVersionName ?: "0.1.0"
+        manifestPlaceholders["admobAppId"] = testAdMobAppId
     }
 
     signingConfigs {
@@ -47,8 +64,13 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
+        }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            manifestPlaceholders["admobAppId"] = productionAdMobAppId.ifEmpty { testAdMobAppId }
+            buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$productionBannerAdUnitId\"")
         }
     }
 
@@ -94,6 +116,8 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.google.android.gms:play-services-ads:25.5.0")
+    implementation("com.google.android.ump:user-messaging-platform:4.0.0")
 
     // Code language packs are tiny JSON prompt guides downloaded on demand.
     // No compiler, linter or Tree-sitter grammar is embedded in the base APK.

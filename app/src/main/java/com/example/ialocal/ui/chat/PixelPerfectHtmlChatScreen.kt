@@ -57,9 +57,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.FilledIconButton
@@ -106,6 +103,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.ChatAdSchedule
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.audio.AudioRecorder
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
@@ -116,6 +115,7 @@ import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
+import com.example.ialocal.models.BuiltInProfile
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
@@ -133,7 +133,6 @@ private val PSurface = Color(0xFF111420)
 private val PCard = Color(0xFF161A29)
 private val PCardHover = Color(0xFF1D2235)
 private val PBorder = Color(0xFF23283E)
-private val PBorderLight = Color(0xFF303650)
 private val PIndigo = Color(0xFF6366F1)
 private val PIndigoStrong = Color(0xFF4F46E5)
 private val PPurple = Color(0xFFA855F7)
@@ -150,6 +149,7 @@ fun PixelPerfectHtmlChatScreen(
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
+    adsEnabled: Boolean,
 ) {
     val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
@@ -164,6 +164,7 @@ fun PixelPerfectHtmlChatScreen(
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val models by viewModel.models.collectAsStateWithLifecycle()
     val selectedAgentId by viewModel.selectedAgentId.collectAsStateWithLifecycle()
+    val selectedProfile by viewModel.selectedProfile.collectAsStateWithLifecycle()
 
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -174,7 +175,6 @@ fun PixelPerfectHtmlChatScreen(
     var recording by remember { mutableStateOf(false) }
     var profileOpen by remember { mutableStateOf(false) }
     var modelOpen by remember { mutableStateOf(false) }
-    var createProfileOpen by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     var pendingAudio by remember { mutableStateOf<android.net.Uri?>(null) }
 
@@ -187,9 +187,6 @@ fun PixelPerfectHtmlChatScreen(
     val selectedModel = readyModels.firstOrNull { it.id == selectedAgent?.modelId }
         ?: readyModels.firstOrNull { it.isActive }
         ?: readyModels.firstOrNull()
-    val modelAgents = remember(agents, selectedModel?.id) {
-        agents.filter { it.modelId == selectedModel?.id }
-    }
     val deepThinkSupported = selectedModel?.let { DeepThinkSupport.capability(it).supported } == true
 
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -289,6 +286,8 @@ fun PixelPerfectHtmlChatScreen(
         ) {
             ExactChatBody(
                 selectedAgent = selectedAgent,
+                profileName = selectedProfile.displayName,
+                adsEnabled = adsEnabled,
                 selectedModel = selectedModel,
                 messages = messages,
                 listState = listState,
@@ -329,15 +328,14 @@ fun PixelPerfectHtmlChatScreen(
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         ) {
             ExactProfilesSheet(
-                selected = selectedAgent,
-                agents = modelAgents,
+                selected = selectedProfile,
                 onSelect = {
-                    viewModel.selectAgent(it.id)
+                    viewModel.selectProfile(it)
                     profileOpen = false
                 },
-                onCreate = {
+                onManage = {
                     profileOpen = false
-                    createProfileOpen = true
+                    onOpenSettings()
                 },
             )
         }
@@ -365,17 +363,6 @@ fun PixelPerfectHtmlChatScreen(
                 },
             )
         }
-    }
-
-    if (createProfileOpen && selectedModel != null) {
-        ExactCreateProfileDialog(
-            onDismiss = { createProfileOpen = false },
-            onSave = { name, prompt ->
-                viewModel.createAgentProfile(selectedModel.id, name, prompt) {
-                    createProfileOpen = false
-                }
-            },
-        )
     }
 
     @Suppress("UNUSED_VARIABLE")
@@ -620,6 +607,8 @@ private fun ExactDrawer(
 @Composable
 private fun ExactChatBody(
     selectedAgent: AgentEntity?,
+    profileName: String,
+    adsEnabled: Boolean,
     selectedModel: AiModelEntity?,
     messages: List<MessageWithAttachments>,
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -651,10 +640,17 @@ private fun ExactChatBody(
     } else {
         null
     }
+    val bannerMessageIds = remember(messages) {
+        ChatAdSchedule.assistantIdsWithBanner(
+            messages,
+            isUser = { it.message.role == MessageRole.USER.name },
+            id = { it.message.id },
+        )
+    }
 
     Column(Modifier.fillMaxSize().background(PBg)) {
         ExactTopBar(
-            agent = selectedAgent?.name ?: "Perfil",
+            agent = profileName,
             model = selectedModel?.name ?: "Modelo",
             onMenu = onMenu,
             onProfile = onProfile,
@@ -665,7 +661,8 @@ private fun ExactChatBody(
             if (messages.isEmpty()) {
                 ExactWelcome(
                     modifier = Modifier.fillMaxSize(),
-                    profile = selectedAgent?.name ?: "Assistente Geral",
+                    profile = profileName,
+                    modelAvailable = selectedModel != null,
                     deepThink = deepThinkSupported,
                 )
             } else {
@@ -679,7 +676,13 @@ private fun ExactChatBody(
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
                             ExactLoading()
                         } else {
-                            ExactMessage(item = item, canRerun = !generating) { onRerun(item.message.id) }
+                            ExactMessage(
+                                item = item,
+                                canRerun = !generating,
+                                showAd = adsEnabled &&
+                                    item.message.id in bannerMessageIds &&
+                                    item.message.status != MessageStatus.SENDING.name,
+                            ) { onRerun(item.message.id) }
                         }
                     }
                     if (generating && sendingAssistantId == null) item { ExactLoading() }
@@ -807,7 +810,7 @@ private fun StaggeredMenuIcon(modifier: Modifier, color: Color) {
 }
 
 @Composable
-private fun ExactWelcome(modifier: Modifier, profile: String, deepThink: Boolean) {
+private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Boolean, deepThink: Boolean) {
     Box(modifier.padding(horizontal = 24.dp, vertical = 24.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
@@ -820,7 +823,11 @@ private fun ExactWelcome(modifier: Modifier, profile: String, deepThink: Boolean
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Você está conversando com o perfil $profile. Tudo é processado localmente no aparelho.",
+                if (modelAvailable) {
+                    "Você está conversando com o perfil $profile. Tudo é processado localmente no aparelho."
+                } else {
+                    "Perfil $profile selecionado. Baixe uma IA offline para começar a conversar."
+                },
                 modifier = Modifier.widthIn(max = 320.dp),
                 fontSize = 13.sp,
                 lineHeight = 20.sp,
@@ -849,8 +856,12 @@ private fun ExactWelcome(modifier: Modifier, profile: String, deepThink: Boolean
 }
 
 @Composable
-private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, onRerun: () -> Unit) {
-    if (item.message.role == MessageRole.USER.name) ExactUserMessage(item) else ExactAssistantMessage(item, canRerun, onRerun)
+private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
+    if (item.message.role == MessageRole.USER.name) {
+        ExactUserMessage(item)
+    } else {
+        ExactAssistantMessage(item, canRerun, showAd, onRerun)
+    }
 }
 
 @Composable
@@ -913,7 +924,7 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 }
 
 @Composable
-private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, onRerun: () -> Unit) {
+private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
     val parsed = remember(item.message.content) { exactParseAssistant(item.message.content) }
     var reasoningOpen by remember(item.message.id) { mutableStateOf(true) }
     val clipboard = LocalClipboardManager.current
@@ -982,19 +993,13 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
             }
 
             if (parsed.answer.isNotBlank()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
-                    color = PCard,
-                    border = BorderStroke(1.dp, PBorder),
-                ) {
-                    Text(
-                        parsed.answer,
-                        modifier = Modifier.padding(16.dp),
-                        fontSize = 13.5.sp,
-                        lineHeight = 20.sp,
-                        color = PText2,
-                    )
+                if (showAd) {
+                    val (beforeAd, afterAd) = remember(parsed.answer) { ChatAdSchedule.splitForBanner(parsed.answer) }
+                    if (beforeAd.isNotBlank()) ExactAnswerBubble(beforeAd)
+                    InlineAdBanner(enabled = true)
+                    if (afterAd.isNotBlank()) ExactAnswerBubble(afterAd)
+                } else {
+                    ExactAnswerBubble(parsed.answer)
                 }
                 Row(
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -1013,6 +1018,24 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ExactAnswerBubble(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+        color = PCard,
+        border = BorderStroke(1.dp, PBorder),
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(16.dp),
+            fontSize = 13.5.sp,
+            lineHeight = 20.sp,
+            color = PText2,
+        )
     }
 }
 
@@ -1223,17 +1246,17 @@ private fun ExactComposer(
                             }
                             Surface(
                                 modifier = Modifier.size(32.dp).clickable(
-                                    enabled = !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty()),
+                                    enabled = model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty()),
                                     onClick = onSend,
                                 ),
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (!processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) PIndigoStrong else Color(0xFF1E293B),
+                                color = if (model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) PIndigoStrong else Color(0xFF1E293B),
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         Icons.Default.Send,
                                         "Enviar",
-                                        tint = if (!processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) Color.White else PMuted,
+                                        tint = if (model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) Color.White else PMuted,
                                         modifier = Modifier.size(12.dp).rotate(-12f),
                                     )
                                 }
@@ -1249,7 +1272,7 @@ private fun ExactComposer(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    if (generating) "Enviar adiciona à fila" else "Enter envia · use nova linha pelo teclado",
+                    if (model == null) "Baixe uma IA offline para enviar mensagens" else if (generating) "Enviar adiciona à fila" else "Enter envia · use nova linha pelo teclado",
                     fontSize = 11.sp,
                     color = PMuted,
                 )
@@ -1419,10 +1442,9 @@ private fun ExactDeepThinkOption(
 
 @Composable
 private fun ExactProfilesSheet(
-    selected: AgentEntity?,
-    agents: List<AgentEntity>,
-    onSelect: (AgentEntity) -> Unit,
-    onCreate: () -> Unit,
+    selected: BuiltInProfile,
+    onSelect: (BuiltInProfile) -> Unit,
+    onManage: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().padding(20.dp),
@@ -1433,12 +1455,12 @@ private fun ExactProfilesSheet(
             Spacer(Modifier.width(8.dp))
             Text("Selecionar Perfil de IA", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
-        agents.forEach { agent ->
+        BuiltInProfile.entries.forEach { profile ->
             Surface(
-                modifier = Modifier.fillMaxWidth().clickable { onSelect(agent) },
+                modifier = Modifier.fillMaxWidth().clickable { onSelect(profile) },
                 shape = RoundedCornerShape(12.dp),
                 color = PCard,
-                border = BorderStroke(1.dp, if (agent.id == selected?.id) PIndigo.copy(alpha = 0.40f) else PBorder),
+                border = BorderStroke(1.dp, if (profile == selected) PIndigo.copy(alpha = 0.40f) else PBorder),
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(
@@ -1452,27 +1474,15 @@ private fun ExactProfilesSheet(
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(agent.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                        Text(agent.systemPrompt, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color(0xFF94A3B8))
+                        Text(profile.displayName, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        Text(profile.description, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color(0xFF94A3B8))
                     }
-                    if (agent.id == selected?.id) Icon(Icons.Default.Check, null, tint = Color(0xFF818CF8), modifier = Modifier.size(12.dp))
+                    if (profile == selected) Icon(Icons.Default.Check, null, tint = Color(0xFF818CF8), modifier = Modifier.size(12.dp))
                 }
             }
         }
-        Surface(
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onCreate),
-            shape = RoundedCornerShape(12.dp),
-            color = Color.Transparent,
-            border = BorderStroke(1.dp, PBorderLight),
-        ) {
-            Text(
-                "+ Criar novo perfil personalizado",
-                modifier = Modifier.padding(vertical = 8.dp),
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFF94A3B8),
-            )
+        TextButton(onClick = onManage, modifier = Modifier.fillMaxWidth()) {
+            Text("Gerenciar perfis em Configurações", fontSize = 12.sp)
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -1531,46 +1541,6 @@ private fun ExactModelsSheet(
         }
         Spacer(Modifier.height(8.dp))
     }
-}
-
-@Composable
-private fun ExactCreateProfileDialog(
-    onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var prompt by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = PSurface,
-        title = { Text("Criar novo perfil", fontSize = 14.sp, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                androidx.compose.material3.OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it.take(80) },
-                    label = { Text("Nome") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                androidx.compose.material3.OutlinedTextField(
-                    value = prompt,
-                    onValueChange = { prompt = it },
-                    label = { Text("Prompt da persona") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 4,
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSave(name.trim(), prompt.trim()) },
-                enabled = name.isNotBlank() && prompt.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = PIndigoStrong),
-            ) { Text("Salvar") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
-    )
 }
 
 @Composable

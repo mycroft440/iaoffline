@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
@@ -49,6 +51,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.AutomaticModelImportProgress
@@ -222,7 +225,9 @@ private fun MyAiPreviewCard(
 @Composable
 fun MyAisScreen(
     viewModel: ModelsViewModel,
+    adsEnabled: Boolean,
     importProgress: AutomaticModelImportProgress,
+    onScanStorage: () -> Unit,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
 ) {
@@ -267,16 +272,68 @@ fun MyAisScreen(
                 ModelStorageImportProgress(importProgress)
             }
 
-            if (orderedModels.isEmpty() && !importProgress.isRunning) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Nenhuma IA instalada.", color = MyAiMuted, fontSize = 13.sp)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item(key = "my-ais-ad-top") {
+                    InlineAdBanner(enabled = adsEnabled)
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                item(key = "my-ais-storage-search") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MyAiSurface, RoundedCornerShape(14.dp))
+                            .border(1.dp, MyAiBorder, RoundedCornerShape(14.dp))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Você pode ter IAs baixadas anteriormente. Clique em buscar para buscar IAs baixadas no seu telefone.",
+                            color = MyAiText,
+                            fontSize = 12.sp,
+                        )
+                        Button(onClick = onScanStorage, enabled = !importProgress.isRunning) {
+                            if (importProgress.isRunning) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Text(" Buscando...")
+                            } else {
+                                Text("Buscar")
+                            }
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.COMPLETED) {
+                            importProgress.summary?.let { summary ->
+                                Text(
+                                    "Busca concluída: ${summary.imported} importada(s), ${summary.alreadyInstalled} já instalada(s), ${summary.invalid} inválida(s), ${summary.failures} falha(s).",
+                                    color = MyAiMuted,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.PERMISSION_REQUIRED) {
+                            Text("Permita o acesso aos arquivos do aparelho e toque em Buscar novamente.", color = MyAiMuted, fontSize = 11.sp)
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.FAILED) {
+                            Text("A busca falhou. Tente novamente.", color = MyAiMuted, fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                if (orderedModels.isEmpty()) {
+                    item(key = "my-ais-empty") {
+                        Box(
+                            Modifier.fillMaxWidth().height(240.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (importProgress.isRunning) "Buscando I.As no aparelho..." else "Nenhuma IA instalada.",
+                                color = MyAiMuted,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                } else {
                     orderedModels.forEach { model ->
                         item(key = model.id) {
                             val catalogModel = catalogModelFor(model, viewModel.catalog)
@@ -288,8 +345,12 @@ fun MyAisScreen(
                             )
                         }
                     }
-                    item { Spacer(Modifier.height(20.dp)) }
                 }
+
+                item(key = "my-ais-ad-bottom") {
+                    InlineAdBanner(enabled = adsEnabled)
+                }
+                item { Spacer(Modifier.height(20.dp)) }
             }
         }
     }

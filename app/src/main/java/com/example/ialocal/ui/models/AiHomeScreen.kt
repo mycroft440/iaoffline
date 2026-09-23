@@ -342,17 +342,6 @@ private fun HomeHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "LOCAL ACTIVE",
-                color = HomeEmerald,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier
-                    .background(Color(0xFF052E2B), RoundedCornerShape(6.dp))
-                    .border(1.dp, HomeEmerald, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
                 text = "$batteryPercent%",
                 color = HomeText,
                 style = MaterialTheme.typography.labelSmall,
