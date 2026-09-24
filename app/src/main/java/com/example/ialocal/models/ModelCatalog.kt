@@ -28,6 +28,8 @@ data class CatalogModel(
     val totalParametersBillions: Double,
     val activeParametersBillions: Double? = null,
     val description: String,
+    /** How the model compares with the others of its size class, shown in the details dialog. */
+    val strengths: String? = null,
 ) {
     val downloadUrl: String
         get() = "https://huggingface.co/$repository/resolve/main/$fileName?download=true"
@@ -107,6 +109,7 @@ object ModelCatalog {
             totalParametersBillions = 25.2,
             activeParametersBillions = 3.8,
             description = "Gemma 4 MoE com cerca de 3,8B parâmetros ativos por token. Requer bastante armazenamento e RAM.",
+            strengths = "6º entre os modelos acima de 19B. Bom em português e conversa, um pouco atrás em raciocínio.",
         ),
         CatalogModel(
             id = "gemma4-31b-it-q4-0",
@@ -120,6 +123,7 @@ object ModelCatalog {
             recommendedRamBytes = 26_200_000_000L,
             totalParametersBillions = 30.7,
             description = "Maior Gemma 4 abaixo do limite de 50B. Indicado apenas para aparelhos com muita RAM e espaço livre.",
+            strengths = "2º entre os modelos acima de 19B. Muito forte, o melhor em português e em conversa. Denso: precisa de mais RAM do que um celular de 12 GB tem.",
         ),
 
         // Qwen: mantidos do mais moderno para o mais antigo.
@@ -135,6 +139,7 @@ object ModelCatalog {
             recommendedRamBytes = 22_100_000_000L,
             totalParametersBillions = 27.3,
             description = "Qwen3.8 denso para uso geral, código e agentes. É a geração Qwen mais atual incluída no catálogo e exige hardware excepcional no Android.",
+            strengths = "1º entre os modelos acima de 19B. O mais inteligente no geral: raciocínio, código e conhecimento. Denso: precisa de mais RAM do que um celular de 12 GB tem.",
         ),
         CatalogModel(
             id = "qwen3.5-9b-q4-k-m",
@@ -201,6 +206,7 @@ object ModelCatalog {
             totalParametersBillions = 30.5,
             activeParametersBillions = 3.3,
             description = "Qwen especializado em programação e agentes, com aproximadamente 3,3B parâmetros ativos por token.",
+            strengths = "Especialista em código: o melhor dos modelos acima de 19B para programar, mas não para uso geral.",
         ),
         CatalogModel(
             id = "qwen3.6-35b-a3b-q3-k-m",
@@ -215,6 +221,7 @@ object ModelCatalog {
             totalParametersBillions = 34.7,
             activeParametersBillions = 3.0,
             description = "Qwen3.6 MoE com 35B no total e só 3B ativos por palavra. Experimental no celular: roda lendo os pesos do armazenamento, com contexto reduzido, e é lento.",
+            strengths = "3º entre os modelos acima de 19B e o melhor dos MoE: raciocínio, conhecimento, português e agentes.",
         ),
 
         CatalogModel(
@@ -256,6 +263,7 @@ object ModelCatalog {
             totalParametersBillions = 31.6,
             activeParametersBillions = 3.2,
             description = "Nemotron 3 Nano MoE híbrido da NVIDIA: 32B no total e cerca de 3B ativos, com raciocínio. Experimental no celular: lento e com contexto reduzido.",
+            strengths = "4º entre os modelos acima de 19B. Forte em raciocínio e matemática.",
         ),
         CatalogModel(
             id = "gpt-oss-20b-q3-k-m",
@@ -270,6 +278,7 @@ object ModelCatalog {
             totalParametersBillions = 20.9,
             activeParametersBillions = 3.6,
             description = "Modelo aberto da OpenAI: MoE com 21B no total e 3,6B ativos, sempre raciocina antes de responder. Os especialistas continuam em MXFP4 nativo. Experimental no celular: lento e com contexto reduzido.",
+            strengths = "5º entre os modelos acima de 19B. Ótimo em raciocínio e matemática, mais fraco em português e conhecimento geral. É o menor dos experimentais, o que tende a deixá-lo menos lento.",
         ),
 
         CatalogModel(
@@ -551,6 +560,7 @@ object ModelCatalog {
             recommendedRamBytes = 28_800_000_000L,
             totalParametersBillions = 32.0,
             description = "Maior DeepSeek R1 Distill incluído no limite de 50B; exige muita RAM e armazenamento.",
+            strengths = "7º entre os modelos acima de 19B. Bom em raciocínio, mas já foi superado pelos modelos mais novos.",
         ),
 
         CatalogModel(
