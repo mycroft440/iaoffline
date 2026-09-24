@@ -21,8 +21,9 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - Validação do cabeçalho GGUF, ABI, espaço disponível e estimativa de RAM.
 - Modelos grandes para a RAM do aparelho (arquivo acima de 30% da memória total, como 8B em celulares de 12 GB) carregam em modo de pouca memória: pesos mapeados do arquivo, sem a cópia reempacotada em RAM, e contexto de 4096 tokens. É um pouco mais lento, mas evita que o Android feche o app.
 - Se o app for fechado inesperadamente, na abertura seguinte ele mostra o motivo registrado pelo Android (falha nativa, falta de memória, erro) com detalhes para copiar.
-- Cache de contexto (KV) em Q8_0, metade da memória do F16, quando o modelo suporta flash attention; senão o app usa F16.
-- Modelos MoE grandes (15B ou mais no total, poucos bilhões ativos por palavra), como Gemma 4 26B-A4B, Qwen3-Coder 30B-A3B, Qwen3.6 35B-A3B, Nemotron 3 Nano 30B-A3B e gpt-oss 20B, aparecem como **Experimental – lento**: rodam sempre em modo de pouca memória, lendo os pesos do armazenamento, com contexto de 2048 tokens.
+- Cache de contexto (KV) em Q4_0, cerca de um quarto da memória do F16, quando o modelo suporta flash attention; senão o app usa F16 com um contexto menor.
+- O contexto é o maior que cabe na memória do aparelho (até o limite de treino do modelo): 40% da RAM menos o tamanho do modelo, entre 256 MB e 2 GB para o cache. Num celular de 12 GB, um modelo 4B usa o contexto completo de 32K e um 8B fica em torno de 13K.
+- Modelos MoE grandes (15B ou mais no total, poucos bilhões ativos por palavra), como Gemma 4 26B-A4B, Qwen3-Coder 30B-A3B, Qwen3.6 35B-A3B, Nemotron 3 Nano 30B-A3B e gpt-oss 20B, aparecem como **Experimental – lento**: rodam sempre em modo de pouca memória, lendo os pesos do armazenamento, com 384 MB para o contexto.
 - O gpt-oss 20B da OpenAI responde no formato "harmony"; o app converte o canal `analysis` em raciocínio expansível e o canal `final` em resposta.
 - Um modelo só vira `VERIFIED` e pode ser ativado após uma inferência real no dispositivo.
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.

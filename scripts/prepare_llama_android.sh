@@ -85,14 +85,15 @@ PY
 # 5. Capture warning/error output from llama.cpp and expose it to Kotlin so a
 #    device-specific load failure is diagnosable instead of becoming one generic
 #    UnsupportedArchitectureException.
-# 6. If model loading succeeds but an 8K context cannot be allocated, retry with
-#    4K and 2K contexts. This keeps smaller-memory phones usable instead of
-#    reporting the model itself as incompatible.
+# 6. Size the context to the memory the app grants the KV cache
+#    (IAOFFLINE_KV_BUDGET_MB), up to IAOFFLINE_CONTEXT_TOKENS and the model's trained
+#    context. If it cannot be allocated, retry with half the size down to 2K, which
+#    keeps smaller-memory phones usable instead of reporting the model as incompatible.
+#    The size in use is published as IAOFFLINE_ACTIVE_CONTEXT_TOKENS for the app.
 # 7. When the app sets IAOFFLINE_LOW_MEMORY=1 (model large for the device RAM),
-#    skip the repacked CPU buffers from the start and begin with a 4K context.
-#    IAOFFLINE_CONTEXT_TOKENS lets the app start even smaller (experimental MoE).
-# 8. Use a Q8_0 KV cache (half of F16) when the model supports flash attention,
-#    falling back to F16 otherwise.
+#    skip the repacked CPU buffers from the start.
+# 8. Use a Q4_0 KV cache (about a quarter of F16) when the model supports flash
+#    attention, falling back to a smaller F16 context otherwise.
 python3 - "${AI_CHAT_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -126,13 +127,53 @@ replace_once(
     "    const char *value = getenv(\"IAOFFLINE_LOW_MEMORY\");\n"
     "    return value != nullptr && value[0] == '1';\n"
     "}\n\n"
-    "// First context size to try: IAOFFLINE_CONTEXT_TOKENS when set by the app, else 4K in\n"
-    "// low-memory mode and 8K otherwise. Smaller sizes are still tried if allocation fails.\n"
-    "static int iaoffline_first_context_size() {\n"
-    "    const char *value = getenv(\"IAOFFLINE_CONTEXT_TOKENS\");\n"
-    "    const int requested = value != nullptr ? atoi(value) : 0;\n"
-    "    if (requested >= 512 && requested <= DEFAULT_CONTEXT_SIZE) return requested;\n"
-    "    return iaoffline_low_memory_mode() ? 4096 : DEFAULT_CONTEXT_SIZE;\n"
+    "constexpr int                             IAOFFLINE_MIN_CONTEXT = 2048;\n"
+    "constexpr int                             IAOFFLINE_MAX_F16_CONTEXT = 8192;\n\n"
+    "static long iaoffline_env_long(const char *name, long fallback) {\n"
+    "    const char *value = getenv(name);\n"
+    "    const long parsed = value != nullptr ? atol(value) : 0;\n"
+    "    return parsed > 0 ? parsed : fallback;\n"
+    "}\n\n"
+    "static int iaoffline_meta_int(const llama_model *model, const std::string &suffix) {\n"
+    "    char arch[64] = {0};\n"
+    "    if (llama_model_meta_val_str(model, \"general.architecture\", arch, sizeof(arch)) <= 0) return 0;\n"
+    "    char value[32] = {0};\n"
+    "    const std::string key = std::string(arch) + suffix;\n"
+    "    if (llama_model_meta_val_str(model, key.c_str(), value, sizeof(value)) <= 0) return 0;\n"
+    "    return atoi(value);\n"
+    "}\n\n"
+    "// Bytes of Q4_0 KV cache per context token (18 bytes per 32 values, K and V). Hybrids\n"
+    "// that declare full_attention_interval (Qwen3.5/3.6) keep a cache only in those layers.\n"
+    "// Other hybrid and sliding-window models need less than estimated; overestimating only\n"
+    "// yields a smaller context.\n"
+    "static double iaoffline_kv_bytes_per_token(const llama_model *model) {\n"
+    "    int n_layer = std::max(1, llama_model_n_layer(model));\n"
+    "    const int full_attention_interval = iaoffline_meta_int(model, \".full_attention_interval\");\n"
+    "    if (full_attention_interval > 1) n_layer = std::max(1, n_layer / full_attention_interval);\n"
+    "    const int n_head = std::max(1, llama_model_n_head(model));\n"
+    "    int n_head_kv = llama_model_n_head_kv(model);\n"
+    "    if (n_head_kv <= 0) n_head_kv = n_head;\n"
+    "    int key_length = iaoffline_meta_int(model, \".attention.key_length\");\n"
+    "    int value_length = iaoffline_meta_int(model, \".attention.value_length\");\n"
+    "    if (key_length <= 0) key_length = llama_model_n_embd(model) / n_head;\n"
+    "    if (value_length <= 0) value_length = key_length;\n"
+    "    return (double) n_layer * n_head_kv * (key_length + value_length) * 18.0 / 32.0;\n"
+    "}\n\n"
+    "// Largest context that fits the KV budget the app granted (IAOFFLINE_KV_BUDGET_MB), capped\n"
+    "// by IAOFFLINE_CONTEXT_TOKENS and by the context the model was trained with.\n"
+    "static int iaoffline_context_for_memory(const llama_model *model) {\n"
+    "    const long budget_mb = iaoffline_env_long(\"IAOFFLINE_KV_BUDGET_MB\", 512);\n"
+    "    long context = iaoffline_env_long(\"IAOFFLINE_CONTEXT_TOKENS\", DEFAULT_CONTEXT_SIZE);\n"
+    "    const int trained = llama_model_n_ctx_train(model);\n"
+    "    if (trained > 0) context = std::min<long>(context, trained);\n"
+    "    const double per_token = iaoffline_kv_bytes_per_token(model);\n"
+    "    context = std::min<long>(context, (long) (budget_mb * 1024.0 * 1024.0 / per_token));\n"
+    "    context = context / 256 * 256;\n"
+    "    const int floor = trained > 0 ? std::min(IAOFFLINE_MIN_CONTEXT, trained) : IAOFFLINE_MIN_CONTEXT;\n"
+    "    context = std::max<long>(context, floor);\n"
+    "    LOGi(\"%s: KV budget %ld MB, %.0f bytes/token, trained %d -> context %ld\",\n"
+    "         __func__, budget_mb, per_token, trained, context);\n"
+    "    return (int) context;\n"
     "}\n\n"
     "static void append_native_error(const char *text) {\n"
     "    if (text == nullptr || text[0] == '\\0') return;\n"
@@ -216,17 +257,22 @@ replace_once(
     "    auto *context = llama_init_from_model(g_model, ctx_params);\n"
     "    if (context == nullptr) {\n",
     "    ctx_params.n_threads_batch = n_threads;\n"
-    "    // A Q8_0 KV cache takes half the memory of F16 with negligible quality loss. It needs\n"
-    "    // flash attention, which llama.cpp turns on automatically when the model supports it;\n"
-    "    // otherwise context creation fails and the F16 cache is used instead.\n"
-    "    ctx_params.type_k = GGML_TYPE_Q8_0;\n"
-    "    ctx_params.type_v = GGML_TYPE_Q8_0;\n"
+    "    // A Q4_0 KV cache takes about a quarter of the memory of F16, so the same RAM holds a\n"
+    "    // context about 3.5 times longer. It needs flash attention, which llama.cpp turns on\n"
+    "    // automatically when the model supports it; otherwise context creation fails and an\n"
+    "    // F16 cache is used, with the context shrunk to the same memory (and at most 8K,\n"
+    "    // because attention without flash attention needs a buffer that grows with it).\n"
+    "    ctx_params.type_k = GGML_TYPE_Q4_0;\n"
+    "    ctx_params.type_v = GGML_TYPE_Q4_0;\n"
     "    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;\n"
     "    auto *context = llama_init_from_model(g_model, ctx_params);\n"
     "    if (context == nullptr) {\n"
-    "        LOGw(\"%s: Q8_0 KV cache unavailable for this model; retrying with F16\", __func__);\n"
     "        ctx_params.type_k = GGML_TYPE_F16;\n"
     "        ctx_params.type_v = GGML_TYPE_F16;\n"
+    "        ctx_params.n_ctx = std::max(std::min(n_ctx, IAOFFLINE_MIN_CONTEXT),\n"
+    "                                    std::min(IAOFFLINE_MAX_F16_CONTEXT, n_ctx * 9 / 32 / 256 * 256));\n"
+    "        LOGw(\"%s: Q4_0 KV cache unavailable for this model; retrying with F16 and %u tokens\",\n"
+    "             __func__, ctx_params.n_ctx);\n"
     "        context = llama_init_from_model(g_model, ctx_params);\n"
     "    }\n"
     "    if (context == nullptr) {\n",
@@ -234,20 +280,20 @@ replace_once(
 replace_once(
     "    auto *context = init_context(g_model);\n"
     "    if (!context) { return 1; }",
-    "    const int first_context = iaoffline_first_context_size();\n"
-    "    auto *context = init_context(g_model, first_context);\n"
-    "    if (!context && first_context > 4096) {\n"
-    "        LOGw(\"%s: 8192-token context allocation failed; retrying with 4096\", __func__);\n"
-    "        context = init_context(g_model, 4096);\n"
-    "    }\n"
-    "    if (!context && first_context > 2048) {\n"
-    "        LOGw(\"%s: 4096-token context allocation failed; retrying with 2048\", __func__);\n"
-    "        context = init_context(g_model, 2048);\n"
+    "    int n_ctx = iaoffline_context_for_memory(g_model);\n"
+    "    auto *context = init_context(g_model, n_ctx);\n"
+    "    while (!context && n_ctx > IAOFFLINE_MIN_CONTEXT) {\n"
+    "        const int smaller = std::max(IAOFFLINE_MIN_CONTEXT, n_ctx / 2 / 256 * 256);\n"
+    "        LOGw(\"%s: %d-token context allocation failed; retrying with %d\", __func__, n_ctx, smaller);\n"
+    "        n_ctx = smaller;\n"
+    "        context = init_context(g_model, n_ctx);\n"
     "    }\n"
     "    if (!context) {\n"
-    "        LOGe(\"%s: failed to allocate even the 2048-token context\", __func__);\n"
+    "        LOGe(\"%s: failed to allocate even the %d-token context\", __func__, n_ctx);\n"
     "        return 1;\n"
-    "    }",
+    "    }\n"
+    "    // Read back by the app, so its prompt builder uses the context actually allocated.\n"
+    "    setenv(\"IAOFFLINE_ACTIVE_CONTEXT_TOKENS\", std::to_string(llama_n_ctx(context)).c_str(), 1);",
 )
 
 # When prepare() falls back to a smaller context, all overflow/truncation logic

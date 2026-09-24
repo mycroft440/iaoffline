@@ -22,7 +22,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
@@ -565,7 +567,7 @@ private fun HtmlCatalogInstallCard(
 
         if (model.isExperimental) {
             Text(
-                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento, com contexto de 2048 tokens. " +
+                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento. " +
                     "Espere poucas palavras por segundo ou menos, e ${groupedFormatBytes(model.approximateSizeBytes)} livres para o download.",
                 color = CatalogAmber,
                 fontSize = 11.sp,
@@ -898,11 +900,23 @@ private fun ModelDetailsDialog(
         onDismissRequest = onDismiss,
         title = { Text(model.displayName) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(model.description)
+                model.strengths?.let { strengths ->
+                    Text("Pontos fortes", fontWeight = FontWeight.Bold)
+                    Text(strengths)
+                }
                 Text("Fornecedor: ${providerUiMeta(model.provider).sectionName}")
                 Text("Quantização: ${model.quantization} GGUF")
                 Text("Parâmetros: ${groupedFormatParameters(model.totalParametersBillions)}")
+                Text(
+                    model.activeParametersBillions?.let {
+                        "Tipo: MoE, ${groupedFormatParameters(it)} ativos por palavra"
+                    } ?: "Tipo: denso, todos os parâmetros usados em cada palavra",
+                )
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
                 Text("Requisitos: ${groupedFormatBytes(model.recommendedRamBytes)} RAM")
                 Text(
