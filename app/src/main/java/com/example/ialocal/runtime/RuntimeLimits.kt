@@ -14,6 +14,8 @@ object RuntimeLimits {
     const val NATIVE_CONTEXT_TOKENS = 8192
     /** Context used for models that are large for the device's RAM; halves the KV cache. */
     const val LOW_MEMORY_CONTEXT_TOKENS = 4096
+    /** Context for experimental MoE models that are larger than the device RAM. */
+    const val EXPERIMENTAL_CONTEXT_TOKENS = 2048
 
     /**
      * A model file above this share of the device RAM is loaded in low-memory mode: weights stay

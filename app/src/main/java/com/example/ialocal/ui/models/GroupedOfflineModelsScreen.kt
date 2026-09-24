@@ -550,6 +550,9 @@ private fun HtmlCatalogInstallCard(
             if (model.activeParametersBillions != null) {
                 CatalogTag("MoE")
             }
+            if (model.isExperimental) {
+                CatalogTag("Experimental – lento", accent = CatalogAmber)
+            }
             if (installed) {
                 CatalogTag("Instalada", accent = CatalogEmerald)
             }
@@ -559,6 +562,16 @@ private fun HtmlCatalogInstallCard(
             model = model,
             requirementAccent = compatibility.accent,
         )
+
+        if (model.isExperimental) {
+            Text(
+                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento, com contexto de 2048 tokens. " +
+                    "Espere poucas palavras por segundo ou menos, e ${groupedFormatBytes(model.approximateSizeBytes)} livres para o download.",
+                color = CatalogAmber,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+        }
 
         Text(
             text = model.description,

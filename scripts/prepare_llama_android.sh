@@ -90,6 +90,9 @@ PY
 #    reporting the model itself as incompatible.
 # 7. When the app sets IAOFFLINE_LOW_MEMORY=1 (model large for the device RAM),
 #    skip the repacked CPU buffers from the start and begin with a 4K context.
+#    IAOFFLINE_CONTEXT_TOKENS lets the app start even smaller (experimental MoE).
+# 8. Use a Q8_0 KV cache (half of F16) when the model supports flash attention,
+#    falling back to F16 otherwise.
 python3 - "${AI_CHAT_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -122,6 +125,14 @@ replace_once(
     "static bool iaoffline_low_memory_mode() {\n"
     "    const char *value = getenv(\"IAOFFLINE_LOW_MEMORY\");\n"
     "    return value != nullptr && value[0] == '1';\n"
+    "}\n\n"
+    "// First context size to try: IAOFFLINE_CONTEXT_TOKENS when set by the app, else 4K in\n"
+    "// low-memory mode and 8K otherwise. Smaller sizes are still tried if allocation fails.\n"
+    "static int iaoffline_first_context_size() {\n"
+    "    const char *value = getenv(\"IAOFFLINE_CONTEXT_TOKENS\");\n"
+    "    const int requested = value != nullptr ? atoi(value) : 0;\n"
+    "    if (requested >= 512 && requested <= DEFAULT_CONTEXT_SIZE) return requested;\n"
+    "    return iaoffline_low_memory_mode() ? 4096 : DEFAULT_CONTEXT_SIZE;\n"
     "}\n\n"
     "static void append_native_error(const char *text) {\n"
     "    if (text == nullptr || text[0] == '\\0') return;\n"
@@ -201,15 +212,35 @@ replace_once(
     "    }",
 )
 replace_once(
+    "    ctx_params.n_threads_batch = n_threads;\n"
+    "    auto *context = llama_init_from_model(g_model, ctx_params);\n"
+    "    if (context == nullptr) {\n",
+    "    ctx_params.n_threads_batch = n_threads;\n"
+    "    // A Q8_0 KV cache takes half the memory of F16 with negligible quality loss. It needs\n"
+    "    // flash attention, which llama.cpp turns on automatically when the model supports it;\n"
+    "    // otherwise context creation fails and the F16 cache is used instead.\n"
+    "    ctx_params.type_k = GGML_TYPE_Q8_0;\n"
+    "    ctx_params.type_v = GGML_TYPE_Q8_0;\n"
+    "    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;\n"
+    "    auto *context = llama_init_from_model(g_model, ctx_params);\n"
+    "    if (context == nullptr) {\n"
+    "        LOGw(\"%s: Q8_0 KV cache unavailable for this model; retrying with F16\", __func__);\n"
+    "        ctx_params.type_k = GGML_TYPE_F16;\n"
+    "        ctx_params.type_v = GGML_TYPE_F16;\n"
+    "        context = llama_init_from_model(g_model, ctx_params);\n"
+    "    }\n"
+    "    if (context == nullptr) {\n",
+)
+replace_once(
     "    auto *context = init_context(g_model);\n"
     "    if (!context) { return 1; }",
-    "    const bool low_memory = iaoffline_low_memory_mode();\n"
-    "    auto *context = init_context(g_model, low_memory ? 4096 : DEFAULT_CONTEXT_SIZE);\n"
-    "    if (!context && !low_memory) {\n"
+    "    const int first_context = iaoffline_first_context_size();\n"
+    "    auto *context = init_context(g_model, first_context);\n"
+    "    if (!context && first_context > 4096) {\n"
     "        LOGw(\"%s: 8192-token context allocation failed; retrying with 4096\", __func__);\n"
     "        context = init_context(g_model, 4096);\n"
     "    }\n"
-    "    if (!context) {\n"
+    "    if (!context && first_context > 2048) {\n"
     "        LOGw(\"%s: 4096-token context allocation failed; retrying with 2048\", __func__);\n"
     "        context = init_context(g_model, 2048);\n"
     "    }\n"
