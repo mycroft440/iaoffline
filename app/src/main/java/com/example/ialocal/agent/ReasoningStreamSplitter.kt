@@ -2,9 +2,10 @@ package com.example.ialocal.agent
 
 /**
  * Splits one model output, as it streams, into reasoning and answer text. Reasoning is delimited by
- * `<think>`, `<thinking>`, `<reasoning>`, `<analysis>` or `[THINK]` blocks. Some chat templates open the
- * reasoning block in the prompt, so for models that always reason ([expectReasoning]) the output is
- * treated as reasoning until a closing tag appears, even without an opening tag.
+ * `<think>`, `<thinking>`, `<reasoning>`, `<analysis>`, `[THINK]` or Gemma 4's `<|channel>thought`
+ * blocks. Some chat templates open the reasoning block in the prompt, so for models that always
+ * reason ([expectReasoning]) the output is treated as reasoning until a closing tag appears, even
+ * without an opening tag.
  */
 class ReasoningStreamSplitter(private val expectReasoning: Boolean) {
     sealed interface Part {
@@ -107,7 +108,8 @@ class ReasoningStreamSplitter(private val expectReasoning: Boolean) {
     }
 
     companion object {
-        private val OPEN_TAGS = listOf("<thinking>", "<think>", "<reasoning>", "<analysis>", "[THINK]")
-        private val CLOSE_TAGS = listOf("</thinking>", "</think>", "</reasoning>", "</analysis>", "[/THINK]")
+        // "<|channel>thought" … "<channel|>" is Gemma 4's thinking block.
+        private val OPEN_TAGS = listOf("<thinking>", "<think>", "<reasoning>", "<analysis>", "[THINK]", "<|channel>thought")
+        private val CLOSE_TAGS = listOf("</thinking>", "</think>", "</reasoning>", "</analysis>", "[/THINK]", "<channel|>")
     }
 }

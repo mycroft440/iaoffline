@@ -94,6 +94,10 @@ PY
 #    skip the repacked CPU buffers from the start.
 # 8. Use a Q4_0 KV cache (about a quarter of F16) when the model supports flash
 #    attention, falling back to a smaller F16 context otherwise.
+# 9. Format chat turns with llama.cpp's built-in templates and, when a model's
+#    template is not one of them (Gemma 4), render the model's own Jinja template
+#    instead of letting the exception abort the process; a plain transcript is the
+#    last resort.
 python3 - "${AI_CHAT_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -319,6 +323,47 @@ replace_once(
 replace_once(
     "    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {",
     "    if (current_position >= (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM) {",
+)
+
+replace_once(
+    "static void reset_long_term_states(const bool clear_kv_cache = true) {\n"
+    "    chat_msgs.clear();\n",
+    "// How chat turns are formatted for the loaded model; see chat_add_and_format().\n"
+    "enum class iaoffline_template_mode { BUILT_IN, JINJA, PLAIN };\n"
+    "static iaoffline_template_mode g_template_mode = iaoffline_template_mode::BUILT_IN;\n\n"
+    "static void reset_long_term_states(const bool clear_kv_cache = true) {\n"
+    "    chat_msgs.clear();\n"
+    "    g_template_mode = iaoffline_template_mode::BUILT_IN;\n",
+)
+replace_once(
+    "    auto formatted = common_chat_format_single(\n"
+    "            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ false);\n",
+    "    // An exception escaping into JNI aborts the app, so an unsupported template falls back to\n"
+    "    // the model's own Jinja template and, failing that, to a plain transcript.\n"
+    "    std::string formatted;\n"
+    "    const bool add_assistant = role == ROLE_USER;\n"
+    "    if (g_template_mode == iaoffline_template_mode::BUILT_IN) {\n"
+    "        try {\n"
+    "            formatted = common_chat_format_single(\n"
+    "                    g_chat_templates.get(), chat_msgs, new_msg, add_assistant, /* use_jinja */ false);\n"
+    "        } catch (const std::exception &e) {\n"
+    "            LOGw(\"%s: built-in chat template unavailable (%s); using the model's Jinja template\",\n"
+    "                 __func__, e.what());\n"
+    "            g_template_mode = iaoffline_template_mode::JINJA;\n"
+    "        }\n"
+    "    }\n"
+    "    if (g_template_mode == iaoffline_template_mode::JINJA) {\n"
+    "        try {\n"
+    "            formatted = common_chat_format_single(\n"
+    "                    g_chat_templates.get(), chat_msgs, new_msg, add_assistant, /* use_jinja */ true);\n"
+    "        } catch (const std::exception &e) {\n"
+    "            LOGe(\"%s: Jinja chat template failed (%s); using a plain transcript\", __func__, e.what());\n"
+    "            g_template_mode = iaoffline_template_mode::PLAIN;\n"
+    "        }\n"
+    "    }\n"
+    "    if (g_template_mode == iaoffline_template_mode::PLAIN) {\n"
+    "        formatted = role == ROLE_USER ? \"\\nUser: \" + content + \"\\nAssistant: \" : content + \"\\n\";\n"
+    "    }\n",
 )
 
 path.write_text(text)

@@ -15,8 +15,8 @@ data class AssistantContent(
 ) {
     companion object {
         private val METADATA = Regex("(?is)<!--nexus_(reasoning|response)_ms:(\\d+)-->")
-        private val OPEN = Regex("(?is)<(?:think(?:ing)?|reasoning|analysis)>|\\[THINK]")
-        private val CLOSE = Regex("(?is)</(?:think(?:ing)?|reasoning|analysis)>|\\[/THINK]")
+        private val OPEN = Regex("(?is)<(?:think(?:ing)?|reasoning|analysis)>|\\[THINK]|<\\|channel>thought")
+        private val CLOSE = Regex("(?is)</(?:think(?:ing)?|reasoning|analysis)>|\\[/THINK]|<channel\\|>")
 
         fun parse(raw: String): AssistantContent {
             var reasoningMs: Long? = null
