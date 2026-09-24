@@ -5,6 +5,7 @@ import android.content.Context
 import android.system.Os
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
+import com.example.ialocal.agent.HarmonyNormalizer
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
@@ -103,14 +104,21 @@ class LlamaCppRuntime(
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
             logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
             var emitted = 0
+            // gpt-oss answers in the harmony format; everything else passes through unchanged.
+            val harmony = HarmonyNormalizer()
             engine.sendUserPrompt(
                 message = prepared.latestUser,
                 predictLength = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
             ).collect { chunk ->
-                if (chunk.isNotEmpty()) {
-                    emitted += chunk.length
-                    emit(chunk)
+                val text = harmony.push(chunk)
+                if (text.isNotEmpty()) {
+                    emitted += text.length
+                    emit(text)
                 }
+            }
+            harmony.finish().takeIf { it.isNotEmpty() }?.let { text ->
+                emitted += text.length
+                emit(text)
             }
             require(emitted > 0) { "O modelo terminou sem produzir texto." }
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)

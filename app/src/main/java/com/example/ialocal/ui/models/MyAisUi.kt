@@ -723,6 +723,7 @@ private fun resolveProvider(model: AiModelEntity, catalogModel: CatalogModel?): 
         "phi" in text || "microsoft" in text -> ModelProvider.MICROSOFT
         "granite" in text || "ibm" in text -> ModelProvider.IBM
         "nemotron" in text || "nvidia" in text -> ModelProvider.NVIDIA
+        "gpt-oss" in text || "gpt_oss" in text || "openai" in text -> ModelProvider.OPENAI
         "olmo" in text || "ai2" in text -> ModelProvider.AI2
         "liquid" in text || Regex("(^|[^a-z])lfm([^a-z]|$)").containsMatchIn(text) -> ModelProvider.LIQUID
         else -> null

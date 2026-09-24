@@ -11,6 +11,7 @@ enum class ModelProvider(val sectionLabel: String) {
     LIQUID("Modelos da Liquid AI"),
     AI2("Modelos da Ai2 / OLMo"),
     NVIDIA("Modelos da NVIDIA / Nemotron"),
+    OPENAI("Modelos da OpenAI"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -255,6 +256,20 @@ object ModelCatalog {
             totalParametersBillions = 31.6,
             activeParametersBillions = 3.2,
             description = "Nemotron 3 Nano MoE híbrido da NVIDIA: 32B no total e cerca de 3B ativos, com raciocínio. Experimental no celular: lento e com contexto reduzido.",
+        ),
+        CatalogModel(
+            id = "gpt-oss-20b-q3-k-m",
+            displayName = "gpt-oss 20B",
+            provider = ModelProvider.OPENAI,
+            repository = "unsloth/gpt-oss-20b-GGUF",
+            fileName = "gpt-oss-20b-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 11_506_103_488L,
+            sha256 = "bc02b57e05cfef36b1f6f4a952666a76b26838f8cf431412cb0cd19f41cf8040",
+            recommendedRamBytes = 14_000_000_000L,
+            totalParametersBillions = 20.9,
+            activeParametersBillions = 3.6,
+            description = "Modelo aberto da OpenAI: MoE com 21B no total e 3,6B ativos, sempre raciocina antes de responder. Os especialistas continuam em MXFP4 nativo. Experimental no celular: lento e com contexto reduzido.",
         ),
 
         CatalogModel(

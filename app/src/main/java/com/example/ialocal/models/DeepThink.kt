@@ -92,7 +92,7 @@ object DeepThinkSupport {
 
     private val QWEN3_NON_THINKING = Regex("qwen3[^a-z]*[\\w.-]*instruct-2507")
     private val ALWAYS_REASONING = Regex(
-        "deepseek[- ]r1|phi[- ]4[- ]reasoning|reasoning|magistral|qwq|olmo[- ]?3[\\w .-]*think|" +
+        "deepseek[- ]r1|gpt-oss|phi[- ]4[- ]reasoning|reasoning|magistral|qwq|olmo[- ]?3[\\w .-]*think|" +
             "qwen3[.]\\d|qwen3[\\w.-]*thinking-2507",
     )
     private val QWEN3_HYBRID = Regex("qwen-?3(?![.\\d])")
