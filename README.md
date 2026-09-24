@@ -25,6 +25,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - O contexto é o maior que cabe na memória do aparelho (até o limite de treino do modelo): 40% da RAM menos o tamanho do modelo, entre 256 MB e 2 GB para o cache. Num celular de 12 GB, um modelo 4B usa o contexto completo de 32K e um 8B fica em torno de 13K.
 - Modelos MoE grandes (15B ou mais no total, poucos bilhões ativos por palavra), como Gemma 4 26B-A4B, Qwen3-Coder 30B-A3B, Qwen3.6 35B-A3B, Nemotron 3 Nano 30B-A3B e gpt-oss 20B, aparecem como **Experimental – lento**: rodam sempre em modo de pouca memória, lendo os pesos do armazenamento, com 384 MB para o contexto.
 - O gpt-oss 20B da OpenAI responde no formato "harmony"; o app converte o canal `analysis` em raciocínio expansível e o canal `final` em resposta.
+- Modelos cujo formato de conversa não está entre os embutidos no llama.cpp (como o Gemma 4) usam o template Jinja do próprio GGUF, em vez de derrubar o app. O raciocínio do Gemma 4 (`<|channel>thought … <channel|>`) aparece como raciocínio expansível.
 - Um modelo só vira `VERIFIED` e pode ser ativado após uma inferência real no dispositivo.
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.

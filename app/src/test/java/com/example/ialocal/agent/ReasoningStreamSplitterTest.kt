@@ -72,6 +72,14 @@ class ReasoningStreamSplitterTest {
     private fun feed(splitter: ReasoningStreamSplitter, vararg chunks: String): List<Part> =
         chunks.flatMap { splitter.push(it) } + splitter.finish()
 
+    @Test
+    fun gemmaThoughtChannelIsReasoning() {
+        val splitter = ReasoningStreamSplitter(expectReasoning = false)
+        val parts = feed(splitter, "<|chan", "nel>thought\nPensando", " mais<chan", "nel|>Brasília.")
+        assertEquals("\nPensando mais", reasoning(parts))
+        assertEquals("Brasília.", answer(parts))
+    }
+
     private fun reasoning(parts: List<Part>) = parts.filterIsInstance<Reasoning>().joinToString("") { it.text }
     private fun answer(parts: List<Part>) = parts.filterIsInstance<Answer>().joinToString("") { it.text }
 }

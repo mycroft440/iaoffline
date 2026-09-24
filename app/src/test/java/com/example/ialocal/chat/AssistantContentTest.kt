@@ -49,4 +49,12 @@ class AssistantContentTest {
         assertEquals(2L, AssistantContent.parse(twice).responseMs)
         assertEquals("Oi", AssistantContent.answerForHistory(twice))
     }
+
+    @Test
+    fun gemmaThoughtChannelIsReasoning() {
+        val parsed = AssistantContent.parse("<|channel>thought\nPensando<channel|>Brasília.")
+        assertEquals("Pensando", parsed.reasoning)
+        assertEquals("Brasília.", parsed.answer)
+        assertFalse(parsed.reasoningInProgress)
+    }
 }

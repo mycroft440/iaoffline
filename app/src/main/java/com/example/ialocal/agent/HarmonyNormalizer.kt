@@ -53,13 +53,16 @@ class HarmonyNormalizer {
             out.append(pending, 0, start)
             pending.delete(0, start)
             val close = pending.indexOf(TOKEN_END, TOKEN_START.length)
-            if (close < 0) {
-                if (finished || pending.length > MAX_TOKEN_LENGTH) {
-                    // Not a control token after all.
-                    out.append(pending)
-                    pending.setLength(0)
-                }
-                break
+            // Without a closing "|>" yet, a trailing "|" may be its first half.
+            val nameEnd = if (close >= 0) close else pending.length - if (pending.endsWith("|")) 1 else 0
+            val validName = nameEnd <= MAX_TOKEN_LENGTH &&
+                (TOKEN_START.length until nameEnd).all { isTokenNameChar(pending[it]) }
+            if (close < 0 && validName && !finished) break // May still become a control token.
+            if (close < 0 || !validName) {
+                // Not a control token (for example Gemma's "<|channel>"): keep the text as is.
+                out.append(pending[0])
+                pending.deleteCharAt(0)
+                continue
             }
             val token = pending.substring(0, close + TOKEN_END.length)
             pending.delete(0, token.length)
@@ -88,6 +91,8 @@ class HarmonyNormalizer {
         }
         else -> ""
     }
+
+    private fun isTokenNameChar(c: Char): Boolean = c.isLetter() || c == '_' || c == '"'
 
     /** Length of [pending] that can be released now, keeping a suffix that may start `<|`. */
     private fun heldBack(): Int = if (pending.endsWith("<")) pending.length - 1 else pending.length

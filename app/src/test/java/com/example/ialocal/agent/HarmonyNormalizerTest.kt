@@ -45,6 +45,13 @@ class HarmonyNormalizerTest {
     }
 
     @Test
+    fun gemmaChannelTagsPassThrough() {
+        val text = "<|channel>thought\nPensando<channel|>Resposta"
+        assertEquals(text, normalize(text.chunked(3)))
+        assertEquals(text, normalize(listOf(text)))
+    }
+
+    @Test
     fun feedsTheReasoningSplitter() {
         val splitter = ReasoningStreamSplitter(expectReasoning = true)
         val normalizer = HarmonyNormalizer()
