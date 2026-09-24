@@ -220,7 +220,7 @@ object ModelCatalog {
             recommendedRamBytes = 22_000_000_000L,
             totalParametersBillions = 34.7,
             activeParametersBillions = 3.0,
-            description = "Qwen3.6 MoE com 35B no total e só 3B ativos por palavra. Experimental no celular: roda lendo os pesos do armazenamento, com contexto reduzido, e é lento.",
+            description = "Qwen3.6 MoE com 35B no total e só 3B ativos por palavra. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
             strengths = "3º entre os modelos acima de 19B e o melhor dos MoE: raciocínio, conhecimento, português e agentes.",
         ),
 
@@ -262,7 +262,7 @@ object ModelCatalog {
             recommendedRamBytes = 24_000_000_000L,
             totalParametersBillions = 31.6,
             activeParametersBillions = 3.2,
-            description = "Nemotron 3 Nano MoE híbrido da NVIDIA: 32B no total e cerca de 3B ativos, com raciocínio. Experimental no celular: lento e com contexto reduzido.",
+            description = "Nemotron 3 Nano MoE híbrido da NVIDIA: 32B no total e cerca de 3B ativos, com raciocínio. Experimental no celular: lento.",
             strengths = "4º entre os modelos acima de 19B. Forte em raciocínio e matemática.",
         ),
         CatalogModel(
@@ -277,7 +277,7 @@ object ModelCatalog {
             recommendedRamBytes = 14_000_000_000L,
             totalParametersBillions = 20.9,
             activeParametersBillions = 3.6,
-            description = "Modelo aberto da OpenAI: MoE com 21B no total e 3,6B ativos, sempre raciocina antes de responder. Os especialistas continuam em MXFP4 nativo. Experimental no celular: lento e com contexto reduzido.",
+            description = "Modelo aberto da OpenAI: MoE com 21B no total e 3,6B ativos, sempre raciocina antes de responder. Os especialistas continuam em MXFP4 nativo. Experimental no celular: lento.",
             strengths = "5º entre os modelos acima de 19B. Ótimo em raciocínio e matemática, mais fraco em português e conhecimento geral. É o menor dos experimentais, o que tende a deixá-lo menos lento.",
         ),
 

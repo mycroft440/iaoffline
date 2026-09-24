@@ -567,7 +567,7 @@ private fun HtmlCatalogInstallCard(
 
         if (model.isExperimental) {
             Text(
-                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento, com contexto de 2048 tokens. " +
+                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento. " +
                     "Espere poucas palavras por segundo ou menos, e ${groupedFormatBytes(model.approximateSizeBytes)} livres para o download.",
                 color = CatalogAmber,
                 fontSize = 11.sp,

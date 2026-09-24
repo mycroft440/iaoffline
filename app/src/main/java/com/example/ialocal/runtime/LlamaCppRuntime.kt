@@ -40,8 +40,8 @@ class LlamaCppRuntime(
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
     private var loadedModelId: String? = null
-    /** Context the native side was asked to allocate for the loaded model. */
-    private var loadedContextTokens = RuntimeLimits.NATIVE_CONTEXT_TOKENS
+    /** Context the native side allocated for the loaded model. */
+    private var loadedContextTokens = RuntimeLimits.MIN_CONTEXT_TOKENS
     /** setSystemPrompt can only be called directly after a load in the pinned binding. */
     private var requestSessionConsumed = false
 
@@ -94,7 +94,7 @@ class LlamaCppRuntime(
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
                 messages = messages,
-                contextTokens = minOf(model.contextLength, loadedContextTokens),
+                contextTokens = loadedContextTokens,
                 maxOutputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
             )
             if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
@@ -164,26 +164,28 @@ class LlamaCppRuntime(
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         val experimental = ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
             ?.isExperimental == true
-        val lowMemory = experimental ||
-            RuntimeLimits.needsLowMemoryMode(File(model.filePath).length(), deviceTotalMemory())
-        loadedContextTokens = when {
-            experimental -> RuntimeLimits.EXPERIMENTAL_CONTEXT_TOKENS
-            lowMemory -> RuntimeLimits.LOW_MEMORY_CONTEXT_TOKENS
-            else -> RuntimeLimits.NATIVE_CONTEXT_TOKENS
-        }
-        // Read by the patched native loader: file-backed weights and a smaller first context for
-        // models that do not fit comfortably in RAM.
+        val modelBytes = File(model.filePath).length()
+        val totalMemory = deviceTotalMemory()
+        val lowMemory = experimental || RuntimeLimits.needsLowMemoryMode(modelBytes, totalMemory)
+        val kvBudgetMb = RuntimeLimits.kvCacheBudgetBytes(modelBytes, totalMemory, experimental) / (1024 * 1024)
+        // Read by the patched native loader: file-backed weights for models that do not fit
+        // comfortably in RAM, and the memory that sizes the (Q4_0) context.
         runCatching {
             Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true)
-            Os.setenv(CONTEXT_TOKENS_ENV, loadedContextTokens.toString(), true)
+            Os.setenv(CONTEXT_TOKENS_ENV, RuntimeLimits.MAX_CONTEXT_TOKENS.toString(), true)
+            Os.setenv(KV_BUDGET_ENV, kvBudgetMb.toString(), true)
+            Os.unsetenv(ACTIVE_CONTEXT_ENV)
         }
         logger?.info(
             "MODEL_LOAD",
-            "Carregando ${model.name} (${model.filePath})" +
-                if (lowMemory) " em modo de pouca memória (contexto $loadedContextTokens)" else "",
+            "Carregando ${model.name} (${model.filePath}); memória para contexto: $kvBudgetMb MB" +
+                if (lowMemory) " em modo de pouca memória" else "",
         )
         try {
             engine.loadModel(model.filePath)
+            loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
+                ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
+            logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")
             loadedModelId = model.id
             requestSessionConsumed = false
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
@@ -273,6 +275,8 @@ class LlamaCppRuntime(
         const val FIXED_TEMPERATURE = 0.3f
         private const val LOW_MEMORY_ENV = "IAOFFLINE_LOW_MEMORY"
         private const val CONTEXT_TOKENS_ENV = "IAOFFLINE_CONTEXT_TOKENS"
+        private const val KV_BUDGET_ENV = "IAOFFLINE_KV_BUDGET_MB"
+        private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
 }
