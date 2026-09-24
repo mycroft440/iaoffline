@@ -110,6 +110,10 @@ class DeepThinkTest {
             DeepThinkControlMode.NONE,
             DeepThinkSupport.capability(model("Granite 4.0 H Tiny 7B-A1B", "local-catalog-granite4.0-h-tiny-q3-k-m-1")).mode,
         )
+        assertEquals(
+            DeepThinkControlMode.REASONING_MODEL,
+            DeepThinkSupport.capability(model("gpt-oss 20B", "local-catalog-gpt-oss-20b-q3-k-m-1")).mode,
+        )
     }
 
     @Test

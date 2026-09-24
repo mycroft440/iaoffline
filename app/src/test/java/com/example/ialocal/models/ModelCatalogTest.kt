@@ -75,6 +75,7 @@ class ModelCatalogTest {
         assertTrue("qwen3-coder-30b-a3b-instruct-q4-k-m" in experimental)
         assertTrue("qwen3.6-35b-a3b-q3-k-m" in experimental)
         assertTrue("nemotron3-nano-30b-a3b-q3-k-m" in experimental)
+        assertTrue("gpt-oss-20b-q3-k-m" in experimental)
         // Small MoE fit in RAM and dense large models cannot run from storage at a usable speed.
         assertFalse("granite4.0-h-tiny-q3-k-m" in experimental)
         assertFalse("lfm2.5-8b-a1b-q4-k-m" in experimental)

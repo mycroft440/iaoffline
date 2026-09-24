@@ -1127,6 +1127,15 @@ private fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (prov
         tagline = "Modelos NVIDIA para raciocínio e agentes",
         accent = Color(0xFFA3E635),
     )
+
+    ModelProvider.OPENAI -> ProviderUiMeta(
+        selectorName = "gpt-oss",
+        selectorSubtitle = "OpenAI",
+        sectionName = "OpenAI",
+        badge = "gpt-oss",
+        tagline = "Modelos abertos da OpenAI com raciocínio",
+        accent = Color(0xFFE5E7EB),
+    )
 }
 
 private fun groupedDownloadStatus(state: ModelDownloadState, progress: String?): String = when (state.phase) {
@@ -1168,4 +1177,5 @@ private val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.LIQUID,
     ModelProvider.AI2,
     ModelProvider.NVIDIA,
+    ModelProvider.OPENAI,
 )

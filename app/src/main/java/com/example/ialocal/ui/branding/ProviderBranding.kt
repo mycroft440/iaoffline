@@ -30,6 +30,7 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.LIQUID -> "Liquid AI"
     ModelProvider.AI2 -> "Ai2 / OLMo"
     ModelProvider.NVIDIA -> "NVIDIA"
+    ModelProvider.OPENAI -> "OpenAI"
 }
 
 fun ModelProvider.logoRes(): Int = when (this) {
@@ -42,7 +43,8 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.IBM,
     ModelProvider.LIQUID,
     ModelProvider.AI2,
-    ModelProvider.NVIDIA -> R.drawable.provider_generic
+    ModelProvider.NVIDIA,
+    ModelProvider.OPENAI -> R.drawable.provider_generic
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =
