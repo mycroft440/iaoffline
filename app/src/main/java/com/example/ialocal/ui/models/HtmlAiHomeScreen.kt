@@ -123,51 +123,63 @@ fun HtmlAiHomeScreen(
         containerColor = HtmlBg,
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
+        // The banner is pinned to the bottom, outside the content, so it is always visible. The
+        // content fits the screen on common phones; scrolling is only a fallback for small screens.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(HtmlBg)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .background(HtmlBg),
         ) {
-            HtmlStatusBar(
-                clock = clock,
-                batteryPercent = hardware.batteryPercent,
-            )
-            HtmlAppHeader(
-                onOpenCodeEditor = onOpenCodeEditor,
-                onOpenSettings = onOpenSettings,
-            )
-            HtmlHeroCard()
-            HtmlNavigationCard(
-                title = "Chat com I.A",
-                subtitle = "Inicie uma nova conversa com sua I.A local",
-                icon = Icons.Default.SmartToy,
-                onClick = onStartChat,
-            )
-            MyAisHomePreview(
-                models = installedModels,
-                catalog = viewModel.catalog,
-                onOpenMyAis = onOpenChats,
-            )
-            HtmlHardwareCard(hardware)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                HtmlNavigationCard(
-                    title = "Baixar I.As offline",
-                    subtitle = "Modelos GGUF otimizados para uso local",
-                    icon = Icons.Default.Download,
-                    onClick = onOpenOfflineModels,
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                HtmlStatusBar(
+                    clock = clock,
+                    batteryPercent = hardware.batteryPercent,
                 )
-                HtmlNavigationCard(
-                    title = "Utilizar API",
-                    subtitle = "Configure e controle a API local do aparelho",
-                    icon = Icons.Default.Code,
-                    onClick = onOpenApi,
+                HtmlAppHeader(
+                    onOpenCodeEditor = onOpenCodeEditor,
+                    onOpenSettings = onOpenSettings,
                 )
+                HtmlHeroCard()
+                HtmlNavigationCard(
+                    title = "Chat com I.A",
+                    subtitle = "Inicie uma nova conversa com sua I.A local",
+                    icon = Icons.Default.SmartToy,
+                    onClick = onStartChat,
+                )
+                MyAisHomePreview(
+                    models = installedModels,
+                    catalog = viewModel.catalog,
+                    onOpenMyAis = onOpenChats,
+                )
+                HtmlHardwareCard(hardware)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HtmlNavigationCard(
+                        title = "Baixar I.As offline",
+                        subtitle = "Modelos GGUF otimizados para uso local",
+                        icon = Icons.Default.Download,
+                        onClick = onOpenOfflineModels,
+                    )
+                    HtmlNavigationCard(
+                        title = "Utilizar API",
+                        subtitle = "Configure e controle a API local do aparelho",
+                        icon = Icons.Default.Code,
+                        onClick = onOpenApi,
+                    )
+                }
             }
-            InlineAdBanner(enabled = adsEnabled)
+            InlineAdBanner(
+                enabled = adsEnabled,
+                anchored = true,
+                modifier = Modifier.padding(horizontal = 20.dp),
+            )
         }
     }
 

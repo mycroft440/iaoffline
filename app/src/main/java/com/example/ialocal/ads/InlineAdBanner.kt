@@ -40,8 +40,12 @@ import com.google.android.gms.ads.LoadAdError
 
 private val mainHandler = Handler(Looper.getMainLooper())
 
+/**
+ * An AdMob banner. [anchored] uses the short anchored adaptive size meant for a banner pinned to the
+ * bottom of the screen; otherwise the taller inline adaptive size used between content.
+ */
 @Composable
-fun InlineAdBanner(enabled: Boolean, modifier: Modifier = Modifier) {
+fun InlineAdBanner(enabled: Boolean, modifier: Modifier = Modifier, anchored: Boolean = false) {
     val adUnitId = BuildConfig.BANNER_AD_UNIT_ID
     if (!enabled || adUnitId.isBlank()) return
 
@@ -79,7 +83,13 @@ fun InlineAdBanner(enabled: Boolean, modifier: Modifier = Modifier) {
                 val adView = remember {
                     AdView(context).apply {
                         this.adUnitId = adUnitId
-                        setAdSize(AdSize.getInlineAdaptiveBannerAdSize(widthDp, 120))
+                        setAdSize(
+                            if (anchored) {
+                                AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(context, widthDp)
+                            } else {
+                                AdSize.getInlineAdaptiveBannerAdSize(widthDp, 120)
+                            }
+                        )
                         adListener = object : AdListener() {
                             override fun onAdLoaded() {
                                 loaded = true
@@ -111,8 +121,8 @@ fun InlineAdBanner(enabled: Boolean, modifier: Modifier = Modifier) {
                 LaunchedEffect(adView) { adView.loadAd(AdRequest.Builder().build()) }
 
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = if (loaded) 16.dp else 0.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = if (!loaded) 0.dp else if (anchored) 6.dp else 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (anchored) 4.dp else 6.dp),
                 ) {
                     if (loaded) Text("Publicidade", color = Color(0xFF94A3B8), fontSize = 10.sp)
                     AndroidView(
