@@ -49,11 +49,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
@@ -111,6 +113,7 @@ import com.example.ialocal.chat.AssistantContent
 import com.example.ialocal.chat.QueuedChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.data.AttachmentEntity
 import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.ConversationListItem
 import com.example.ialocal.data.MessageRole
@@ -118,6 +121,7 @@ import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
+import com.example.ialocal.files.AttachmentOpener
 import com.example.ialocal.models.BuiltInProfile
 import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
@@ -884,6 +888,7 @@ private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, showAd
 
 @Composable
 private fun ExactUserMessage(item: MessageWithAttachments) {
+    val context = LocalContext.current
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         Column(Modifier.fillMaxWidth(0.88f), horizontalAlignment = Alignment.End) {
             Surface(
@@ -898,6 +903,9 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(item.attachments, key = { it.id }) { attachment ->
                                 Surface(
+                                    modifier = Modifier.clickable {
+                                        AttachmentOpener.open(context, attachment.fileName, attachment.localPath, attachment.mimeType)
+                                    },
                                     shape = RoundedCornerShape(8.dp),
                                     color = Color.Black.copy(alpha = 0.30f),
                                     border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
@@ -1049,6 +1057,8 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                 )
             }
 
+            if (item.attachments.isNotEmpty()) ExactCreatedFiles(item.attachments)
+
             if (!sending && (parsed.answer.isNotBlank() || parsed.reasoning != null)) {
                 Row(
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -1074,6 +1084,58 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
             }
         }
     }
+}
+
+/** Files an answer created (PDFs from the agent tools): tap to open, or share. */
+@Composable
+private fun ExactCreatedFiles(attachments: List<AttachmentEntity>) {
+    val context = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        attachments.forEach { attachment ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().clickable {
+                    AttachmentOpener.open(context, attachment.fileName, attachment.localPath, attachment.mimeType)
+                },
+                shape = RoundedCornerShape(12.dp),
+                color = PCard,
+                border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.40f)),
+            ) {
+                Row(
+                    Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.PictureAsPdf, null, tint = Color(0xFFF87171), modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            attachment.fileName,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = PText,
+                        )
+                        Text(
+                            "${formatExactSize(attachment.sizeBytes)} · toque para abrir",
+                            fontSize = 11.sp,
+                            color = PMuted,
+                        )
+                    }
+                    ExactSquareIconButton(size = 36.dp, onClick = {
+                        AttachmentOpener.share(context, attachment.fileName, attachment.localPath, attachment.mimeType)
+                    }) {
+                        Icon(Icons.Default.Share, "Compartilhar ${attachment.fileName}", tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatExactSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024 -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024 -> "${bytes / 1024} KB"
+    else -> "$bytes B"
 }
 
 /** Milliseconds since [startedAt], refreshed every second while composed. */

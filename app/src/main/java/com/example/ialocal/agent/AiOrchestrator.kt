@@ -1,6 +1,7 @@
 package com.example.ialocal.agent
 
 import com.example.ialocal.agent.tools.AgentToolRegistry
+import com.example.ialocal.agent.tools.ToolContext
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
@@ -10,6 +11,7 @@ import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.ModelRuntime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
 
@@ -59,9 +61,10 @@ class AiOrchestrator(
         messages: List<AiChatMessage>,
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
+        conversationId: String? = null,
     ): AgentRunResult {
         val toolsUsed = mutableListOf<String>()
-        val (agent, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {
+        val (agent, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride, conversationId) {
             toolsUsed += it
         }
         val output = chunks.toList().joinToString("").trim()
@@ -78,8 +81,9 @@ class AiOrchestrator(
         messages: List<AiChatMessage>,
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
+        conversationId: String? = null,
     ): Pair<AiModelEntity, Flow<String>> {
-        val (_, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {}
+        val (_, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride, conversationId) {}
         return model to chunks
     }
 
@@ -90,6 +94,7 @@ class AiOrchestrator(
         messages: List<AiChatMessage>,
         maxTokensOverride: Int?,
         temperatureOverride: Float?,
+        conversationId: String?,
         onToolUsed: (String) -> Unit,
     ): PreparedAgent {
         val agent = resolveAgent(agentId)
@@ -125,7 +130,15 @@ class AiOrchestrator(
             },
             toolRound = { answer ->
                 tools.parseCall(answer)?.let { call ->
-                    val output = tools.execute(call)
+                    // A failed tool (a page that does not exist, an unknown id) is reported to the
+                    // model, which can correct the call or explain it, instead of ending the answer.
+                    val output = try {
+                        tools.execute(call, ToolContext(conversationId))
+                    } catch (cancel: CancellationException) {
+                        throw cancel
+                    } catch (e: Exception) {
+                        "ERRO: ${e.message ?: "a ferramenta falhou."}"
+                    }
                     onToolUsed(call.name)
                     ToolRoundResult(call.name, output)
                 }

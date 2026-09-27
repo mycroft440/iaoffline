@@ -3,6 +3,7 @@ package com.example.ialocal
 import android.content.Context
 import com.example.ialocal.agent.AiOrchestrator
 import com.example.ialocal.agent.tools.AgentToolRegistry
+import com.example.ialocal.agent.tools.PdfTools
 import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.api.ApiSettingsRepository
 import com.example.ialocal.api.LocalApiAiGateway
@@ -16,6 +17,7 @@ import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentContextBuilder
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.files.PdfLibrary
 import com.example.ialocal.models.AutomaticModelImporter
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.ModelDownloader
@@ -44,7 +46,8 @@ class AppContainer(context: Context) {
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
     val modelManager = ModelManager(appContext, modelRepository, modelRuntime, modelDownloader, diagnostics)
     val automaticModelImporter = AutomaticModelImporter(appContext, modelRepository, diagnostics)
-    val agentTools = AgentToolRegistry(chatRepository, codeEditSessions, diagnostics)
+    val pdfLibrary = PdfLibrary(appContext, chatRepository)
+    val agentTools = AgentToolRegistry(chatRepository, codeEditSessions, PdfTools(pdfLibrary), diagnostics)
     val deepThinkStore = DeepThinkStore(appContext)
     val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools, deepThinkStore)
 
@@ -69,6 +72,7 @@ class AppContainer(context: Context) {
         aiGateway,
         modelRepository,
         modelManager,
+        pdfLibrary,
     )
 
     init {

@@ -40,6 +40,7 @@ class LocalApiAiGateway(
         val lastUserIndex = request.messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
         val payload = JSONObject().apply {
             request.agentId?.let { put("agent_id", it) }
+            put("conversation_id", request.conversationId)
             put("stream", true)
             put("messages", JSONArray().apply {
                 request.messages.forEachIndexed { index, message ->

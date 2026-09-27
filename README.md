@@ -35,6 +35,13 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - O Nemotron Nano 9B v2 do catálogo vem de um GGUF com o formato de conversa da NVIDIA; o anterior não tinha nenhum, e o modelo recebia o prompt sem as marcações de turno. Quem instalou o arquivo antigo vê o novo como uma IA a baixar.
 - O Llama 3.2 Vision 11B saiu do catálogo: o GGUF usa a arquitetura `mllama`, que o llama.cpp não carrega, então ele nunca funcionava.
 - Um modelo só vira `VERIFIED` e pode ser ativado após uma inferência real no dispositivo.
+- Ferramentas de PDF para os perfis, pedidas em linguagem natural no chat ("crie um PDF com…", "junte os PDFs que anexei", "tire a página 3", "coloque uma marca-d'água"):
+  - `pdf_create` cria um PDF a partir de texto: linhas com `#` viram títulos, `-` itens de lista e linha em branco separa parágrafos. Acentos e a maioria dos alfabetos usam uma fonte Unicode do sistema; caracteres que a fonte não tem viram "?".
+  - `pdf_merge` monta um PDF juntando PDFs da conversa, inteiros ou só algumas páginas (`1-3,5`), na ordem pedida.
+  - `pdf_edit` cria uma cópia editada: remover, manter ou reordenar páginas, girar, adicionar texto (topo, rodapé ou centro), acrescentar páginas com texto e marca-d'água. O texto adicionado sai na horizontal mesmo em páginas giradas.
+  - `pdf_read` e `pdf_list` leem o texto e listam os PDFs da conversa. Para mudar o texto de um PDF, o modelo lê o original e cria outro com o texto novo.
+
+  As ferramentas usam só os PDFs daquela conversa (os anexados pelo usuário e os criados nela) e nunca alteram nem apagam um arquivo: todo resultado é um PDF novo. Ele aparece anexado à resposta (tocar abre em outro app, o botão ao lado compartilha) e fica também em **Documentos/IA Offline**. PDFs protegidos por senha podem ser lidos, mas não editados nem montados. Se uma operação falha (uma página que não existe, por exemplo), o erro volta para o modelo, que pode corrigir o pedido ou explicar ao usuário. Os anexos das mensagens do usuário também passam a abrir com um toque.
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.
 - Teste end-to-end dentro do app.

@@ -4,12 +4,14 @@ import android.content.Context
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.ai.AiChatRequest
 import com.example.ialocal.ai.AiGateway
+import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.ChatRepository
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
+import com.example.ialocal.files.PdfLibrary
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import java.util.concurrent.ConcurrentHashMap
@@ -49,6 +51,7 @@ class ChatGenerationManager(
     private val aiGateway: AiGateway,
     private val modelRepository: ModelRepository,
     private val modelManager: ModelManager,
+    private val pdfLibrary: PdfLibrary,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -268,16 +271,39 @@ class ChatGenerationManager(
                 repository.updateMessageContent(replyId, text)
             }
             repository.updateMessageContent(replyId, finalContent())
+            attachCreatedPdfs(conversationId, replyId, startedAt)
             repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
         } catch (cancel: CancellationException) {
             withContext(NonCancellable) {
                 repository.updateMessageContent(replyId, finalContent())
+                attachCreatedPdfs(conversationId, replyId, startedAt)
                 repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
             }
             throw cancel
         } catch (t: Throwable) {
+            attachCreatedPdfs(conversationId, replyId, startedAt)
             repository.updateMessageStatus(replyId, MessageStatus.ERROR)
             throw t
+        }
+    }
+
+    /** PDFs the agent tools created while answering show up attached to the answer. */
+    private suspend fun attachCreatedPdfs(conversationId: String, replyId: String, since: Long) {
+        runCatching {
+            val created = pdfLibrary.createdSince(conversationId, since)
+            repository.addAttachments(
+                replyId,
+                created.map { document ->
+                    PendingAttachment(
+                        id = document.id,
+                        type = AttachmentType.FILE,
+                        fileName = document.name,
+                        localPath = document.file.absolutePath,
+                        mimeType = PdfLibrary.PDF_MIME,
+                        sizeBytes = document.file.length(),
+                    )
+                },
+            )
         }
     }
 

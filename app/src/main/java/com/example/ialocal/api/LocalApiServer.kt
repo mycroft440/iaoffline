@@ -236,7 +236,12 @@ class LocalApiServer(
                     .put("list_recent_conversations")
                     .put("search_conversations")
                     .put("read_conversation")
-                    .put("current_time")))
+                    .put("current_time")
+                    .put("pdf_list")
+                    .put("pdf_read")
+                    .put("pdf_create")
+                    .put("pdf_merge")
+                    .put("pdf_edit")))
         }
         return HttpResponse(200, JSONObject().put("object", "list").put("data", data).toString())
     }
@@ -244,7 +249,7 @@ class LocalApiServer(
     private suspend fun chatCompletion(body: String): HttpResponse {
         val p = parseChat(body)
         val (model, output) = if (p.agentId != null) {
-            val result = orchestrator.runAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
+            val result = orchestrator.runAgent(p.agentId, p.messages, p.maxTokens, p.temperature, p.conversationId)
             result.model to result.output
         } else {
             orchestrator.chatCompletion(p.model, p.messages, p.maxTokens ?: DEFAULT_MAX_TOKENS, p.temperature)
@@ -298,7 +303,7 @@ class LocalApiServer(
                 }
                 try {
                     val (model, chunks) = if (p.agentId != null) {
-                        orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
+                        orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature, p.conversationId)
                     } else {
                         val stream = orchestrator.streamChatCompletion(
                             p.model,
@@ -350,6 +355,7 @@ class LocalApiServer(
         val result = orchestrator.runAgent(
             json.optString("agent_id").takeIf { it.isNotBlank() },
             messages,
+            conversationId = json.optString("conversation_id").takeIf { it.isNotBlank() },
         )
         return HttpResponse(200, JSONObject()
             .put("id", "agent-${UUID.randomUUID()}")
@@ -372,6 +378,8 @@ class LocalApiServer(
         return ChatParams(
             model = json.optString("model").takeIf { it.isNotBlank() },
             agentId = json.optString("agent_id").takeIf { it.isNotBlank() },
+            // Scopes the files agent tools can use (the conversation's attached and created PDFs).
+            conversationId = json.optString("conversation_id").takeIf { it.isNotBlank() },
             messages = parseMessages(json.getJSONArray("messages")),
             // Absent means "use the profile budget" for agent runs.
             maxTokens = if (json.has("max_tokens")) json.getInt("max_tokens").coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS) else null,
@@ -523,6 +531,7 @@ class LocalApiServer(
     private data class ChatParams(
         val model: String?,
         val agentId: String?,
+        val conversationId: String?,
         val messages: List<AiChatMessage>,
         val maxTokens: Int?,
         val temperature: Float,

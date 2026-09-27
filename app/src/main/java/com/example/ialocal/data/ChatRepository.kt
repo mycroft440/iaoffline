@@ -52,27 +52,35 @@ class ChatRepository(
             )
         )
 
-        if (pendingAttachments.isNotEmpty()) {
-            dao.insertAttachments(
-                pendingAttachments.map { pending ->
-                    AttachmentEntity(
-                        id = pending.id,
-                        messageId = messageId,
-                        type = pending.type.name,
-                        fileName = pending.fileName,
-                        localPath = pending.localPath,
-                        mimeType = pending.mimeType,
-                        sizeBytes = pending.sizeBytes,
-                        createdAt = now,
-                        extractedText = pending.extractedText,
-                    )
-                }
-            )
-        }
+        addAttachments(messageId, pendingAttachments, now)
 
         dao.touchConversation(conversationId, now)
         maybeCreateAutomaticTitle(conversationId, role, content)
         return messageId
+    }
+
+    /** Attaches files to an existing message, such as the PDFs an answer created. */
+    suspend fun addAttachments(
+        messageId: String,
+        pendingAttachments: List<PendingAttachment>,
+        now: Long = System.currentTimeMillis(),
+    ) {
+        if (pendingAttachments.isEmpty()) return
+        dao.insertAttachments(
+            pendingAttachments.map { pending ->
+                AttachmentEntity(
+                    id = pending.id,
+                    messageId = messageId,
+                    type = pending.type.name,
+                    fileName = pending.fileName,
+                    localPath = pending.localPath,
+                    mimeType = pending.mimeType,
+                    sizeBytes = pending.sizeBytes,
+                    createdAt = now,
+                    extractedText = pending.extractedText,
+                )
+            }
+        )
     }
 
     suspend fun updateMessageStatus(messageId: String, status: MessageStatus) {

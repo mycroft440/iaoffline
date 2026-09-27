@@ -8,7 +8,8 @@ import java.util.Date
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class ToolPermission { READ_ONLY, SCOPED_WRITE, CONFIRM_REQUIRED }
+/** CREATE_FILES tools only write new files: they never change or delete an existing one. */
+enum class ToolPermission { READ_ONLY, SCOPED_WRITE, CREATE_FILES, CONFIRM_REQUIRED }
 
 data class ToolDefinition(
     val name: String,
@@ -19,9 +20,13 @@ data class ToolDefinition(
 
 data class ToolCall(val name: String, val arguments: JSONObject)
 
+/** Where a tool call comes from: the conversation scopes the files the tools can use. */
+data class ToolContext(val conversationId: String? = null)
+
 class AgentToolRegistry(
     private val chats: ChatRepository,
     private val codeEdits: CodeEditSessionStore,
+    private val pdfTools: PdfTools,
     private val logger: AiEventLogger? = null,
 ) {
     val definitions = listOf(
@@ -35,7 +40,7 @@ class AgentToolRegistry(
             arguments = "{\"session_id\": texto, \"replacement\": texto substituto exato, \"summary\": resumo curto opcional}",
             permission = ToolPermission.SCOPED_WRITE,
         ),
-    )
+    ) + pdfTools.definitions
 
     private fun availableDefinitions(): List<ToolDefinition> =
         if (codeEdits.hasActiveSessions()) definitions
@@ -44,6 +49,7 @@ class AgentToolRegistry(
     fun promptInstructions(): String = buildString {
         append("\n\nVocê tem ferramentas locais. Use uma ferramenta apenas quando necessário.\n")
         append("Ferramentas SCOPED_WRITE só funcionam dentro de uma sessão explicitamente autorizada pela interface e não permitem ampliar a faixa de escrita.\n")
+        append("Ferramentas CREATE_FILES só criam arquivos novos; nunca alteram nem apagam os existentes.\n")
         append("Para chamar uma ferramenta, responda SOMENTE com um JSON válido neste formato: ")
         append("{\"tool\":\"nome\",\"arguments\":{...}}. Não use markdown nessa resposta.\n")
         append("Depois de receber um resultado de ferramenta, continue e responda normalmente ao usuário.\nFerramentas disponíveis:\n")
@@ -53,24 +59,21 @@ class AgentToolRegistry(
     }
 
     fun parseCall(output: String): ToolCall? {
-        val ticks = "\u0060\u0060\u0060"
-        val clean = output.trim().removePrefix(ticks + "json").removePrefix(ticks).removeSuffix(ticks).trim()
-        val start = clean.indexOf('{')
-        val end = clean.lastIndexOf('}')
-        if (start < 0 || end <= start) return null
-        val json = runCatching { JSONObject(clean.substring(start, end + 1)) }.getOrNull() ?: return null
+        val text = ToolCallText.jsonObject(output) ?: return null
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: return null
         val name = json.optString("tool").takeIf { it.isNotBlank() } ?: return null
         if (availableDefinitions().none { it.name == name }) return null
         return ToolCall(name, json.optJSONObject("arguments") ?: JSONObject())
     }
 
-    suspend fun execute(call: ToolCall): String {
+    suspend fun execute(call: ToolCall, context: ToolContext = ToolContext()): String {
         val definition = availableDefinitions().firstOrNull { it.name == call.name }
             ?: throw IllegalArgumentException("Ferramenta desconhecida ou indisponível: ${call.name}")
         check(definition.permission != ToolPermission.CONFIRM_REQUIRED) {
             "A ferramenta ${call.name} exige confirmação e não pode ser executada automaticamente."
         }
         logger?.info("AGENT_TOOL", "Executando ${call.name}")
+        if (pdfTools.handles(call.name)) return pdfTools.execute(call.name, call.arguments, context.conversationId)
 
         return when (call.name) {
             "list_recent_conversations" -> {

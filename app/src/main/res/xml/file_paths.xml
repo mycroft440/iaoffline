@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files the app lets other apps open or receive: user attachments and PDFs created by the agent tools. -->
+<paths>
+    <files-path name="attachments" path="attachments/" />
+    <files-path name="documents" path="documents/" />
+</paths>
