@@ -11,6 +11,7 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.models.ModelCatalog
 import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -42,13 +43,14 @@ class LlamaCppRuntime(
     private var loadedModelId: String? = null
     /** Context the native side allocated for the loaded model. */
     private var loadedContextTokens = RuntimeLimits.MIN_CONTEXT_TOKENS
-    /** setSystemPrompt can only be called directly after a load in the pinned binding. */
-    private var requestSessionConsumed = false
+    /**
+     * Conversation in the native context that the next request may continue. The model stays
+     * loaded between requests either way: a new system prompt resets the native conversation.
+     */
+    private var conversation: NativeConversation? = null
 
     override suspend fun warmUp(model: AiModelEntity) = withContext(nativeDispatcher) {
-        mutex.withLock {
-            ensureFreshLoaded(model, forceReload = loadedModelId != model.id || requestSessionConsumed)
-        }
+        mutex.withLock { ensureLoaded(model, forceReload = false) }
     }
 
     override suspend fun verify(model: AiModelEntity): VerificationResult = withContext(nativeDispatcher) {
@@ -56,9 +58,8 @@ class LlamaCppRuntime(
             var finalState = RuntimeState()
             try {
                 logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
-                ensureFreshLoaded(model, forceReload = true)
+                ensureLoaded(model, forceReload = true)
                 engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
-                requestSessionConsumed = true
                 _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
                 val output = engine.sendUserPrompt("Responda apenas: OK", predictLength = 8)
                     .toList().joinToString("").trim()
@@ -90,30 +91,51 @@ class LlamaCppRuntime(
         }
         mutex.lock()
         try {
-            ensureFreshLoaded(model, forceReload = requestSessionConsumed || loadedModelId != model.id)
-            val prepared = promptBuilder.prepare(
-                baseSystemPrompt = systemPrompt,
-                messages = messages,
-                contextTokens = loadedContextTokens,
-                maxOutputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
-            )
-            if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
-
-            engine.setSystemPrompt(prepared.systemPrompt)
-            requestSessionConsumed = true
+            ensureLoaded(model, forceReload = false)
+            val outputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
+            val continued = conversation?.continuation(model.id, systemPrompt, messages, outputTokens)
+            // Until this answer ends normally, the context holds no conversation to continue.
+            conversation = null
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
             logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
             var emitted = 0
             // gpt-oss answers in the harmony format; everything else passes through unchanged.
             val harmony = HarmonyNormalizer()
-            engine.sendUserPrompt(
-                message = prepared.latestUser,
-                predictLength = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
-            ).collect { chunk ->
-                val text = harmony.push(chunk)
-                if (text.isNotEmpty()) {
-                    emitted += text.length
-                    emit(text)
+
+            suspend fun answer(userPrompt: String) {
+                engine.sendUserPrompt(message = userPrompt, predictLength = outputTokens).collect { chunk ->
+                    val text = harmony.push(chunk)
+                    if (text.isNotEmpty()) {
+                        emitted += text.length
+                        emit(text)
+                    }
+                }
+            }
+
+            suspend fun rebuildAndAnswer() {
+                val prepared = promptBuilder.prepare(
+                    baseSystemPrompt = systemPrompt,
+                    messages = messages,
+                    contextTokens = loadedContextTokens,
+                    maxOutputTokens = outputTokens,
+                )
+                if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
+                // Resets the native conversation; the model itself stays loaded.
+                engine.setSystemPrompt(prepared.systemPrompt)
+                answer(prepared.latestUser)
+            }
+
+            if (continued == null) {
+                rebuildAndAnswer()
+            } else {
+                logger?.info("INFERENCE", "Continuando a conversa que já está no contexto: só a nova mensagem é processada")
+                try {
+                    answer(continued)
+                } catch (rejected: IOException) {
+                    // The native side rejects the message before generating anything.
+                    if (rejectionCode(rejected) == null) throw rejected
+                    logger?.info("INFERENCE", "A conversa no contexto não pôde continuar; reconstruindo o prompt")
+                    rebuildAndAnswer()
                 }
             }
             harmony.finish().takeIf { it.isNotEmpty() }?.let { text ->
@@ -121,6 +143,7 @@ class LlamaCppRuntime(
                 emit(text)
             }
             require(emitted > 0) { "O modelo terminou sem produzir texto." }
+            conversation = finishedConversation(model, systemPrompt, messages)
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Resposta concluída ($emitted caracteres)")
         } catch (cancel: CancellationException) {
@@ -128,9 +151,10 @@ class LlamaCppRuntime(
             logger?.info("INFERENCE", "Geração cancelada pelo usuário")
             throw cancel
         } catch (t: Throwable) {
-            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
+            val message = humanize(t)
+            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
             logger?.error("INFERENCE", "Falha durante geração", t)
-            throw t
+            throw if (rejectionCode(t) != null) IllegalStateException(message, t) else t
         } finally {
             mutex.unlock()
         }
@@ -153,9 +177,14 @@ class LlamaCppRuntime(
         mutex.withLock { unloadLocked() }
     }
 
-    private suspend fun ensureFreshLoaded(model: AiModelEntity, forceReload: Boolean) {
+    /**
+     * Loads [model] unless it is already loaded and idle. Reloading a 5-9 GB model for every
+     * message cost seconds to minutes on a weak phone (weights read again from storage and
+     * repacked), so it now happens only when the model changes or after an error.
+     */
+    private suspend fun ensureLoaded(model: AiModelEntity, forceReload: Boolean) {
         awaitEngineInitialized()
-        if (!forceReload && loadedModelId == model.id && !requestSessionConsumed) {
+        if (!forceReload && loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
         }
@@ -187,12 +216,10 @@ class LlamaCppRuntime(
                 ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
             logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")
             loadedModelId = model.id
-            requestSessionConsumed = false
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("MODEL_LOAD", "Modelo READY: ${model.apiModelId}")
         } catch (t: Throwable) {
             loadedModelId = null
-            requestSessionConsumed = false
             val message = humanize(t)
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
             logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}: $message", t)
@@ -205,7 +232,23 @@ class LlamaCppRuntime(
         return ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo).totalMem
     }
 
+    /** The conversation the context now holds, when the answer ended normally and can continue. */
+    private fun finishedConversation(
+        model: AiModelEntity,
+        systemPrompt: String,
+        messages: List<AiChatMessage>,
+    ): NativeConversation? {
+        // Published by the patched native binding when generation stops.
+        val stop = runCatching { Os.getenv(LAST_STOP_ENV) }.getOrNull()
+        val used = runCatching { Os.getenv(CONTEXT_USED_ENV)?.toIntOrNull() }.getOrNull()
+        if (stop != "eog" || used == null) return null
+        return NativeConversation(model.id, systemPrompt, messages, used, loadedContextTokens)
+    }
+
     private suspend fun awaitEngineInitialized() {
+        // A failed load or answer leaves the engine in Error until cleanUp() resets it and frees
+        // what was loaded. Without this, every later request failed with that same old error.
+        if (engine.state.value is InferenceEngine.State.Error) unloadLocked()
         val current = engine.state.value
         if (current is InferenceEngine.State.Initialized || current is InferenceEngine.State.ModelReady) return
         _state.value = RuntimeState(RuntimeStatus.INITIALIZING)
@@ -218,10 +261,10 @@ class LlamaCppRuntime(
     }
 
     private fun unloadLocked(finalState: RuntimeState = RuntimeState()) {
+        conversation = null
         val current = engine.state.value
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
-            requestSessionConsumed = false
             _state.value = finalState
             return
         }
@@ -235,13 +278,21 @@ class LlamaCppRuntime(
         runCatching { engine.cleanUp() }
             .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
         loadedModelId = null
-        requestSessionConsumed = false
         _state.value = finalState
     }
+
+    /** Code of a user prompt the patched native binding refused, or null for other errors. */
+    private fun rejectionCode(t: Throwable): Int? =
+        t.message?.takeIf { it.startsWith(USER_PROMPT_REJECTED) }
+            ?.removePrefix(USER_PROMPT_REJECTED)?.trim()?.toIntOrNull()
 
     private fun humanize(t: Throwable): String {
         val raw = t.message.orEmpty()
         return when {
+            rejectionCode(t) == CODE_CONTEXT_FULL ->
+                "A conversa não coube no contexto deste modelo, que não consegue descartar mensagens antigas. Comece uma nova conversa ou envie uma mensagem mais curta."
+            rejectionCode(t) != null ->
+                "O modelo não conseguiu processar a mensagem, provavelmente por falta de memória. Feche outros apps e tente novamente."
             raw.contains("após as tentativas de compatibilidade", ignoreCase = true) -> buildString {
                 append("O runtime não conseguiu carregar este GGUF nos modos otimizado, mmap conservador e compatibilidade em CPU.")
                 nativeDetail(raw)?.let { append(" Detalhe técnico: ").append(it) }
@@ -277,6 +328,12 @@ class LlamaCppRuntime(
         private const val CONTEXT_TOKENS_ENV = "IAOFFLINE_CONTEXT_TOKENS"
         private const val KV_BUDGET_ENV = "IAOFFLINE_KV_BUDGET_MB"
         private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
+        private const val LAST_STOP_ENV = "IAOFFLINE_LAST_STOP"
+        private const val CONTEXT_USED_ENV = "IAOFFLINE_CONTEXT_USED"
+        /** Prefix of the error the patched binding throws when it refuses a user prompt. */
+        private const val USER_PROMPT_REJECTED = "IAOFFLINE_USER_PROMPT_REJECTED:"
+        /** The prompt does not fit and this model's context cannot drop old messages. */
+        private const val CODE_CONTEXT_FULL = 3
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
 }

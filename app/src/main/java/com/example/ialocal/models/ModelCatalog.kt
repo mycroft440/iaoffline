@@ -224,18 +224,21 @@ object ModelCatalog {
             strengths = "3º entre os modelos acima de 19B e o melhor dos MoE: raciocínio, conhecimento, português e agentes.",
         ),
 
+        // The first GGUF used here (weathermanj) has no chat template, so the model received the
+        // texts glued together without turns. This conversion carries NVIDIA's template; the new id
+        // makes the catalog offer it again to whoever installed the old file.
         CatalogModel(
-            id = "nemotron-nano-9b-v2-q4-k-m",
+            id = "nemotron-nano-9b-v2-iq3-m",
             displayName = "Nemotron Nano 9B v2",
             provider = ModelProvider.NVIDIA,
-            repository = "weathermanj/NVIDIA-Nemotron-Nano-9B-v2-gguf",
-            fileName = "NVIDIA-Nemotron-Nano-9B-v2-gguf-IQ3_M.gguf",
+            repository = "bartowski/nvidia_NVIDIA-Nemotron-Nano-9B-v2-GGUF",
+            fileName = "nvidia_NVIDIA-Nemotron-Nano-9B-v2-IQ3_M.gguf",
             quantization = "IQ3_M",
-            approximateSizeBytes = 5_207_928_960L,
-            sha256 = "a6a553492b1c902658132d9b0dd2abcb86b51b079a6349d065b210ae340d7efc",
+            approximateSizeBytes = 5_207_935_840L,
+            sha256 = "6be313382440dcf3d89f3a491716b68093ce5ee1a2d7dc8cd5d29cd0aea23a91",
             recommendedRamBytes = 9_600_000_000L,
             totalParametersBillions = 9.0,
-            description = "Modelo NVIDIA de 9B com modos de raciocínio e resposta direta. Forte em matemática, código, instruções e agentes; GGUF IQ3_M compatível com llama.cpp.",
+            description = "Modelo NVIDIA de 9B com modos de raciocínio e resposta direta. Forte em matemática, código, instruções e agentes; GGUF IQ3_M com o formato de conversa oficial da NVIDIA.",
         ),
         CatalogModel(
             id = "nemotron3-nano-4b-q4-k-m",
@@ -307,19 +310,8 @@ object ModelCatalog {
             totalParametersBillions = 3.0,
             description = "Llama pequeno e equilibrado para chat local em aparelhos intermediários.",
         ),
-        CatalogModel(
-            id = "llama3.2-vision-11b-instruct-q4-k-m",
-            displayName = "Llama 3.2 Vision 11B",
-            provider = ModelProvider.META,
-            repository = "leafspark/Llama-3.2-11B-Vision-Instruct-GGUF",
-            fileName = "Llama-3.2-11B-Vision-Instruct.Q4_K_M.gguf",
-            quantization = "Q4_K_M",
-            approximateSizeBytes = 5_960_000_000L,
-            sha256 = "652e85aa1e14c9087a4ccc3ab516fb794cbcf152f8b4b8d3c0b828da4ada62d9",
-            recommendedRamBytes = 12_000_000_000L,
-            totalParametersBillions = 10.7,
-            description = "Checkpoint da família Vision. O app atual instala e testa o GGUF textual; entrada de imagem requer suporte multimodal adicional.",
-        ),
+        // Llama 3.2 Vision 11B is not offered: its GGUF uses the mllama architecture, which
+        // llama.cpp does not load.
 
         CatalogModel(
             id = "ministral3-3b-instruct-q4-k-m",
