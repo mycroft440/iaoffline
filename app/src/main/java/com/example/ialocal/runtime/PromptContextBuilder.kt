@@ -7,7 +7,13 @@ import com.example.ialocal.ai.AiChatMessage
  * The binding accepts one system prompt after model load, so previous turns are folded into it.
  */
 class PromptContextBuilder {
-    data class Prepared(val systemPrompt: String, val latestUser: String, val truncated: Boolean)
+    data class Prepared(
+        val systemPrompt: String,
+        val latestUser: String,
+        val truncated: Boolean,
+        /** Whether earlier turns were folded into [systemPrompt]; without them it is the same for every new conversation. */
+        val hasHistory: Boolean = false,
+    )
 
     fun prepare(
         baseSystemPrompt: String,
@@ -57,7 +63,7 @@ class PromptContextBuilder {
                 append("Continue a conversa respeitando o histórico acima.")
             }
         }
-        return Prepared(prompt, latestUser, truncated)
+        return Prepared(prompt, latestUser, truncated, hasHistory = selected.isNotEmpty())
     }
 
     companion object {

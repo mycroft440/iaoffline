@@ -48,6 +48,9 @@ class LlamaCppRuntime(
      * loaded between requests either way: a new system prompt resets the native conversation.
      */
     private var conversation: NativeConversation? = null
+    private val savedStates by lazy { ConversationStateStore(File(appContext.cacheDir, STATE_DIR)) }
+    /** Saved state of the conversation in the context, dropped once that conversation moves on. */
+    private var savedConversationKey: String? = null
 
     override suspend fun warmUp(model: AiModelEntity) = withContext(nativeDispatcher) {
         mutex.withLock { ensureLoaded(model, forceReload = false) }
@@ -93,9 +96,13 @@ class LlamaCppRuntime(
         try {
             ensureLoaded(model, forceReload = false)
             val outputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
-            val continued = conversation?.continuation(model.id, systemPrompt, messages, outputTokens)
+            var continued = conversation?.continuation(model.id, systemPrompt, messages, outputTokens)
             // Until this answer ends normally, the context holds no conversation to continue.
             conversation = null
+            if (continued == null) {
+                savedConversationKey = null
+                continued = restoreSavedConversation(model, systemPrompt, messages, outputTokens)
+            }
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
             logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
             var emitted = 0
@@ -113,6 +120,7 @@ class LlamaCppRuntime(
             }
 
             suspend fun rebuildAndAnswer() {
+                savedConversationKey = null
                 val prepared = promptBuilder.prepare(
                     baseSystemPrompt = systemPrompt,
                     messages = messages,
@@ -121,7 +129,11 @@ class LlamaCppRuntime(
                 )
                 if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
                 // Resets the native conversation; the model itself stays loaded.
-                engine.setSystemPrompt(prepared.systemPrompt)
+                if (prepared.hasHistory) {
+                    engine.setSystemPrompt(prepared.systemPrompt)
+                } else {
+                    setSystemPromptFromSavedState(model, prepared.systemPrompt)
+                }
                 answer(prepared.latestUser)
             }
 
@@ -144,6 +156,7 @@ class LlamaCppRuntime(
             }
             require(emitted > 0) { "O modelo terminou sem produzir texto." }
             conversation = finishedConversation(model, systemPrompt, messages)
+            conversation?.let { saveConversationState(model, it) }
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Resposta concluída ($emitted caracteres)")
         } catch (cancel: CancellationException) {
@@ -240,9 +253,78 @@ class LlamaCppRuntime(
     ): NativeConversation? {
         // Published by the patched native binding when generation stops.
         val stop = runCatching { Os.getenv(LAST_STOP_ENV) }.getOrNull()
-        val used = runCatching { Os.getenv(CONTEXT_USED_ENV)?.toIntOrNull() }.getOrNull()
+        val used = contextUsed()
         if (stop != "eog" || used == null) return null
         return NativeConversation(model.id, systemPrompt, messages, used, loadedContextTokens)
+    }
+
+    private fun stateModel(model: AiModelEntity) =
+        ConversationStateStore.Model(model.id, model.filePath, File(model.filePath).length())
+
+    private fun contextUsed(): Int? = runCatching { Os.getenv(CONTEXT_USED_ENV)?.toIntOrNull() }.getOrNull()
+
+    /**
+     * Restores the saved state of the conversation that [messages] continues (its last answer plus
+     * a new user message) and returns that message, or null when there is none or it cannot
+     * continue; the caller then rebuilds the prompt, which resets whatever was restored.
+     */
+    private suspend fun restoreSavedConversation(
+        model: AiModelEntity,
+        systemPrompt: String,
+        messages: List<AiChatMessage>,
+        outputTokens: Int,
+    ): String? {
+        if (messages.size < 3) return null
+        val previous = messages.dropLast(2)
+        val key = savedStates.conversationKey(stateModel(model), systemPrompt, previous)
+        val file = savedStates.find(key) ?: return null
+        if (!runCatching { engine.restoreConversation(file.path) }.getOrDefault(false)) {
+            savedStates.remove(key)
+            return null
+        }
+        val used = contextUsed() ?: return null
+        val next = NativeConversation(model.id, systemPrompt, previous, used, loadedContextTokens)
+            .continuation(model.id, systemPrompt, messages, outputTokens) ?: return null
+        savedConversationKey = key
+        logger?.info("INFERENCE", "Conversa restaurada do armazenamento ($used tokens sem reprocessar)")
+        return next
+    }
+
+    /** A new conversation's system prompt: restored when this model and profile saved it before. */
+    private suspend fun setSystemPromptFromSavedState(model: AiModelEntity, systemPrompt: String) {
+        val key = savedStates.systemPromptKey(stateModel(model), systemPrompt)
+        savedStates.find(key)?.let { saved ->
+            if (runCatching { engine.restoreConversation(saved.path) }.getOrDefault(false)) {
+                logger?.info("INFERENCE", "Prompt de sistema restaurado do armazenamento")
+                return
+            }
+            savedStates.remove(key)
+        }
+        engine.setSystemPrompt(systemPrompt)
+        val file = savedStates.fileForSaving(key) ?: return
+        if (runCatching { engine.saveConversation(file.path) }.getOrDefault(false)) {
+            savedStates.prune(keep = key)
+        } else {
+            savedStates.remove(key)
+        }
+    }
+
+    /**
+     * Saves a finished conversation long enough to be slow to rebuild, so it continues quickly
+     * after another conversation used the model or Android closed the app. Its previous state is
+     * dropped: the conversation moved on.
+     */
+    private suspend fun saveConversationState(model: AiModelEntity, finished: NativeConversation) {
+        if (finished.usedTokens < MIN_TOKENS_TO_SAVE) return
+        val key = savedStates.conversationKey(stateModel(model), finished.systemPrompt, finished.messages)
+        val file = savedStates.fileForSaving(key) ?: return
+        if (!runCatching { engine.saveConversation(file.path) }.getOrDefault(false)) {
+            savedStates.remove(key)
+            return
+        }
+        savedConversationKey?.takeIf { it != key }?.let(savedStates::remove)
+        savedConversationKey = key
+        savedStates.prune(keep = key)
     }
 
     private suspend fun awaitEngineInitialized() {
@@ -262,6 +344,7 @@ class LlamaCppRuntime(
 
     private fun unloadLocked(finalState: RuntimeState = RuntimeState()) {
         conversation = null
+        savedConversationKey = null
         val current = engine.state.value
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
@@ -334,6 +417,9 @@ class LlamaCppRuntime(
         private const val USER_PROMPT_REJECTED = "IAOFFLINE_USER_PROMPT_REJECTED:"
         /** The prompt does not fit and this model's context cannot drop old messages. */
         private const val CODE_CONTEXT_FULL = 3
+        private const val STATE_DIR = "conversation-states"
+        /** Below this, rebuilding the conversation is quick enough not to spend 55-150 MB on it. */
+        private const val MIN_TOKENS_TO_SAVE = 512
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
 }

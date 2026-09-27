@@ -44,7 +44,7 @@ data class NativeConversation(
 
     companion object {
         /** The user message that was answered may carry a DeepThink switch the history copy lacks. */
-        private fun comparable(content: String): String =
+        internal fun comparable(content: String): String =
             content.trim().removeSuffix("/no_think").removeSuffix("/think").trimEnd()
 
         /** Pessimistic, so that a long message rebuilds the conversation instead of overflowing it. */

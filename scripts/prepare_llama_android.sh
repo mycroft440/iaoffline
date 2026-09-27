@@ -6,6 +6,7 @@ LLAMA_TAG="${LLAMA_CPP_TAG:-v0.4.0}"
 LLAMA_DIR="${ROOT_DIR}/third_party/llama.cpp"
 AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
+ENGINE_API_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
 AI_CHAT_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
 
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
@@ -100,8 +101,59 @@ replace_once(
     "            }\n",
 )
 
+# Saving and restoring the conversation in the context (see nativeSaveConversation in
+# ai_chat.cpp), on the engine's dispatcher like every other native call.
+replace_once(
+    "    @FastNative\n    private external fun processSystemPrompt(systemPrompt: String): Int\n",
+    "    @FastNative\n    private external fun processSystemPrompt(systemPrompt: String): Int\n\n"
+    "    private external fun nativeSaveConversation(path: String): Boolean\n\n"
+    "    private external fun nativeRestoreConversation(path: String): Boolean\n",
+)
+replace_once(
+    "    /**\n     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]\n     */\n",
+    "    override suspend fun saveConversation(path: String): Boolean =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            _state.value is InferenceEngine.State.ModelReady && nativeSaveConversation(path)\n"
+    "        }\n\n"
+    "    override suspend fun restoreConversation(path: String): Boolean =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            check(_state.value is InferenceEngine.State.ModelReady) {\n"
+    "                \"Cannot restore a conversation in ${_state.value.javaClass.simpleName}!\"\n"
+    "            }\n"
+    "            nativeRestoreConversation(path)\n"
+    "        }\n\n"
+    "    /**\n     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]\n     */\n",
+)
+
 path.write_text(text)
 print("Applied IA Offline inference-engine recovery patch")
+PY
+
+python3 - "${ENGINE_API_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "    suspend fun setSystemPrompt(systemPrompt: String)\n"
+if text.count(old) != 1:
+    raise SystemExit("Unexpected llama.cpp v0.4.0 InferenceEngine shape")
+text = text.replace(old, old + (
+    "\n"
+    "    /**\n"
+    "     * IA Offline: saves the conversation in the context (KV cache, recurrent state and chat\n"
+    "     * history) to [path]. Returns false when there is nothing to save or the write failed.\n"
+    "     */\n"
+    "    suspend fun saveConversation(path: String): Boolean\n"
+    "\n"
+    "    /**\n"
+    "     * IA Offline: replaces the conversation in the context with one saved by [saveConversation]\n"
+    "     * for the same model. Returns false, leaving the context empty, when it cannot be restored.\n"
+    "     */\n"
+    "    suspend fun restoreConversation(path: String): Boolean\n"
+), 1)
+path.write_text(text)
+print("Applied IA Offline conversation-state API patch")
 PY
 
 # Android compatibility patch for model loading:
@@ -139,6 +191,9 @@ PY
 #    and a user prompt after a finished answer continues it (see
 #    iaoffline_format_continuation). Why generation stopped and how much context is
 #    in use are published in IAOFFLINE_LAST_STOP and IAOFFLINE_CONTEXT_USED.
+# 14. Save the conversation in the context to a file and restore it later
+#    (nativeSaveConversation / nativeRestoreConversation), so a system prompt or a
+#    history is not processed again.
 python3 - "${AI_CHAT_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -155,7 +210,7 @@ def replace_once(old: str, new: str) -> None:
 
 replace_once(
     "#include <string>\n#include <unistd.h>",
-    "#include <string>\n#include <mutex>\n#include <cstdlib>\n#include <algorithm>\n#include <vector>\n#include <unistd.h>\n#include <gguf.h>",
+    "#include <string>\n#include <mutex>\n#include <cstdlib>\n#include <cstdio>\n#include <cstring>\n#include <algorithm>\n#include <fstream>\n#include <vector>\n#include <unistd.h>\n#include <gguf.h>",
 )
 replace_once(
     "static common_sampler                   * g_sampler;\n\nextern \"C\"\nJNIEXPORT void JNICALL\nJava_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {\n    // Set llama log handler to Android\n    llama_log_set(aichat_android_log_callback, nullptr);",
@@ -782,6 +837,122 @@ replace_once(
     "    LOGi(\"%s: Continuing the conversation with: \\n%s\\n\", __func__, formatted.c_str());\n"
     "    return true;\n"
     "}\n",
+)
+
+# Conversation state on disk. Processing a 300-token system prompt with a 9B model takes
+# tens of seconds on a phone (36 s with 2 x86 threads for Qwen3.5 9B), and a long history
+# minutes; loading the saved state takes a fraction of a second (55 MB, 0.03 s). The
+# KV cache and recurrent state of sequence 0 go to <path>; what this binding needs to
+# keep formatting the conversation goes to <path>.chat.
+replace_once(
+    "extern \"C\"\n"
+    "JNIEXPORT void JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_unload(",
+    "static const char IAOFFLINE_CHAT_MAGIC[8] = {'I', 'A', 'O', 'C', 'H', 'A', 'T', '1'};\n\n"
+    "static void iaoffline_write_u32(std::ofstream &out, uint32_t value) {\n"
+    "    out.write((const char *) &value, sizeof(value));\n"
+    "}\n\n"
+    "static bool iaoffline_read_u32(std::ifstream &in, uint32_t &value) {\n"
+    "    return (bool) in.read((char *) &value, sizeof(value));\n"
+    "}\n\n"
+    "static void iaoffline_write_string(std::ofstream &out, const std::string &value) {\n"
+    "    iaoffline_write_u32(out, (uint32_t) value.size());\n"
+    "    out.write(value.data(), (std::streamsize) value.size());\n"
+    "}\n\n"
+    "static bool iaoffline_read_string(std::ifstream &in, std::string &value) {\n"
+    "    uint32_t size = 0;\n"
+    "    if (!iaoffline_read_u32(in, size) || size > (64u << 20)) return false;\n"
+    "    value.assign(size, '\\0');\n"
+    "    return size == 0 || (bool) in.read(&value[0], size);\n"
+    "}\n\n"
+    "static std::string iaoffline_jstring(JNIEnv *env, jstring value) {\n"
+    "    const char *chars = env->GetStringUTFChars(value, nullptr);\n"
+    "    std::string result(chars);\n"
+    "    env->ReleaseStringUTFChars(value, chars);\n"
+    "    return result;\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jboolean JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_nativeSaveConversation(JNIEnv *env, jobject, jstring jpath) {\n"
+    "    if (chat_msgs.empty() || current_position <= 0) return JNI_FALSE;\n"
+    "    const std::string path = iaoffline_jstring(env, jpath);\n"
+    "    const std::string chat_path = path + \".chat\";\n"
+    "    const llama_token no_tokens = 0;\n"
+    "    bool saved = llama_state_seq_save_file(g_context, path.c_str(), 0, &no_tokens, 0) > 0;\n"
+    "    if (saved) {\n"
+    "        std::ofstream out(chat_path, std::ios::binary | std::ios::trunc);\n"
+    "        out.write(IAOFFLINE_CHAT_MAGIC, sizeof(IAOFFLINE_CHAT_MAGIC));\n"
+    "        iaoffline_write_u32(out, (uint32_t) system_prompt_position);\n"
+    "        iaoffline_write_u32(out, (uint32_t) current_position);\n"
+    "        iaoffline_write_u32(out, (uint32_t) g_template_mode);\n"
+    "        iaoffline_write_u32(out, (uint32_t) g_conversation_template_mode);\n"
+    "        iaoffline_write_u32(out, (uint32_t) g_last_eog_token);\n"
+    "        iaoffline_write_u32(out, (uint32_t) chat_msgs.size());\n"
+    "        for (const auto &msg : chat_msgs) {\n"
+    "            iaoffline_write_string(out, msg.role);\n"
+    "            iaoffline_write_string(out, msg.content);\n"
+    "        }\n"
+    "        out.close();\n"
+    "        saved = !out.fail();\n"
+    "    }\n"
+    "    if (!saved) {\n"
+    "        std::remove(path.c_str());\n"
+    "        std::remove(chat_path.c_str());\n"
+    "        LOGw(\"%s: could not save the conversation to %s\", __func__, path.c_str());\n"
+    "        return JNI_FALSE;\n"
+    "    }\n"
+    "    LOGi(\"%s: saved %d context positions to %s\", __func__, current_position, path.c_str());\n"
+    "    return JNI_TRUE;\n"
+    "}\n\n"
+    "// Replaces the conversation in the context; on failure the context is left empty, as after a\n"
+    "// reset, and the app sends a system prompt as usual.\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jboolean JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_nativeRestoreConversation(JNIEnv *env, jobject, jstring jpath) {\n"
+    "    const std::string path = iaoffline_jstring(env, jpath);\n"
+    "    reset_long_term_states();\n"
+    "    reset_short_term_states();\n"
+    "    common_sampler_reset(g_sampler);\n"
+    "\n"
+    "    std::ifstream in(path + \".chat\", std::ios::binary);\n"
+    "    char magic[sizeof(IAOFFLINE_CHAT_MAGIC)] = {0};\n"
+    "    uint32_t system_position = 0, position = 0, mode = 0, conversation_mode = 0, eog = 0, n_msgs = 0;\n"
+    "    bool ok = in.read(magic, sizeof(magic)) && memcmp(magic, IAOFFLINE_CHAT_MAGIC, sizeof(magic)) == 0 &&\n"
+    "              iaoffline_read_u32(in, system_position) && iaoffline_read_u32(in, position) &&\n"
+    "              iaoffline_read_u32(in, mode) && iaoffline_read_u32(in, conversation_mode) &&\n"
+    "              iaoffline_read_u32(in, eog) && iaoffline_read_u32(in, n_msgs) &&\n"
+    "              mode <= (uint32_t) iaoffline_template_mode::PLAIN &&\n"
+    "              conversation_mode <= (uint32_t) iaoffline_template_mode::PLAIN &&\n"
+    "              position > 0 && system_position <= position &&\n"
+    "              (int) position < (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM && n_msgs > 0 && n_msgs < 100000;\n"
+    "    std::vector<common_chat_msg> msgs;\n"
+    "    for (uint32_t i = 0; ok && i < n_msgs; i++) {\n"
+    "        common_chat_msg msg;\n"
+    "        ok = iaoffline_read_string(in, msg.role) && iaoffline_read_string(in, msg.content);\n"
+    "        msgs.push_back(std::move(msg));\n"
+    "    }\n"
+    "    llama_token no_tokens = 0;\n"
+    "    size_t n_tokens = 0;\n"
+    "    ok = ok && llama_state_seq_load_file(g_context, path.c_str(), 0, &no_tokens, 1, &n_tokens) > 0 &&\n"
+    "         llama_memory_seq_pos_max(llama_get_memory(g_context), 0) + 1 == (llama_pos) position;\n"
+    "    if (!ok) {\n"
+    "        reset_long_term_states();\n"
+    "        LOGw(\"%s: could not restore the conversation from %s\", __func__, path.c_str());\n"
+    "        return JNI_FALSE;\n"
+    "    }\n"
+    "    chat_msgs = std::move(msgs);\n"
+    "    system_prompt_position = (llama_pos) system_position;\n"
+    "    current_position = (llama_pos) position;\n"
+    "    g_template_mode = (iaoffline_template_mode) mode;\n"
+    "    g_conversation_template_mode = (iaoffline_template_mode) conversation_mode;\n"
+    "    g_last_eog_token = (llama_token) eog;\n"
+    "    iaoffline_publish_stop(\"restored\");\n"
+    "    LOGi(\"%s: restored %d context positions from %s\", __func__, current_position, path.c_str());\n"
+    "    return JNI_TRUE;\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT void JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_unload(",
 )
 
 path.write_text(text)
