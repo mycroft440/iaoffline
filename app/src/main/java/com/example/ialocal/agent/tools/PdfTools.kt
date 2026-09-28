@@ -98,7 +98,10 @@ class PdfTools(
         "pdf_edit" -> {
             val source = library.find(conversationId, Kind.PDF, arguments.requireText("id"))
             val operations = parseOperations(arguments.optJSONArray("operations"))
-            val name = arguments.optText("file_name") ?: DocumentLibrary.editedName(source.name, Kind.PDF)
+            // A copy named like the original would show up as a second file with the same name.
+            val name = arguments.optText("file_name")
+                ?.takeUnless { DocumentLibrary.fileName(it, Kind.PDF).equals(source.name, ignoreCase = true) }
+                ?: DocumentLibrary.editedName(source.name, Kind.PDF)
             created(conversationId, name) { output -> engine.edit(source.file, output, operations) }
         }
         else -> error("Ferramenta de PDF desconhecida: $name")

@@ -16,8 +16,9 @@ class TextToolsTest {
 
     @Test
     fun replaceAndAppend() {
-        val answer = """{"tool":"txt_edit","arguments":{"id":"7f3c2a","file_name":"compras editado.txt","operations":[{"op":"replace","find":"café","replace":"chá"},{"op":"append","text":"açúcar"}]}}"""
-        assertEquals("arroz\nfeijão\nchá\nleite\naçúcar\n", edit("arroz\nfeijão\ncafé\nleite\n", answer))
+        val answer = """{"tool":"txt_edit","arguments":{"id":"compras.txt","file_name":"compras.txt","operations":[{"op":"replace","find":"café","replace":"chá"},{"op":"append","text":"\n\naçúcar"}]}}"""
+        // The model expected one blank line before "açúcar", as in the answer it gave the user.
+        assertEquals("arroz\nfeijão\nchá\nleite\n\naçúcar\n", edit("arroz\nfeijão\ncafé\nleite\n", answer))
     }
 
     @Test

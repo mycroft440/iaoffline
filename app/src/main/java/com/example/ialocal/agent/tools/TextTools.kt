@@ -85,7 +85,9 @@ class TextTools(private val library: DocumentLibrary) : ConversationFileTools {
             val original = TextFiles.load(source.file)
             val edited = TextFiles.edit(original.text, parseOperations(arguments.optJSONArray("operations")))
             val extension = source.name.substringAfterLast('.', "")
+            // A copy named like the original would show up as a second file with the same name.
             val name = arguments.optText("file_name")?.let { DocumentLibrary.fileName(it, Kind.TEXT, extension) }
+                ?.takeUnless { it.equals(source.name, ignoreCase = true) }
                 ?: DocumentLibrary.editedName(source.name, Kind.TEXT)
             val (document, _) = library.create(conversationId, Kind.TEXT, name) { file ->
                 file.writeBytes(TextFiles.encode(edited.text, original.lineSeparator, original.byteOrderMark))

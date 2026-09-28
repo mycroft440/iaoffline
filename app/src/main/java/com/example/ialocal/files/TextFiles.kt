@@ -192,8 +192,11 @@ object TextFiles {
             }
             is TextEdit.Append -> {
                 val added = block(operation.text, "append")
-                val start = if (endsWithBreak) text else text + "\n"
-                start + added + (if (endsWithBreak) "\n" else "") to "texto acrescentado no fim"
+                // Models often start the text with a line break of their own, as if gluing it to the
+                // last line; then it goes right after that line, not after an extra blank one.
+                val last = if (endsWithBreak) text.removeSuffix("\n") else text
+                val separator = if (last.isEmpty() || added.startsWith("\n")) "" else "\n"
+                last + separator + added + (if (endsWithBreak) "\n" else "") to "texto acrescentado no fim"
             }
             is TextEdit.Prepend -> {
                 val added = block(operation.text, "prepend")

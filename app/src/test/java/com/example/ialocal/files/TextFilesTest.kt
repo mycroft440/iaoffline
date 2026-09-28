@@ -96,6 +96,9 @@ class TextFilesTest {
         assertEquals("a\nb\n", TextFiles.edit("a\n", listOf(TextEdit.Append("b"))).text)
         assertEquals("a\nb", TextFiles.edit("a", listOf(TextEdit.Append("b"))).text)
         assertEquals("b\n", TextFiles.edit("", listOf(TextEdit.Append("b\n"))).text)
+        // A leading line break from the model is the break after the last line, not a blank line.
+        assertEquals("a\nb\n", TextFiles.edit("a\n", listOf(TextEdit.Append("\nb"))).text)
+        assertEquals("a\n\nb\n", TextFiles.edit("a\n", listOf(TextEdit.Append("\n\nb"))).text)
         assertEquals("título\na\n", TextFiles.edit("a\n", listOf(TextEdit.Prepend("título"))).text)
     }
 
