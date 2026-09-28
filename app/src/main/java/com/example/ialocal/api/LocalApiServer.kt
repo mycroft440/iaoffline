@@ -241,7 +241,11 @@ class LocalApiServer(
                     .put("pdf_read")
                     .put("pdf_create")
                     .put("pdf_merge")
-                    .put("pdf_edit")))
+                    .put("pdf_edit")
+                    .put("txt_list")
+                    .put("txt_read")
+                    .put("txt_create")
+                    .put("txt_edit")))
         }
         return HttpResponse(200, JSONObject().put("object", "list").put("data", data).toString())
     }

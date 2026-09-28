@@ -45,6 +45,46 @@ class AgentStreamTest {
     }
 
     @Test
+    fun toolCallAfterASentenceIsNotShown() = runBlocking {
+        val tool = """{"tool":"txt_read","arguments":{"id":"notas.txt"}}"""
+        val calls = mutableListOf<String>()
+        val output = run(
+            expectReasoning = false,
+            rounds = listOf(
+                listOf("Vou ler o arquivo.\n\n", tool.take(20), tool.drop(20)),
+                listOf("A linha 3 fala do Pedro."),
+            ),
+            toolRound = { answer -> calls += answer; if (answer.trim() == tool) ToolRoundResult("txt_read", "1| a") else null },
+        ).joinToString("")
+        assertEquals("Vou ler o arquivo.\n\nA linha 3 fala do Pedro.", output)
+        assertEquals(tool, calls.first())
+    }
+
+    @Test
+    fun answerAfterAToolCallIsSeparatedFromTheSentenceBeforeIt() = runBlocking {
+        val tool = """{"tool":"current_time","arguments":{}}"""
+        val output = run(
+            expectReasoning = false,
+            rounds = listOf(listOf("Vou ver a hora.\n$tool"), listOf("São 10h.")),
+            toolRound = { answer -> if (answer.trim() == tool) ToolRoundResult("current_time", "10:00") else null },
+        ).joinToString("")
+        assertEquals("Vou ver a hora.\n\nSão 10h.", output)
+    }
+
+    @Test
+    fun jsonLineThatIsNotAToolIsShownAtTheEnd() = runBlocking {
+        val output = run(false, listOf(listOf("Exemplo:\n", "{\"a\": 1}\n", "fim"))).joinToString("")
+        assertEquals("Exemplo:\n{\"a\": 1}\nfim", output)
+    }
+
+    @Test
+    fun codeBlocksStillStreamLive() = runBlocking {
+        val emitted = run(false, listOf(listOf("Código:\n", "```kotlin\n", "val a = 1\n", "```")))
+        assertEquals("Código:\n```kotlin\nval a = 1\n```", emitted.joinToString(""))
+        assertEquals(4, emitted.size)
+    }
+
+    @Test
     fun blankReasoningFromNoThinkIsDropped() = runBlocking {
         assertEquals("Direto.", run(false, listOf(listOf("<think>\n\n</think>\n\nDireto."))).joinToString(""))
     }

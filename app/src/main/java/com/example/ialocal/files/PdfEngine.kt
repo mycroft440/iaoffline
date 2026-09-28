@@ -16,33 +16,6 @@ import java.io.File
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** Pages written as "1-3,5,8-": 1-based in the text, 0-based in the result, in the order given. */
-object PageRanges {
-    fun parse(spec: String?, pageCount: Int): List<Int> {
-        require(pageCount > 0) { "O PDF não tem páginas." }
-        if (spec.isNullOrBlank()) return (0 until pageCount).toList()
-        val pages = mutableListOf<Int>()
-        spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { part ->
-            val dash = part.indexOf('-')
-            if (dash < 0) {
-                pages += page(part, pageCount)
-            } else {
-                val first = page(part.substring(0, dash).trim().ifEmpty { "1" }, pageCount)
-                val last = page(part.substring(dash + 1).trim().ifEmpty { pageCount.toString() }, pageCount)
-                pages += if (first <= last) (first..last).toList() else (first downTo last).toList()
-            }
-        }
-        require(pages.isNotEmpty()) { "Nenhuma página indicada em \"$spec\"." }
-        return pages
-    }
-
-    private fun page(text: String, pageCount: Int): Int {
-        val number = requireNotNull(text.toIntOrNull()) { "Página inválida: \"$text\"." }
-        require(number in 1..pageCount) { "Página $number não existe; o PDF tem $pageCount páginas." }
-        return number - 1
-    }
-}
-
 /** What a created, merged or edited PDF ended up with. */
 data class PdfResult(val pages: Int)
 
@@ -103,7 +76,8 @@ class PdfEngine(private val fontFiles: List<String> = ANDROID_FONTS) {
                     stripper.startPage = index + 1
                     stripper.endPage = index + 1
                     append("[Página ${index + 1}]\n")
-                    append(stripper.getText(document).trim())
+                    // Scanned pages are images: say so, or the model invents what they contain.
+                    append(stripper.getText(document).trim().ifEmpty { "(sem texto: a página parece ser uma imagem, como um documento escaneado)" })
                     append("\n\n")
                     if (length > maxChars) break
                 }

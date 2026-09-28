@@ -40,8 +40,9 @@ class AttachmentContentProcessor(
         }
     }
 
+    /** Also reads Windows-1252 files, common in older Brazilian ones, with the right accents. */
     private suspend fun readText(file: File): String = withContext(Dispatchers.IO) {
-        file.bufferedReader().use { it.readText().take(MAX_EXTRACTED_CHARS) }
+        TextFiles.preview(file).first.text.take(MAX_EXTRACTED_CHARS)
     }
 
     private fun isPdf(a: PendingAttachment): Boolean =

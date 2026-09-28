@@ -13,7 +13,9 @@ data class ToolRoundResult(val name: String, val output: String)
  * Reasoning is re-emitted inside one canonical `<think>…</think>` block across rounds so the chat
  * can show it live. An answer that starts like a tool call (`{` or a code fence) is held back until
  * the round ends; [toolRound] then decides whether it was a tool call, in which case its result is
- * fed back to the model and another round runs.
+ * fed back to the model and another round runs. Models also write a sentence first ("Vou ler o
+ * arquivo.") and the call after it, so in a live answer a line starting with `{` or a ```json fence
+ * is held back the same way, and the JSON never shows up in the chat.
  */
 internal fun agentStream(
     expectReasoning: Boolean,
@@ -26,6 +28,10 @@ internal fun agentStream(
     var thinkOpen = false
     var answerStarted = false
     val heldReasoning = StringBuilder()
+    // The end of the answer shown so far, and whether the next round's answer needs a blank line
+    // to separate it from a sentence shown before a tool call.
+    var answerTail = ""
+    var separateNext = false
 
     suspend fun emitReasoning(text: String) {
         if (answerStarted) return // Reasoning of later tool rounds is not shown after the answer.
@@ -46,8 +52,14 @@ internal fun agentStream(
             emit("</think>\n\n")
             thinkOpen = false
         }
+        if (separateNext) {
+            separateNext = false
+            val breaks = answerTail.takeLastWhile { it == '\n' }.length + text.takeWhile { it == '\n' }.length
+            if (breaks < 2) emit("\n".repeat(2 - breaks))
+        }
         answerStarted = true
         emit(text)
+        answerTail = (answerTail + text).takeLast(2)
     }
 
     repeat(maxRounds) { round ->
@@ -56,7 +68,34 @@ internal fun agentStream(
         val answer = StringBuilder()
         // null: undecided; true: streamed live; false: held back as a possible tool call.
         var live: Boolean? = null
+        // In a live answer: how much of it was shown, and where a possible tool call starts (-1: none).
+        var shown = 0
+        var heldFrom = -1
         if (round > 0 && thinkOpen) emit("\n\n")
+
+        /** Shows the live answer up to a line that may start a tool call, or one not known yet. */
+        suspend fun showLive() {
+            if (heldFrom >= 0) return
+            var position = shown
+            while (position < answer.length) {
+                val newline = answer.indexOf('\n', position)
+                val complete = newline >= 0
+                val lineEnd = if (complete) newline + 1 else answer.length
+                if (position == 0 || answer[position - 1] == '\n') {
+                    val start = answer.substring(position, lineEnd).trim().lowercase()
+                    if (start.startsWith("{") || start.startsWith("```json")) {
+                        heldFrom = position
+                        break
+                    }
+                    if (!complete && (start.isEmpty() || "```json".startsWith(start))) break
+                }
+                position = lineEnd
+            }
+            if (position > shown) {
+                emitAnswer(answer.substring(shown, position))
+                shown = position
+            }
+        }
 
         suspend fun handle(parts: List<ReasoningStreamSplitter.Part>) {
             parts.forEach { part ->
@@ -65,13 +104,16 @@ internal fun agentStream(
                     is ReasoningStreamSplitter.Answer -> {
                         answer.append(part.text)
                         when (live) {
-                            true -> emitAnswer(part.text)
+                            true -> showLive()
                             false -> Unit
                             null -> {
-                                val trimmed = answer.trimStart()
-                                if (trimmed.isNotEmpty()) {
-                                    live = !(trimmed.startsWith("{") || trimmed.startsWith("`"))
-                                    if (live == true) emitAnswer(trimmed.toString())
+                                val first = answer.indexOfFirst { !it.isWhitespace() }
+                                if (first >= 0) {
+                                    live = !(answer[first] == '{' || answer[first] == '`')
+                                    if (live == true) {
+                                        shown = first // Leading blank lines are not shown.
+                                        showLive()
+                                    }
                                 }
                             }
                         }
@@ -90,15 +132,17 @@ internal fun agentStream(
             handle(listOf(ReasoningStreamSplitter.Answer(splitter.reasoning)))
         }
 
-        val tool = toolRound(answer.toString())
+        val tool = toolRound(if (heldFrom >= 0) answer.substring(heldFrom) else answer.toString())
         if (tool == null) {
             if (live == false) emitAnswer(answer.trimStart().toString())
+            if (live == true && shown < answer.length) emitAnswer(answer.substring(shown))
             if (thinkOpen) {
                 emit("</think>")
                 thinkOpen = false
             }
             return@flow
         }
+        if (live == true) separateNext = true
         working += AiChatMessage("assistant", raw.toString())
         working += AiChatMessage(
             "user",

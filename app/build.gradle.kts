@@ -127,6 +127,8 @@ dependencies {
     implementation(files("libs/llama-android.aar"))
 
     testImplementation("junit:junit:4.13.2")
+    // Android's org.json only has stubs in unit tests; tool-call parsing is tested with the real one.
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

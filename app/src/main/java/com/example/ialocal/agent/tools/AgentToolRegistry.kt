@@ -26,7 +26,7 @@ data class ToolContext(val conversationId: String? = null)
 class AgentToolRegistry(
     private val chats: ChatRepository,
     private val codeEdits: CodeEditSessionStore,
-    private val pdfTools: PdfTools,
+    private val fileTools: List<ConversationFileTools>,
     private val logger: AiEventLogger? = null,
 ) {
     val definitions = listOf(
@@ -40,7 +40,7 @@ class AgentToolRegistry(
             arguments = "{\"session_id\": texto, \"replacement\": texto substituto exato, \"summary\": resumo curto opcional}",
             permission = ToolPermission.SCOPED_WRITE,
         ),
-    ) + pdfTools.definitions
+    ) + fileTools.flatMap { it.definitions }
 
     private fun availableDefinitions(): List<ToolDefinition> =
         if (codeEdits.hasActiveSessions()) definitions
@@ -73,7 +73,7 @@ class AgentToolRegistry(
             "A ferramenta ${call.name} exige confirmação e não pode ser executada automaticamente."
         }
         logger?.info("AGENT_TOOL", "Executando ${call.name}")
-        if (pdfTools.handles(call.name)) return pdfTools.execute(call.name, call.arguments, context.conversationId)
+        fileTools.firstOrNull { it.handles(call.name) }?.let { return it.execute(call.name, call.arguments, context.conversationId) }
 
         return when (call.name) {
             "list_recent_conversations" -> {

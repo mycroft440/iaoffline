@@ -34,7 +34,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
@@ -82,6 +85,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -104,6 +108,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.ChatAdSchedule
@@ -122,6 +128,9 @@ import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.files.AttachmentOpener
+import com.example.ialocal.files.DocumentLibrary
+import com.example.ialocal.files.TextContent
+import com.example.ialocal.files.TextFiles
 import com.example.ialocal.models.BuiltInProfile
 import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
@@ -130,8 +139,11 @@ import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -889,6 +901,8 @@ private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, showAd
 @Composable
 private fun ExactUserMessage(item: MessageWithAttachments) {
     val context = LocalContext.current
+    var viewing by remember { mutableStateOf<AttachmentEntity?>(null) }
+    viewing?.let { ExactTextViewer(it) { viewing = null } }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         Column(Modifier.fillMaxWidth(0.88f), horizontalAlignment = Alignment.End) {
             Surface(
@@ -903,9 +917,7 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(item.attachments, key = { it.id }) { attachment ->
                                 Surface(
-                                    modifier = Modifier.clickable {
-                                        AttachmentOpener.open(context, attachment.fileName, attachment.localPath, attachment.mimeType)
-                                    },
+                                    modifier = Modifier.clickable { openExactAttachment(context, attachment) { viewing = it } },
                                     shape = RoundedCornerShape(8.dp),
                                     color = Color.Black.copy(alpha = 0.30f),
                                     border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
@@ -1086,16 +1098,17 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
     }
 }
 
-/** Files an answer created (PDFs from the agent tools): tap to open, or share. */
+/** Files an answer created (PDFs and text files from the agent tools): tap to open, or share. */
 @Composable
 private fun ExactCreatedFiles(attachments: List<AttachmentEntity>) {
     val context = LocalContext.current
+    var viewing by remember { mutableStateOf<AttachmentEntity?>(null) }
+    viewing?.let { ExactTextViewer(it) { viewing = null } }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         attachments.forEach { attachment ->
+            val kind = DocumentLibrary.kindOf(attachment.fileName, attachment.mimeType)
             Surface(
-                modifier = Modifier.fillMaxWidth().clickable {
-                    AttachmentOpener.open(context, attachment.fileName, attachment.localPath, attachment.mimeType)
-                },
+                modifier = Modifier.fillMaxWidth().clickable { openExactAttachment(context, attachment) { viewing = it } },
                 shape = RoundedCornerShape(12.dp),
                 color = PCard,
                 border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.40f)),
@@ -1104,7 +1117,11 @@ private fun ExactCreatedFiles(attachments: List<AttachmentEntity>) {
                     Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.PictureAsPdf, null, tint = Color(0xFFF87171), modifier = Modifier.size(20.dp))
+                    when (kind) {
+                        DocumentLibrary.Kind.PDF -> Icon(Icons.Default.PictureAsPdf, null, tint = Color(0xFFF87171), modifier = Modifier.size(20.dp))
+                        DocumentLibrary.Kind.TEXT -> Icon(Icons.Default.Description, null, tint = Color(0xFF818CF8), modifier = Modifier.size(20.dp))
+                        null -> Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
+                    }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -1125,6 +1142,114 @@ private fun ExactCreatedFiles(attachments: List<AttachmentEntity>) {
                         AttachmentOpener.share(context, attachment.fileName, attachment.localPath, attachment.mimeType)
                     }) {
                         Icon(Icons.Default.Share, "Compartilhar ${attachment.fileName}", tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Text files open in the app's own viewer (many phones have no app for .txt); the rest in another app. */
+private fun openExactAttachment(context: Context, attachment: AttachmentEntity, showText: (AttachmentEntity) -> Unit) {
+    if (DocumentLibrary.kindOf(attachment.fileName, attachment.mimeType) == DocumentLibrary.Kind.TEXT) {
+        showText(attachment)
+    } else {
+        AttachmentOpener.open(context, attachment.fileName, attachment.localPath, attachment.mimeType)
+    }
+}
+
+/** A text file shown inside the app, with buttons to share it or open it in another app. */
+@Composable
+private fun ExactTextViewer(attachment: AttachmentEntity, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val preview by produceState<Result<Pair<TextContent, Boolean>>?>(null, attachment.localPath) {
+        value = withContext(Dispatchers.IO) { runCatching { TextFiles.preview(File(attachment.localPath)) } }
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 32.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = PSurface,
+            border = BorderStroke(1.dp, PBorder),
+        ) {
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Description, null, tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            attachment.fileName,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = PText,
+                        )
+                        val loaded = preview?.getOrNull()
+                        if (loaded != null) {
+                            val (content, truncated) = loaded
+                            Text(
+                                if (truncated) "Começo do arquivo · ${content.encoding}"
+                                else "${content.lines.size} ${if (content.lines.size == 1) "linha" else "linhas"} · ${content.encoding}",
+                                fontSize = 11.sp,
+                                color = PMuted,
+                            )
+                        }
+                    }
+                    IconButton(onClick = { AttachmentOpener.share(context, attachment.fileName, attachment.localPath, attachment.mimeType) }) {
+                        Icon(Icons.Default.Share, "Compartilhar", tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = { AttachmentOpener.open(context, attachment.fileName, attachment.localPath, attachment.mimeType) }) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, "Abrir em outro app", tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, "Fechar", tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+                    }
+                }
+                HorizontalDivider(color = PBorder)
+                val result = preview
+                val loaded = result?.getOrNull()
+                when {
+                    result == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = PIndigo)
+                    }
+                    loaded == null -> Text(
+                        result.exceptionOrNull()?.message ?: "Não foi possível abrir o arquivo.",
+                        modifier = Modifier.padding(16.dp),
+                        fontSize = 13.sp,
+                        color = PMuted,
+                    )
+                    else -> {
+                        val (content, truncated) = loaded
+                        SelectionContainer {
+                            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+                                if (content.lines.isEmpty()) {
+                                    item { Text("Arquivo vazio.", fontSize = 13.sp, color = PMuted) }
+                                }
+                                items(content.lines.size) { index ->
+                                    Text(
+                                        content.lines[index],
+                                        fontSize = 13.sp,
+                                        lineHeight = 19.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = PText,
+                                    )
+                                }
+                                if (truncated) {
+                                    item {
+                                        Text(
+                                            "Arquivo grande: aqui aparece só o começo. Toque em abrir em outro app para ver tudo.",
+                                            modifier = Modifier.padding(top = 12.dp),
+                                            fontSize = 12.sp,
+                                            color = PMuted,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

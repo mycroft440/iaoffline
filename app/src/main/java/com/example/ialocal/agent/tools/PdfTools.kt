@@ -1,7 +1,10 @@
 package com.example.ialocal.agent.tools
 
+import com.example.ialocal.files.DocumentLibrary
+import com.example.ialocal.files.DocumentLibrary.Kind
 import com.example.ialocal.files.PdfEdit
-import com.example.ialocal.files.PdfLibrary
+import com.example.ialocal.files.PdfEngine
+import com.example.ialocal.files.PdfResult
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,8 +14,11 @@ import org.json.JSONObject
  * (attached by the user or created by these tools) and never change or delete one: every result
  * is a new file, attached to the answer in the chat and copied to Documents/IA Offline.
  */
-class PdfTools(private val library: PdfLibrary) {
-    val definitions = listOf(
+class PdfTools(
+    private val library: DocumentLibrary,
+    private val engine: PdfEngine = PdfEngine(),
+) : ConversationFileTools {
+    override val definitions = listOf(
         ToolDefinition(
             "pdf_list",
             "Lista os PDFs desta conversa (anexados pelo usuário e criados pelas ferramentas) com id, nome e número de páginas.",
@@ -43,11 +49,9 @@ class PdfTools(private val library: PdfLibrary) {
         ),
     )
 
-    fun handles(name: String): Boolean = definitions.any { it.name == name }
-
-    suspend fun execute(name: String, arguments: JSONObject, conversationId: String?): String = when (name) {
+    override suspend fun execute(name: String, arguments: JSONObject, conversationId: String?): String = when (name) {
         "pdf_list" -> {
-            val documents = library.list(conversationId)
+            val documents = library.list(conversationId, Kind.PDF)
             JSONObject()
                 .put("pdfs", JSONArray().apply {
                     documents.forEach { document ->
@@ -56,7 +60,7 @@ class PdfTools(private val library: PdfLibrary) {
                                 .put("id", document.id)
                                 .put("name", document.name)
                                 .put("origin", document.origin.label)
-                                .put("pages", runCatching { library.engine.pageCount(document.file) }.getOrDefault(0))
+                                .put("pages", runCatching { engine.pageCount(document.file) }.getOrDefault(0))
                         )
                     }
                 })
@@ -64,18 +68,18 @@ class PdfTools(private val library: PdfLibrary) {
                 .toString()
         }
         "pdf_read" -> {
-            val document = library.find(conversationId, arguments.requireText("id"))
+            val document = library.find(conversationId, Kind.PDF, arguments.requireText("id"))
             JSONObject()
                 .put("id", document.id)
                 .put("name", document.name)
-                .put("text", library.engine.read(document.file, arguments.optText("pages"), MAX_READ_CHARS))
+                .put("text", engine.read(document.file, arguments.optText("pages"), MAX_READ_CHARS))
                 .toString()
         }
         "pdf_create" -> {
             val title = arguments.optText("title")
             val content = arguments.optString("content")
             created(conversationId, arguments.optText("file_name") ?: title ?: "documento") { output ->
-                library.engine.create(output, title, content)
+                engine.create(output, title, content)
             }
         }
         "pdf_merge" -> {
@@ -85,31 +89,24 @@ class PdfTools(private val library: PdfLibrary) {
                 // Accept plain ids as well as {"id", "pages"} objects.
                 val item = sources.opt(i)
                 val (id, pages) = if (item is JSONObject) item.requireText("id") to item.optText("pages") else item.toString() to null
-                library.find(conversationId, id).file to pages
+                library.find(conversationId, Kind.PDF, id).file to pages
             }
             created(conversationId, arguments.optText("file_name") ?: "documento montado") { output ->
-                library.engine.merge(output, files)
+                engine.merge(output, files)
             }
         }
         "pdf_edit" -> {
-            val source = library.find(conversationId, arguments.requireText("id"))
+            val source = library.find(conversationId, Kind.PDF, arguments.requireText("id"))
             val operations = parseOperations(arguments.optJSONArray("operations"))
-            val name = arguments.optText("file_name") ?: "${source.name.removeSuffix(".pdf")} editado"
-            created(conversationId, name) { output -> library.engine.edit(source.file, output, operations) }
+            val name = arguments.optText("file_name") ?: DocumentLibrary.editedName(source.name, Kind.PDF)
+            created(conversationId, name) { output -> engine.edit(source.file, output, operations) }
         }
         else -> error("Ferramenta de PDF desconhecida: $name")
     }
 
-    private suspend fun created(conversationId: String?, name: String, write: (File) -> com.example.ialocal.files.PdfResult): String {
-        val (document, result) = library.create(conversationId, name, write)
-        return JSONObject()
-            .put("status", "created")
-            .put("id", document.id)
-            .put("name", document.name)
-            .put("pages", result.pages)
-            .put("saved_to", document.sharedPath ?: "arquivos do app")
-            .put("note", "O PDF aparece anexado à sua resposta no chat. Diga ao usuário o nome do arquivo e onde ele foi salvo.")
-            .toString()
+    private suspend fun created(conversationId: String?, name: String, write: (File) -> PdfResult): String {
+        val (document, result) = library.create(conversationId, Kind.PDF, name, write)
+        return createdResult(document).put("pages", result.pages).toString()
     }
 
     private fun parseOperations(array: JSONArray?): List<PdfEdit> {
@@ -135,12 +132,6 @@ class PdfTools(private val library: PdfLibrary) {
             }
         }
     }
-
-    private fun JSONObject.optText(key: String): String? =
-        if (isNull(key)) null else optString(key).trim().takeIf { it.isNotEmpty() }
-
-    private fun JSONObject.requireText(key: String): String =
-        requireNotNull(optText(key)) { "Informe '$key'." }
 
     companion object {
         private const val MAX_READ_CHARS = 12_000

@@ -11,7 +11,7 @@ import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
-import com.example.ialocal.files.PdfLibrary
+import com.example.ialocal.files.DocumentLibrary
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import java.util.concurrent.ConcurrentHashMap
@@ -51,7 +51,7 @@ class ChatGenerationManager(
     private val aiGateway: AiGateway,
     private val modelRepository: ModelRepository,
     private val modelManager: ModelManager,
-    private val pdfLibrary: PdfLibrary,
+    private val documentLibrary: DocumentLibrary,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -271,26 +271,26 @@ class ChatGenerationManager(
                 repository.updateMessageContent(replyId, text)
             }
             repository.updateMessageContent(replyId, finalContent())
-            attachCreatedPdfs(conversationId, replyId, startedAt)
+            attachCreatedFiles(conversationId, replyId, startedAt)
             repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
         } catch (cancel: CancellationException) {
             withContext(NonCancellable) {
                 repository.updateMessageContent(replyId, finalContent())
-                attachCreatedPdfs(conversationId, replyId, startedAt)
+                attachCreatedFiles(conversationId, replyId, startedAt)
                 repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
             }
             throw cancel
         } catch (t: Throwable) {
-            attachCreatedPdfs(conversationId, replyId, startedAt)
+            attachCreatedFiles(conversationId, replyId, startedAt)
             repository.updateMessageStatus(replyId, MessageStatus.ERROR)
             throw t
         }
     }
 
-    /** PDFs the agent tools created while answering show up attached to the answer. */
-    private suspend fun attachCreatedPdfs(conversationId: String, replyId: String, since: Long) {
+    /** Files the agent tools created while answering (PDFs, text files) show up attached to the answer. */
+    private suspend fun attachCreatedFiles(conversationId: String, replyId: String, since: Long) {
         runCatching {
-            val created = pdfLibrary.createdSince(conversationId, since)
+            val created = documentLibrary.createdSince(conversationId, since)
             repository.addAttachments(
                 replyId,
                 created.map { document ->
@@ -299,7 +299,7 @@ class ChatGenerationManager(
                         type = AttachmentType.FILE,
                         fileName = document.name,
                         localPath = document.file.absolutePath,
-                        mimeType = PdfLibrary.PDF_MIME,
+                        mimeType = document.mimeType,
                         sizeBytes = document.file.length(),
                     )
                 },
