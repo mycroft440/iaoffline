@@ -16,6 +16,16 @@ data class RuntimeState(
 
 data class VerificationResult(val output: String)
 
+/** Additions for one request that are not part of the conversation history. */
+data class TurnOptions(
+    /** Appended to the latest user message for this request only (e.g. /no_think, encyclopedia excerpts). */
+    val userSuffix: String = "",
+    /** Prefilled at the start of the answer, the way chat templates switch reasoning on or off. */
+    val assistantPrefix: String = "",
+    /** enable_thinking for templates that read it (Gemma 4); off renders them without reasoning. */
+    val templateThinking: Boolean = true,
+)
+
 interface ModelRuntime {
     val state: StateFlow<RuntimeState>
     suspend fun warmUp(model: AiModelEntity)
@@ -27,6 +37,7 @@ interface ModelRuntime {
         messages: List<AiChatMessage>,
         temperature: Float = 0.3f,
         maxTokens: Int = 1024,
+        turn: TurnOptions = TurnOptions(),
     ): Flow<String>
 
     suspend fun complete(
@@ -35,6 +46,7 @@ interface ModelRuntime {
         messages: List<AiChatMessage>,
         temperature: Float = 0.3f,
         maxTokens: Int = 1024,
+        turn: TurnOptions = TurnOptions(),
     ): String
 
     suspend fun unload()

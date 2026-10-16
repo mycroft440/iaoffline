@@ -75,6 +75,7 @@ class ModelCatalogTest {
             setOf(
                 "bonsai-1.7b-q1-0", "bonsai-4b-q1-0", "bonsai-8b-q1-0", "bonsai-ternary-8b-q2-0", "bonsai-27b-q1-0",
                 "bonsai2-ternary-2b-q2-0", "bonsai2-ternary-4b-q2-0", "bonsai2-ternary-9b-q2-0",
+                "bonsai2-ternary-27b-q2-0",
             ),
             bonsai.map { it.id }.toSet(),
         )
@@ -90,9 +91,12 @@ class ModelCatalogTest {
         val bonsai27 = ModelCatalog.requireById("bonsai-27b-q1-0")
         assertFalse(bonsai27.isExperimental)
         assertTrue(bonsai27.approximateSizeBytes < 4_000_000_000L)
-        // Bonsai 2's model card asks for a presence penalty; the others need none.
-        assertTrue(bonsai.filter { it.id.startsWith("bonsai2-") }.all { it.presencePenalty == 1.0f })
-        assertTrue(ModelCatalog.entries.filterNot { it.id.startsWith("bonsai2-") }.all { it.presencePenalty == 0f })
+        // The small Bonsai 2 models want a presence penalty; the 27B and everything else do not.
+        val penalized = setOf("bonsai2-ternary-2b-q2-0", "bonsai2-ternary-4b-q2-0", "bonsai2-ternary-9b-q2-0")
+        assertTrue(ModelCatalog.entries.filter { it.id in penalized }.all { it.presencePenalty == 1.0f })
+        assertTrue(ModelCatalog.entries.filterNot { it.id in penalized }.all { it.presencePenalty == 0f })
+        // A dense 27B that fits a 12 GB phone, unlike the experimental MoE models.
+        assertFalse(ModelCatalog.requireById("bonsai2-ternary-27b-q2-0").isExperimental)
     }
 
     @Test
@@ -101,6 +105,19 @@ class ModelCatalogTest {
             .forEach { id -> assertNotNull(id, ModelCatalog.entries.firstOrNull { it.id == id }) }
         // 12B in total but only 2.5B active: it fits in RAM, so it is not one of the slow experimental MoE.
         assertFalse(ModelCatalog.requireById("mellum2.1-12b-a2.5b-thinking-q3-k-m").isExperimental)
+    }
+
+    @Test
+    fun strongestNewModelsKeepQualityFormats() {
+        // Google's quantization-aware checkpoints, in the fast ARM Q4_0 format.
+        listOf("gemma4-e2b-it-qat-q4-0", "gemma4-e4b-it-qat-q4-0", "gemma4-12b-it-qat-q4-0").forEach { id ->
+            val model = ModelCatalog.requireById(id)
+            assertTrue(model.repository.startsWith("google/"))
+            assertTrue(model.quantization.startsWith("Q4_0"))
+        }
+        assertEquals("IQ4_XS", ModelCatalog.requireById("ornith1.5-9b-iq4-xs").quantization)
+        // 24B in total but 2.45B active: too big for RAM, so it runs from storage.
+        assertTrue(ModelCatalog.requireById("lfm2.5-24b-a2b-qad-q4-0").isExperimental)
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.TurnOptions
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
 
@@ -99,7 +100,7 @@ class AiOrchestrator(
         requireVerified(model)
 
         val capability = DeepThinkSupport.capability(model)
-        val deepThinkEnabled = deepThinkStore.isEnabled(agent.id)
+        val deepThinkEnabled = deepThinkStore.isEnabled(agent.id, capability.defaultEnabled)
         val plan = DeepThinkSupport.plan(
             model = model,
             baseMaxTokens = maxTokensOverride ?: agent.maxTokens,
@@ -109,8 +110,16 @@ class AiOrchestrator(
         val expectReasoning = capability.mode == DeepThinkControlMode.REASONING_MODEL ||
             (capability.mode == DeepThinkControlMode.HYBRID_THINKING && deepThinkEnabled)
         // Thinking switches such as Nemotron's /no_think must stay at the very end.
-        val systemPrompt = agent.systemPrompt + guidance.systemSuffix(messages) + tools.promptInstructions() + plan.systemSuffix
+        val systemPrompt = agent.systemPrompt + guidance.systemSuffix() + tools.promptInstructions() + plan.systemSuffix
         val temperature = temperatureOverride ?: agent.temperature
+        // Encyclopedia excerpts go with the user's question only; tool results get just the
+        // thinking switch, which (like Qwen3's /no_think) must end the message.
+        val firstTurn = TurnOptions(
+            userSuffix = guidance.turnSuffix(messages) + plan.userSuffix,
+            assistantPrefix = plan.assistantPrefix,
+            templateThinking = plan.templateThinking,
+        )
+        val toolTurn = firstTurn.copy(userSuffix = plan.userSuffix)
 
         val chunks = agentStream(
             expectReasoning = expectReasoning,
@@ -120,9 +129,10 @@ class AiOrchestrator(
                 runtime.streamComplete(
                     model = model,
                     systemPrompt = systemPrompt,
-                    messages = withUserSuffix(working, plan.userSuffix),
+                    messages = working,
                     temperature = temperature,
                     maxTokens = plan.maxTokens,
+                    turn = if (working.size == messages.size) firstTurn else toolTurn,
                 )
             },
             toolRound = { answer ->
@@ -134,15 +144,6 @@ class AiOrchestrator(
             },
         )
         return PreparedAgent(agent, model, chunks)
-    }
-
-    private fun withUserSuffix(messages: List<AiChatMessage>, suffix: String): List<AiChatMessage> {
-        if (suffix.isEmpty()) return messages
-        val lastUser = messages.indexOfLast { it.role.equals("user", ignoreCase = true) }
-        if (lastUser < 0) return messages
-        return messages.mapIndexed { index, message ->
-            if (index == lastUser) message.copy(content = message.content.trimEnd() + suffix) else message
-        }
     }
 
     private suspend fun resolveModel(selector: String?): AiModelEntity {

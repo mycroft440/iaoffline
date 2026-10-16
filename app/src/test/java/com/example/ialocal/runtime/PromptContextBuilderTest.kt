@@ -10,7 +10,7 @@ class PromptContextBuilderTest {
     private val builder = PromptContextBuilder()
 
     @Test
-    fun keepsLatestUserOutsideFoldedHistory() {
+    fun earlierTurnsBecomeChatTurnsInsteadOfSystemPromptText() {
         val result = builder.prepare(
             baseSystemPrompt = "Sistema base",
             messages = listOf(
@@ -23,9 +23,29 @@ class PromptContextBuilderTest {
         )
 
         assertEquals("última pergunta", result.latestUser)
-        assertTrue(result.systemPrompt.contains("primeira"))
-        assertTrue(result.systemPrompt.contains("resposta"))
-        assertFalse(result.systemPrompt.contains("última pergunta"))
+        assertEquals("Sistema base", result.systemPrompt)
+        assertEquals(listOf(AiChatMessage("user", "primeira"), AiChatMessage("assistant", "resposta")), result.history)
+        assertEquals(result.history, result.conversation)
+    }
+
+    @Test
+    fun normalizesTurnsTheWayChatTemplatesExpect() {
+        val result = builder.prepare(
+            baseSystemPrompt = "Sistema",
+            messages = listOf(
+                AiChatMessage("assistant", "Olá! Como posso ajudar?"),
+                AiChatMessage("user", "A"),
+                AiChatMessage("assistant", "<think>pensando</think>\n\nRespondo A\n\n<!--nexus_response_ms:1200-->"),
+                AiChatMessage("user", "B sem resposta"),
+                AiChatMessage("user", "C"),
+            ),
+            contextTokens = 8192,
+            maxOutputTokens = 512,
+        )
+
+        // No leading answer, no reasoning or timings, and consecutive user turns merged.
+        assertEquals(listOf(AiChatMessage("user", "A"), AiChatMessage("assistant", "Respondo A")), result.history)
+        assertEquals("B sem resposta\n\nC", result.latestUser)
     }
 
     @Test
@@ -36,6 +56,8 @@ class PromptContextBuilderTest {
             messages = listOf(
                 AiChatMessage("user", longText),
                 AiChatMessage("assistant", longText),
+                AiChatMessage("user", "curta"),
+                AiChatMessage("assistant", "ok"),
                 AiChatMessage("user", "agora"),
             ),
             contextTokens = 2048,
@@ -44,6 +66,9 @@ class PromptContextBuilderTest {
 
         assertTrue(result.truncated)
         assertEquals("agora", result.latestUser)
+        // The kept history still starts with a user turn.
+        assertEquals(listOf(AiChatMessage("user", "curta"), AiChatMessage("assistant", "ok")), result.history)
+        assertEquals(4, result.conversation.size)
     }
 
     @Test
@@ -61,6 +86,6 @@ class PromptContextBuilderTest {
         )
 
         assertFalse(result.truncated)
-        assertTrue(result.systemPrompt.contains(history))
+        assertEquals(history, result.history.first().content)
     }
 }

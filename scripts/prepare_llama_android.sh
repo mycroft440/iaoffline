@@ -8,6 +8,7 @@ LLAMA_TAG="${LLAMA_CPP_TAG:-v0.7.0}"
 LLAMA_DIR="${ROOT_DIR}/third_party/llama.cpp"
 AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
+INTERFACE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
 AI_CHAT_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
 
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
@@ -71,8 +72,73 @@ replace_once(
     "                else -> {\n                    if (_nativeModelLoaded) { unload(); _nativeModelLoaded = false }\n                    shutdown()\n                }",
 )
 
+# Conversations continue on the loaded model instead of reloading it for every message:
+# the native side already resets its state when it gets a new system prompt, so the
+# "right after load" restriction only forced a reload (and a full re-read of the history).
+replace_once(
+    "            check(_readyForSystemPrompt) { \"System prompt must be set ** RIGHT AFTER ** model loaded!\" }\n",
+    "",
+)
+# Earlier turns are fed as real chat turns, formatted by the model's own template.
+replace_once(
+    "    @FastNative\n    private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int\n",
+    "    @FastNative\n    private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int\n\n"
+    "    private external fun processHistoryMessage(role: String, content: String): Int\n",
+)
+replace_once(
+    "    /**\n     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]\n     */\n",
+    "    /**\n"
+    "     * Adds an earlier turn of the conversation after the system prompt, without generating.\n"
+    "     */\n"
+    "    override suspend fun addHistoryMessage(role: String, content: String) =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            check(_state.value is InferenceEngine.State.ModelReady) {\n"
+    "                \"Cannot add history in ${_state.value.javaClass.simpleName}!\"\n"
+    "            }\n"
+    "            _state.value = InferenceEngine.State.ProcessingSystemPrompt\n"
+    "            val result = processHistoryMessage(role, content)\n"
+    "            _state.value = InferenceEngine.State.ModelReady\n"
+    "            if (result != 0) throw IOException(\"Failed to process history message: $result\")\n"
+    "        }\n\n"
+    "    /**\n     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]\n     */\n",
+)
+# A failed user prompt used to end the flow silently and leave the engine stuck in
+# ProcessingUserPrompt, so the next request could not even unload the model.
+replace_once(
+    "                if (result != 0) {\n"
+    "                    Log.e(TAG, \"Failed to process user prompt: $result\")\n"
+    "                    return@flow\n"
+    "                }\n",
+    "                if (result != 0) {\n"
+    "                    Log.e(TAG, \"Failed to process user prompt: $result\")\n"
+    "                    throw IOException(\"Failed to process user prompt: $result\")\n"
+    "                }\n",
+)
+
 path.write_text(text)
 print("Applied IA Offline inference-engine recovery patch")
+PY
+
+python3 - "${INTERFACE_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "    suspend fun setSystemPrompt(systemPrompt: String)\n"
+if text.count(old) != 1:
+    raise SystemExit("Unexpected llama.cpp Android binding interface shape")
+text = text.replace(
+    old,
+    old + "\n"
+    "    /**\n"
+    "     * Adds an earlier turn (\"user\" or \"assistant\") after the system prompt, without generating.\n"
+    "     */\n"
+    "    suspend fun addHistoryMessage(role: String, content: String)\n",
+    1,
+)
+path.write_text(text)
+print("Applied IA Offline inference-engine interface patch")
 PY
 
 # Android compatibility patch for model loading:
@@ -409,6 +475,171 @@ replace_once(
     "    if (g_template_mode == iaoffline_template_mode::PLAIN) {\n"
     "        formatted = role == ROLE_USER ? \"\\nUser: \" + content + \"\\nAssistant: \" : content + \"\\n\";\n"
     "    }\n",
+)
+
+# 11. Multi-turn conversations without reloading. Earlier turns are added as real chat turns
+#     (processHistoryMessage, formatted by the model's template without the assistant
+#     generation prompt) instead of being pasted into the system prompt; a new system prompt
+#     also resets the sampler. After each answer the app reads IAOFFLINE_SESSION_CLEAN
+#     (1 when the answer ended normally, so the next message can continue the same KV cache)
+#     and IAOFFLINE_SESSION_TOKENS (context in use).
+replace_once(
+    "static std::string chat_add_and_format(const std::string &role, const std::string &content) {",
+    "// common_chat_format_single with the reasoning switch the app sets: IAOFFLINE_ENABLE_THINKING=0\n"
+    "// renders templates that read enable_thinking (Gemma 4's) with reasoning off; unset keeps it on.\n"
+    "static std::string iaoffline_format_single(const common_chat_msg &new_msg, const bool add_ass, const bool use_jinja) {\n"
+    "    const llama_vocab *vocab = llama_model_get_vocab(g_model);\n"
+    "    common_chat_templates_inputs inputs;\n"
+    "    inputs.use_jinja = use_jinja;\n"
+    "    inputs.add_bos = llama_vocab_get_add_bos(vocab);\n"
+    "    inputs.add_eos = llama_vocab_get_add_eos(vocab);\n"
+    "    const char *thinking = getenv(\"IAOFFLINE_ENABLE_THINKING\");\n"
+    "    inputs.enable_thinking = thinking == nullptr || thinking[0] != '0';\n"
+    "    std::string fmt_past;\n"
+    "    if (!chat_msgs.empty()) {\n"
+    "        inputs.messages = chat_msgs;\n"
+    "        inputs.add_generation_prompt = false;\n"
+    "        fmt_past = common_chat_templates_apply(g_chat_templates.get(), inputs).prompt.str();\n"
+    "    }\n"
+    "    std::ostringstream ss;\n"
+    "    if (add_ass && !fmt_past.empty() && fmt_past.back() == '\\n') ss << \"\\n\";\n"
+    "    inputs.messages.push_back(new_msg);\n"
+    "    inputs.add_generation_prompt = add_ass;\n"
+    "    const std::string fmt_new = common_chat_templates_apply(g_chat_templates.get(), inputs).prompt.str();\n"
+    "    ss << fmt_new.substr(fmt_past.size(), fmt_new.size() - fmt_past.size());\n"
+    "    return ss.str();\n"
+    "}\n\n"
+    "static std::string chat_add_and_format(const std::string &role, const std::string &content,\n"
+    "                                       const bool generation_prompt = true) {",
+)
+replace_once(
+    "            formatted = common_chat_format_single(\n"
+    "                    g_chat_templates.get(), chat_msgs, new_msg, add_assistant, /* use_jinja */ false);\n",
+    "            formatted = iaoffline_format_single(new_msg, add_assistant, /* use_jinja */ false);\n",
+)
+replace_once(
+    "            formatted = common_chat_format_single(\n"
+    "                    g_chat_templates.get(), chat_msgs, new_msg, add_assistant, /* use_jinja */ true);\n",
+    "            formatted = iaoffline_format_single(new_msg, add_assistant, /* use_jinja */ true);\n",
+)
+replace_once(
+    "    const bool add_assistant = role == ROLE_USER;\n",
+    "    // Earlier turns (generation_prompt = false) are formatted without the assistant prompt.\n"
+    "    const bool add_assistant = generation_prompt && role == ROLE_USER;\n",
+)
+replace_once(
+    "        formatted = role == ROLE_USER ? \"\\nUser: \" + content + \"\\nAssistant: \" : content + \"\\n\";\n",
+    "        if (role == ROLE_USER) {\n"
+    "            formatted = \"\\nUser: \" + content + (add_assistant ? \"\\nAssistant: \" : \"\");\n"
+    "        } else {\n"
+    "            formatted = (generation_prompt ? \"\" : \"\\nAssistant: \") + content + \"\\n\";\n"
+    "        }\n",
+)
+replace_once(
+    "    // Reset long-term & short-term states\n"
+    "    reset_long_term_states();\n"
+    "    reset_short_term_states();\n\n"
+    "    // Obtain system prompt from JEnv",
+    "    // Reset long-term & short-term states\n"
+    "    reset_long_term_states();\n"
+    "    reset_short_term_states();\n"
+    "    // Repetition penalties must not carry over from another conversation.\n"
+    "    common_sampler_reset(g_sampler);\n"
+    "    setenv(\"IAOFFLINE_SESSION_CLEAN\", \"0\", 1);\n\n"
+    "    // Obtain system prompt from JEnv",
+)
+# 12. Answer prefill (IAOFFLINE_ASSISTANT_PREFIX), the way chat templates switch reasoning:
+#     "<think>\n\n</think>\n\n" turns it off for Qwen3.5-style models, "<think>\n" asks for it.
+#     The user turn is also tokenized without a second BOS when it follows earlier text.
+replace_once(
+    "    // Reset short-term states\n"
+    "    reset_short_term_states();\n\n"
+    "    // Obtain and tokenize user prompt",
+    "    // Reset short-term states\n"
+    "    reset_short_term_states();\n"
+    "    setenv(\"IAOFFLINE_SESSION_CLEAN\", \"0\", 1);\n\n"
+    "    // Obtain and tokenize user prompt",
+)
+replace_once(
+    "    auto user_tokens = common_tokenize(g_context, formatted_user_prompt, has_chat_template, has_chat_template);\n",
+    "    const char *assistant_prefix = getenv(\"IAOFFLINE_ASSISTANT_PREFIX\");\n"
+    "    if (has_chat_template && g_template_mode != iaoffline_template_mode::PLAIN &&\n"
+    "        assistant_prefix != nullptr && assistant_prefix[0] != '\\0') {\n"
+    "        formatted_user_prompt += assistant_prefix;\n"
+    "    }\n"
+    "    // The template repeats the newline that follows an earlier turn; drop it when that turn\n"
+    "    // was decoded with its newline (system prompt and history) so the text matches training.\n"
+    "    if (g_kv_ends_with_newline && !formatted_user_prompt.empty() && formatted_user_prompt[0] == '\\n') {\n"
+    "        formatted_user_prompt.erase(0, 1);\n"
+    "    }\n"
+    "    g_kv_ends_with_newline = false;\n"
+    "    const bool add_bos = has_chat_template && current_position == 0;\n"
+    "    auto user_tokens = common_tokenize(g_context, formatted_user_prompt, add_bos, has_chat_template);\n",
+)
+replace_once(
+    "static iaoffline_template_mode g_template_mode = iaoffline_template_mode::BUILT_IN;\n",
+    "static iaoffline_template_mode g_template_mode = iaoffline_template_mode::BUILT_IN;\n"
+    "// Whether the last text decoded into the KV cache ended with a newline.\n"
+    "static bool g_kv_ends_with_newline = false;\n",
+)
+replace_once(
+    "    g_template_mode = iaoffline_template_mode::BUILT_IN;\n",
+    "    g_template_mode = iaoffline_template_mode::BUILT_IN;\n"
+    "    g_kv_ends_with_newline = false;\n",
+)
+replace_once(
+    "    // Update position\n"
+    "    system_prompt_position = current_position = (int) system_tokens.size();\n"
+    "    return 0;\n",
+    "    // Update position\n"
+    "    system_prompt_position = current_position = (int) system_tokens.size();\n"
+    "    g_kv_ends_with_newline = !formatted_system_prompt.empty() && formatted_system_prompt.back() == '\\n';\n"
+    "    return 0;\n",
+)
+replace_once(
+    "    stop_generation_position = current_position + user_prompt_size + n_predict;",
+    "    stop_generation_position = current_position + n_predict;",
+)
+replace_once(
+    "        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());\n        return nullptr;\n",
+    "        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());\n"
+    "        setenv(\"IAOFFLINE_SESSION_CLEAN\", \"1\", 1);\n"
+    "        setenv(\"IAOFFLINE_SESSION_TOKENS\", std::to_string(current_position).c_str(), 1);\n"
+    "        return nullptr;\n",
+)
+replace_once(
+    "static bool is_valid_utf8(const char *string) {",
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_processHistoryMessage(\n"
+    "        JNIEnv *env,\n"
+    "        jobject /*unused*/,\n"
+    "        jstring jrole,\n"
+    "        jstring jcontent\n"
+    ") {\n"
+    "    const auto *role_chars = env->GetStringUTFChars(jrole, nullptr);\n"
+    "    const auto *content_chars = env->GetStringUTFChars(jcontent, nullptr);\n"
+    "    const std::string role = std::string(role_chars) == ROLE_ASSISTANT ? ROLE_ASSISTANT : ROLE_USER;\n"
+    "    const std::string content(content_chars);\n"
+    "    env->ReleaseStringUTFChars(jrole, role_chars);\n"
+    "    env->ReleaseStringUTFChars(jcontent, content_chars);\n\n"
+    "    const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());\n"
+    "    std::string formatted;\n"
+    "    if (has_chat_template) {\n"
+    "        formatted = chat_add_and_format(role, content, /* generation_prompt */ false);\n"
+    "    } else {\n"
+    "        formatted = (role == ROLE_USER ? \"\\nUser: \" : \"\\nAssistant: \") + content + \"\\n\";\n"
+    "    }\n"
+    "    const auto tokens = common_tokenize(g_context, formatted, current_position == 0, has_chat_template);\n"
+    "    if (decode_tokens_in_batches(g_context, g_batch, tokens, current_position)) {\n"
+    "        LOGe(\"%s: llama_decode() failed!\", __func__);\n"
+    "        return 2;\n"
+    "    }\n"
+    "    current_position += (int) tokens.size();\n"
+    "    g_kv_ends_with_newline = !formatted.empty() && formatted.back() == '\\n';\n"
+    "    return 0;\n"
+    "}\n\n"
+    "static bool is_valid_utf8(const char *string) {",
 )
 
 path.write_text(text)

@@ -1370,7 +1370,9 @@ private fun ExactDeepThinkSelector(agent: AgentEntity, model: AiModelEntity) {
     val context = LocalContext.current
     val store = remember(context) { DeepThinkStore(context.applicationContext) }
     var open by remember(agent.id) { mutableStateOf(false) }
-    var enabled by remember(agent.id) { mutableStateOf(store.isEnabled(agent.id)) }
+    var enabled by remember(agent.id, model.id) {
+        mutableStateOf(store.isEnabled(agent.id, DeepThinkSupport.capability(model).defaultEnabled))
+    }
     var level by remember(agent.id) { mutableStateOf(store.getLevel(agent.id)) }
 
     val accent = when {
