@@ -86,7 +86,7 @@ class LlamaCppRuntime(
         maxTokens: Int,
     ): Flow<String> = flow {
         require(kotlin.math.abs(temperature - FIXED_TEMPERATURE) < 0.0001f) {
-            "O binding llama.cpp Android v0.4.0 usa temperature fixa em $FIXED_TEMPERATURE."
+            "O binding llama.cpp Android não aceita temperature por requisição; ele usa a recomendada pelo modelo ou $FIXED_TEMPERATURE."
         }
         mutex.lock()
         try {
@@ -162,18 +162,20 @@ class LlamaCppRuntime(
         if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error) unloadLocked()
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
-        val experimental = ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
-            ?.isExperimental == true
+        val catalogEntry = ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
+        val experimental = catalogEntry?.isExperimental == true
         val modelBytes = File(model.filePath).length()
         val totalMemory = deviceTotalMemory()
         val lowMemory = experimental || RuntimeLimits.needsLowMemoryMode(modelBytes, totalMemory)
         val kvBudgetMb = RuntimeLimits.kvCacheBudgetBytes(modelBytes, totalMemory, experimental) / (1024 * 1024)
         // Read by the patched native loader: file-backed weights for models that do not fit
-        // comfortably in RAM, and the memory that sizes the (Q4_0) context.
+        // comfortably in RAM, the memory that sizes the (Q4_0) context and the presence penalty
+        // the model card recommends (the other sampling settings come from the GGUF itself).
         runCatching {
             Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true)
             Os.setenv(CONTEXT_TOKENS_ENV, RuntimeLimits.MAX_CONTEXT_TOKENS.toString(), true)
             Os.setenv(KV_BUDGET_ENV, kvBudgetMb.toString(), true)
+            Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
             Os.unsetenv(ACTIVE_CONTEXT_ENV)
         }
         logger?.info(
@@ -276,6 +278,7 @@ class LlamaCppRuntime(
         private const val LOW_MEMORY_ENV = "IAOFFLINE_LOW_MEMORY"
         private const val CONTEXT_TOKENS_ENV = "IAOFFLINE_CONTEXT_TOKENS"
         private const val KV_BUDGET_ENV = "IAOFFLINE_KV_BUDGET_MB"
+        private const val PRESENCE_PENALTY_ENV = "IAOFFLINE_PRESENCE_PENALTY"
         private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }

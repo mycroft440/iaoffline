@@ -367,7 +367,7 @@ class LocalApiServer(
         val json = JSONObject(body)
         val requestedTemperature = json.optDouble("temperature", 0.3).toFloat().coerceIn(0f, 2f)
         require(kotlin.math.abs(requestedTemperature - 0.3f) < 0.0001f) {
-            "O runtime llama.cpp Android v0.4.0 usa temperature fixa em 0.3. Remova o parâmetro ou use 0.3."
+            "O runtime llama.cpp Android não aceita temperature por requisição: usa a recomendada pelo modelo ou 0.3. Remova o parâmetro ou use 0.3."
         }
         return ChatParams(
             model = json.optString("model").takeIf { it.isNotBlank() },

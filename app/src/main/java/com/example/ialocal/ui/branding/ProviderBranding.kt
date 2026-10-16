@@ -20,6 +20,7 @@ import com.example.ialocal.models.ModelCatalog
 import com.example.ialocal.models.ModelProvider
 
 fun ModelProvider.brandName(): String = when (this) {
+    ModelProvider.PRISMML -> "PrismML / Bonsai"
     ModelProvider.GOOGLE -> "Google"
     ModelProvider.ALIBABA -> "Alibaba / Qwen"
     ModelProvider.META -> "Meta"
@@ -31,6 +32,8 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.AI2 -> "Ai2 / OLMo"
     ModelProvider.NVIDIA -> "NVIDIA"
     ModelProvider.OPENAI -> "OpenAI"
+    ModelProvider.OPENBMB -> "OpenBMB / MiniCPM"
+    ModelProvider.JETBRAINS -> "JetBrains"
 }
 
 fun ModelProvider.logoRes(): Int = when (this) {
@@ -40,11 +43,14 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.MISTRAL -> R.drawable.provider_mistral
     ModelProvider.DEEPSEEK -> R.drawable.provider_deepseek
     ModelProvider.MICROSOFT -> R.drawable.provider_microsoft
+    ModelProvider.PRISMML,
     ModelProvider.IBM,
     ModelProvider.LIQUID,
     ModelProvider.AI2,
     ModelProvider.NVIDIA,
-    ModelProvider.OPENAI -> R.drawable.provider_generic
+    ModelProvider.OPENAI,
+    ModelProvider.OPENBMB,
+    ModelProvider.JETBRAINS -> R.drawable.provider_generic
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =

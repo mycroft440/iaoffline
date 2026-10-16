@@ -243,11 +243,13 @@ private fun CompanySelectorSection(
     onScrollTop: () -> Unit,
 ) {
     val selectorProviders = listOf(
+        ModelProvider.PRISMML,
         ModelProvider.DEEPSEEK,
         ModelProvider.ALIBABA,
         ModelProvider.MISTRAL,
         ModelProvider.META,
         ModelProvider.GOOGLE,
+        ModelProvider.MICROSOFT,
     ).filter { provider -> catalog.any { it.provider == provider } }
     val cells: List<ModelProvider?> = selectorProviders + listOf(null)
 
@@ -1052,6 +1054,15 @@ private fun catalogCompatibility(
 }
 
 private fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (provider) {
+    ModelProvider.PRISMML -> ProviderUiMeta(
+        selectorName = "Bonsai",
+        selectorSubtitle = "PrismML",
+        sectionName = "PrismML (Bonsai)",
+        badge = "1-bit",
+        tagline = "Modelos de 1 bit e ternários: muita capacidade em pouca memória",
+        accent = Color(0xFF4ADE80),
+    )
+
     ModelProvider.DEEPSEEK -> ProviderUiMeta(
         selectorName = "DeepSeek",
         selectorSubtitle = "Raciocínio R1",
@@ -1150,6 +1161,24 @@ private fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (prov
         tagline = "Modelos abertos da OpenAI com raciocínio",
         accent = Color(0xFFE5E7EB),
     )
+
+    ModelProvider.OPENBMB -> ProviderUiMeta(
+        selectorName = "MiniCPM",
+        selectorSubtitle = "OpenBMB",
+        sectionName = "OpenBMB (MiniCPM)",
+        badge = "MiniCPM",
+        tagline = "Modelos pequenos feitos para rodar no aparelho",
+        accent = Color(0xFFF472B6),
+    )
+
+    ModelProvider.JETBRAINS -> ProviderUiMeta(
+        selectorName = "Mellum",
+        selectorSubtitle = "JetBrains",
+        sectionName = "JetBrains (Mellum)",
+        badge = "Código",
+        tagline = "Modelos da JetBrains especializados em programação",
+        accent = Color(0xFFFACC15),
+    )
 }
 
 private fun groupedDownloadStatus(state: ModelDownloadState, progress: String?): String = when (state.phase) {
@@ -1181,6 +1210,7 @@ private fun groupedFormatBytes(bytes: Long): String {
 }
 
 private val CATALOG_PROVIDER_ORDER = listOf(
+    ModelProvider.PRISMML,
     ModelProvider.DEEPSEEK,
     ModelProvider.ALIBABA,
     ModelProvider.MISTRAL,
@@ -1192,4 +1222,6 @@ private val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.AI2,
     ModelProvider.NVIDIA,
     ModelProvider.OPENAI,
+    ModelProvider.OPENBMB,
+    ModelProvider.JETBRAINS,
 )

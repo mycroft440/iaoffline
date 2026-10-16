@@ -2,6 +2,7 @@ package com.example.ialocal
 
 import android.content.Context
 import com.example.ialocal.agent.AiOrchestrator
+import com.example.ialocal.agent.AnswerGuidance
 import com.example.ialocal.agent.tools.AgentToolRegistry
 import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.api.ApiSettingsRepository
@@ -16,6 +17,7 @@ import com.example.ialocal.diagnostics.IntegrationSelfTest
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentContextBuilder
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.knowledge.OfflineWikipedia
 import com.example.ialocal.models.AutomaticModelImporter
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.ModelDownloader
@@ -44,9 +46,16 @@ class AppContainer(context: Context) {
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
     val modelManager = ModelManager(appContext, modelRepository, modelRuntime, modelDownloader, diagnostics)
     val automaticModelImporter = AutomaticModelImporter(appContext, modelRepository, diagnostics)
-    val agentTools = AgentToolRegistry(chatRepository, codeEditSessions, diagnostics)
+    val offlineWikipedia = OfflineWikipedia(appContext, diagnostics)
+    val agentTools = AgentToolRegistry(chatRepository, codeEditSessions, diagnostics, offlineWikipedia)
     val deepThinkStore = DeepThinkStore(appContext)
-    val orchestrator = AiOrchestrator(modelRepository, modelRuntime, agentTools, deepThinkStore)
+    val orchestrator = AiOrchestrator(
+        modelRepository,
+        modelRuntime,
+        agentTools,
+        deepThinkStore,
+        AnswerGuidance(offlineWikipedia),
+    )
 
     val apiSettings = ApiSettingsRepository(appContext)
     val apiServer = LocalApiServer(

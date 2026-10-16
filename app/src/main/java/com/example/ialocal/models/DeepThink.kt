@@ -44,6 +44,16 @@ object DeepThinkSupport {
         val identity = "${model.name} ${model.apiModelId} ${model.architecture.orEmpty()}".lowercase()
 
         return when {
+            // Bonsai 2 and Bonsai 27B are Qwen3.5/3.6 underneath and always reason; the first
+            // Bonsai generation keeps the Qwen3 architecture but was trained without thinking.
+            BONSAI_REASONING.containsMatchIn(identity) -> DeepThinkCapability(
+                DeepThinkControlMode.REASONING_MODEL,
+                "Este modelo sempre raciocina antes de responder; o raciocínio não pode ser desligado.",
+            )
+            identity.contains("bonsai") -> DeepThinkCapability(
+                DeepThinkControlMode.NONE,
+                "Esta variante responde direto, sem modo DeepThink.",
+            )
             identity.contains("qwen3-coder") || identity.contains("qwen3 coder") ||
                 QWEN3_NON_THINKING.containsMatchIn(identity) -> DeepThinkCapability(
                 DeepThinkControlMode.NONE,
@@ -93,8 +103,9 @@ object DeepThinkSupport {
     private val QWEN3_NON_THINKING = Regex("qwen3[^a-z]*[\\w.-]*instruct-2507")
     private val ALWAYS_REASONING = Regex(
         "deepseek[- ]r1|gpt-oss|phi[- ]4[- ]reasoning|reasoning|magistral|qwq|olmo[- ]?3[\\w .-]*think|" +
-            "qwen3[.]\\d|qwen3[\\w.-]*thinking-2507",
+            "qwen3[.]\\d|qwen3[\\w.-]*thinking-2507|granite[- ]?4[.]2|mellum",
     )
+    private val BONSAI_REASONING = Regex("bonsai[- ]?2(?!\\d)|bonsai[- ]?27b")
     private val QWEN3_HYBRID = Regex("qwen-?3(?![.\\d])")
     private val NEMOTRON_V2 = Regex("nemotron[\\w .-]*nano[\\w .-]*v2")
 
