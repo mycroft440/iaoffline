@@ -26,8 +26,26 @@ enum class DeepThinkControlMode {
 data class DeepThinkCapability(
     val mode: DeepThinkControlMode,
     val description: String,
+    /** Whether reasoning is on before the user chooses: the default of the model's own template. */
+    val defaultEnabled: Boolean = false,
+    internal val switch: ThinkingSwitch = ThinkingSwitch.NONE,
 ) {
     val supported: Boolean get() = mode != DeepThinkControlMode.NONE
+}
+
+/** How a model's reasoning is turned on and off. */
+enum class ThinkingSwitch {
+    NONE,
+    /** Qwen3: "/no_think" after the user message. */
+    QWEN3_SLASH,
+    /** Nemotron Nano v2: "/no_think" in the system prompt. */
+    NEMOTRON_SLASH,
+    /** Qwen3.5 and later (Bonsai 2, Ornith…), MiniCPM5: the answer is prefilled with an empty or open think block. */
+    THINK_PREFILL,
+    /** Granite 4.2: same idea, with its own empty block. */
+    GRANITE_PREFILL,
+    /** Gemma 4: the template's enable_thinking flag. */
+    TEMPLATE_FLAG,
 }
 
 /** How a model is asked to reason for one request. */
@@ -37,6 +55,10 @@ data class ReasoningPlan(
     val systemSuffix: String = "",
     /** Text appended to the latest user message, e.g. Qwen3's `/no_think`. */
     val userSuffix: String = "",
+    /** Prefilled at the start of the answer, e.g. an empty `<think></think>` to skip reasoning. */
+    val assistantPrefix: String = "",
+    /** enable_thinking for templates that read it (Gemma 4). */
+    val templateThinking: Boolean = true,
 )
 
 object DeepThinkSupport {
@@ -44,12 +66,9 @@ object DeepThinkSupport {
         val identity = "${model.name} ${model.apiModelId} ${model.architecture.orEmpty()}".lowercase()
 
         return when {
-            // Bonsai 2 and Bonsai 27B are Qwen3.5/3.6 underneath and always reason; the first
-            // Bonsai generation keeps the Qwen3 architecture but was trained without thinking.
-            BONSAI_REASONING.containsMatchIn(identity) -> DeepThinkCapability(
-                DeepThinkControlMode.REASONING_MODEL,
-                "Este modelo sempre raciocina antes de responder; o raciocínio não pode ser desligado.",
-            )
+            // Bonsai 2 and Bonsai 27B are Qwen3.5/3.6 underneath; the first Bonsai generation keeps
+            // the Qwen3 architecture but was trained without thinking.
+            BONSAI_REASONING.containsMatchIn(identity) -> switchable(ThinkingSwitch.THINK_PREFILL, defaultEnabled = true)
             identity.contains("bonsai") -> DeepThinkCapability(
                 DeepThinkControlMode.NONE,
                 "Esta variante responde direto, sem modo DeepThink.",
@@ -63,12 +82,14 @@ object DeepThinkSupport {
                 DeepThinkControlMode.REASONING_MODEL,
                 "Este modelo sempre raciocina antes de responder; o raciocínio não pode ser desligado.",
             )
-            // Qwen3 and Nemotron Nano v2 accept the /think and /no_think switches. Qwen3.5 and
-            // later dropped them, so those always reason (matched above).
-            QWEN3_HYBRID.containsMatchIn(identity) || NEMOTRON_V2.containsMatchIn(identity) -> DeepThinkCapability(
-                DeepThinkControlMode.HYBRID_THINKING,
-                "Modelo híbrido: o DeepThink liga ou desliga o raciocínio e ajusta o orçamento de geração.",
-            )
+            // Their templates reason by default; turning it off answers much faster on a phone.
+            QWEN35_FAMILY.containsMatchIn(identity) || MINICPM5.containsMatchIn(identity) ->
+                switchable(ThinkingSwitch.THINK_PREFILL, defaultEnabled = true)
+            GRANITE_42.containsMatchIn(identity) -> switchable(ThinkingSwitch.GRANITE_PREFILL, defaultEnabled = true)
+            GEMMA_4.containsMatchIn(identity) -> switchable(ThinkingSwitch.TEMPLATE_FLAG, defaultEnabled = true)
+            // Qwen3 and Nemotron Nano v2 accept the /think and /no_think switches.
+            QWEN3_HYBRID.containsMatchIn(identity) -> switchable(ThinkingSwitch.QWEN3_SLASH, defaultEnabled = false)
+            NEMOTRON_V2.containsMatchIn(identity) -> switchable(ThinkingSwitch.NEMOTRON_SLASH, defaultEnabled = false)
             else -> DeepThinkCapability(
                 DeepThinkControlMode.NONE,
                 "DeepThink não foi detectado para este modelo.",
@@ -76,36 +97,56 @@ object DeepThinkSupport {
         }
     }
 
+    private fun switchable(switch: ThinkingSwitch, defaultEnabled: Boolean) = DeepThinkCapability(
+        mode = DeepThinkControlMode.HYBRID_THINKING,
+        description = "Modelo híbrido: o DeepThink liga ou desliga o raciocínio e ajusta o orçamento de geração. " +
+            "Desligado, a resposta sai bem mais rápido.",
+        defaultEnabled = defaultEnabled,
+        switch = switch,
+    )
+
     /**
      * Resolves the token budget and thinking switch for a request. Models that always reason get the
      * largest budget, because a truncated reasoning never reaches the answer. Hybrid models reason
-     * only when the user enabled DeepThink; otherwise they are explicitly told not to think.
+     * only when DeepThink is on; otherwise they are explicitly told not to think.
      */
     fun plan(model: AiModelEntity, baseMaxTokens: Int, enabled: Boolean, level: DeepThinkLevel): ReasoningPlan {
         val capability = capability(model)
         return when (capability.mode) {
             DeepThinkControlMode.NONE -> ReasoningPlan(effectiveMaxTokens(baseMaxTokens, DeepThinkLevel.AUTO))
             DeepThinkControlMode.REASONING_MODEL -> ReasoningPlan(RuntimeLimits.MAX_OUTPUT_TOKENS)
-            DeepThinkControlMode.HYBRID_THINKING -> if (enabled) {
-                ReasoningPlan(effectiveMaxTokens(baseMaxTokens, level))
-            } else {
-                val identity = "${model.name} ${model.apiModelId}".lowercase()
-                val nemotron = NEMOTRON_V2.containsMatchIn(identity)
-                ReasoningPlan(
-                    maxTokens = effectiveMaxTokens(baseMaxTokens, DeepThinkLevel.AUTO),
-                    systemSuffix = if (nemotron) "\n/no_think" else "",
-                    userSuffix = if (nemotron) "" else " /no_think",
-                )
+            DeepThinkControlMode.HYBRID_THINKING -> {
+                val maxTokens = effectiveMaxTokens(baseMaxTokens, if (enabled) level else DeepThinkLevel.AUTO)
+                when (capability.switch) {
+                    ThinkingSwitch.QWEN3_SLASH ->
+                        ReasoningPlan(maxTokens, userSuffix = if (enabled) "" else " /no_think")
+                    ThinkingSwitch.NEMOTRON_SLASH ->
+                        ReasoningPlan(maxTokens, systemSuffix = if (enabled) "" else "\n/no_think")
+                    ThinkingSwitch.THINK_PREFILL ->
+                        ReasoningPlan(maxTokens, assistantPrefix = if (enabled) THINK_OPEN else THINK_EMPTY)
+                    ThinkingSwitch.GRANITE_PREFILL ->
+                        ReasoningPlan(maxTokens, assistantPrefix = if (enabled) THINK_OPEN else GRANITE_THINK_EMPTY)
+                    ThinkingSwitch.TEMPLATE_FLAG -> ReasoningPlan(maxTokens, templateThinking = enabled)
+                    ThinkingSwitch.NONE -> ReasoningPlan(maxTokens)
+                }
             }
         }
     }
 
+    private const val THINK_OPEN = "<think>\n"
+    private const val THINK_EMPTY = "<think>\n\n</think>\n\n"
+    private const val GRANITE_THINK_EMPTY = "<think></think>"
     private val QWEN3_NON_THINKING = Regex("qwen3[^a-z]*[\\w.-]*instruct-2507")
     private val ALWAYS_REASONING = Regex(
         "deepseek[- ]r1|gpt-oss|phi[- ]4[- ]reasoning|reasoning|magistral|qwq|olmo[- ]?3[\\w .-]*think|" +
-            "qwen3[.]\\d|qwen3[\\w.-]*thinking-2507|granite[- ]?4[.]2|mellum",
+            "qwen3[\\w.-]*thinking-2507|mellum",
     )
     private val BONSAI_REASONING = Regex("bonsai[- ]?2(?!\\d)|bonsai[- ]?27b")
+    /** Qwen3.5, 3.6, 3.8 and models built on them (Ornith, FrogNano…), by name or architecture. */
+    private val QWEN35_FAMILY = Regex("qwen3[.]\\d|\\bqwen35|ornith")
+    private val MINICPM5 = Regex("minicpm[- ]?5")
+    private val GRANITE_42 = Regex("granite[- ]?4[.]2")
+    private val GEMMA_4 = Regex("gemma[- ]?4")
     private val QWEN3_HYBRID = Regex("qwen-?3(?![.\\d])")
     private val NEMOTRON_V2 = Regex("nemotron[\\w .-]*nano[\\w .-]*v2")
 
@@ -126,8 +167,9 @@ class DeepThinkStore(context: Context) {
         preferences.edit().putInt(levelKey(agentId), level.storedValue).apply()
     }
 
-    fun isEnabled(agentId: String): Boolean =
-        preferences.getBoolean(enabledKey(agentId), false)
+    /** The user's choice for this profile, or [default] (the model's own) before they choose. */
+    fun isEnabled(agentId: String, default: Boolean = false): Boolean =
+        preferences.getBoolean(enabledKey(agentId), default)
 
     fun setEnabled(agentId: String, enabled: Boolean) {
         preferences.edit().putBoolean(enabledKey(agentId), enabled).apply()

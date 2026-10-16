@@ -12,7 +12,9 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
   - Bonsai 8B Ternário: 2,3 GB, mais preciso que o 1 bit.
   - Bonsai 27B (1 bit, baseado no Qwen3.6 27B, com raciocínio): um modelo da classe 27B em 3,8 GB.
   - Bonsai 2 Ternário 2B, 4B e 9B (baseados no Qwen3.5, com raciocínio): 550 MB, 1,2 GB e 2,6 GB.
-- Outros modelos novos que rodam no celular: Granite 4.2 3B e 8B (IBM, com raciocínio), MiniCPM5 2B (OpenBMB) e Mellum 2.1 12B-A2.5B (JetBrains, especialista em código; MoE com 2,5B ativos).
+  - Bonsai 2 Ternário 27B (baseado no Qwen3.8 27B): 7,6 GB, para celulares de 12 GB; denso e lento, mas muito forte.
+- **Gemma 4 QAT** (E2B, E4B e 12B): versões oficiais do Google treinadas para 4 bits, com qualidade próxima da versão completa, no formato Q4_0, o mais rápido nos processadores ARM.
+- Outros modelos novos que rodam no celular: Ornith 1.5 9B (sobre o Qwen3.5 9B, perto do Qwen3.6 35B-A3B nos testes do autor), Granite 4.2 3B e 8B (IBM, com raciocínio), MiniCPM5 2B (OpenBMB), Mellum 2.1 12B-A2.5B (JetBrains, especialista em código; MoE com 2,5B ativos) e LFM2.5 24B-A2B (Liquid AI, experimental; MoE com 2,45B ativos, quantizado com destilação).
 - Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
 - Fila de downloads: é possível escolher várias IAs enquanto outra baixa; elas baixam uma de cada vez e a próxima começa assim que a anterior é instalada (ou falha). **Minhas I.As** mostra cada download com o progresso e as ações Pausar, Continuar, Tentar novamente e Remover; a fila sobrevive ao fechamento do app e retoma dos arquivos parciais.
 - Modelos concluídos do catálogo são mantidos na pasta `IAs Offline` na raiz do armazenamento compartilhado do telefone para sobreviver à desinstalação.
@@ -22,7 +24,9 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - Validação do cabeçalho GGUF, ABI, espaço disponível e estimativa de RAM.
 - Modelos grandes para a RAM do aparelho (arquivo acima de 30% da memória total, como 8B em celulares de 12 GB) carregam em modo de pouca memória: pesos mapeados do arquivo, sem a cópia reempacotada em RAM, e contexto de 4096 tokens. É um pouco mais lento, mas evita que o Android feche o app.
 - Se o app for fechado inesperadamente, na abertura seguinte ele mostra o motivo registrado pelo Android (falha nativa, falta de memória, erro) com detalhes para copiar.
-- Cache de contexto (KV) em Q4_0, cerca de um quarto da memória do F16, quando o modelo suporta flash attention; senão o app usa F16 com um contexto menor.
+- Cache de contexto (KV) em Q4_0, cerca de um quarto da memória do F16, quando o modelo suporta flash attention; senão o app usa F16 com um contexto menor. O llama.cpp aplica uma rotação de Hadamard ao cache quantizado, o que deixa a perda de qualidade do Q4_0 quase nula.
+- **Conversas contínuas**: o modelo fica carregado entre as mensagens e, quando a próxima mensagem continua a mesma conversa, o app aproveita o contexto que já está na memória e processa só a mensagem nova. Antes, cada mensagem recarregava o modelo e relia todo o histórico. Ao abrir outra conversa, editar ou regenerar uma mensagem, o contexto é remontado.
+- O histórico vai para o modelo como turnos de chat de verdade, formatados pelo template do próprio modelo (do jeito que ele foi treinado), e não mais colado como texto no prompt de sistema. As respostas anteriores entram sem o raciocínio, que só ocuparia contexto.
 - O contexto é o maior que cabe na memória do aparelho (até o limite de treino do modelo): 40% da RAM menos o tamanho do modelo, entre 256 MB e 2 GB para o cache. Num celular de 12 GB, um modelo 4B usa o contexto completo de 32K e um 8B fica em torno de 13K.
 - Modelos MoE grandes (15B ou mais no total, poucos bilhões ativos por palavra), como Gemma 4 26B-A4B, Qwen3-Coder 30B-A3B, Qwen3.6 35B-A3B, Nemotron 3 Nano 30B-A3B e gpt-oss 20B, aparecem como **Experimental – lento**: rodam sempre em modo de pouca memória, lendo os pesos do armazenamento, com 384 MB para o contexto.
 - O gpt-oss 20B da OpenAI responde no formato "harmony"; o app converte o canal `analysis` em raciocínio expansível e o canal `final` em resposta.
@@ -44,13 +48,18 @@ Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downlo
 
 As respostas da I.A continuam sendo geradas quando o app vai para segundo plano, quando a tela é desligada ou quando o usuário sai da conversa. No máximo duas conversas são respondidas ao mesmo tempo; uma mensagem enviada de uma terceira conversa aparece como **Na fila** e é respondida na ordem de chegada assim que uma das outras termina. Enquanto houver uma resposta ou mensagens na fila, um serviço em primeiro plano mostra a notificação **Gerando resposta…** (com a ação **Parar**) e mantém a CPU ativa; ele é encerrado automaticamente quando a geração termina.
 
-Modelos que raciocinam mostram o raciocínio enquanto ele é gerado, num bloco **Raciocínio** que pode ser expandido ou recolhido; ao terminar, o bloco se recolhe e exibe quanto tempo o modelo raciocinou, e cada resposta mostra o tempo total (**Respondeu em …**). O seletor **DeepThink** aparece apenas nos modelos em que o raciocínio pode ser ligado e desligado (Qwen3 e Nemotron Nano v2); com ele desligado, o app envia `/no_think`. Modelos que sempre raciocinam (DeepSeek R1, Qwen3.5 e posteriores, variantes *Reasoning* e *Think*) não têm o seletor. Todos os perfis pedem respostas de até 8192 tokens, um contexto nativo inteiro; o modelo para antes quando termina, e se passar da janela de contexto o llama.cpp desloca o contexto (mantendo o prompt de sistema) em vez de cortar a resposta. No prompt, no máximo metade do contexto é reservada para a resposta, para o histórico continuar cabendo.
+Modelos que raciocinam mostram o raciocínio enquanto ele é gerado, num bloco **Raciocínio** que pode ser expandido ou recolhido; ao terminar, o bloco se recolhe e exibe quanto tempo o modelo raciocinou, e cada resposta mostra o tempo total (**Respondeu em …**). O seletor **DeepThink** aparece nos modelos em que o raciocínio pode ser ligado e desligado. Desligado, a resposta sai bem mais rápido, o que pesa muito no celular:
+  - Qwen3 e Nemotron Nano v2: o app envia `/no_think`; começam com o DeepThink desligado.
+  - Qwen3.5, 3.6 e 3.8, Bonsai 2 e Bonsai 27B, Ornith, MiniCPM5 e Granite 4.2: a resposta é pré-preenchida com um bloco de raciocínio vazio, como os templates desses modelos fazem; começam com o DeepThink ligado, como o próprio modelo.
+  - Gemma 4: o app desliga o `enable_thinking` do template; começa ligado.
+
+  Modelos que sempre raciocinam (DeepSeek R1, gpt-oss, Mellum, variantes *Reasoning* e *Think*) não têm o seletor. Todos os perfis pedem respostas de até 8192 tokens, um contexto nativo inteiro; o modelo para antes quando termina, e se passar da janela de contexto o llama.cpp desloca o contexto (mantendo o prompt de sistema) em vez de cortar a resposta. No prompt, no máximo metade do contexto é reservada para a resposta, para o histórico continuar cabendo.
 
 ## Respostas melhores sem modelo maior
 
 Além da amostragem recomendada pelo modelo, cada conversa recebe técnicas que custam poucos tokens de prompt e nenhuma memória extra:
 
-- **Data e hora atuais** no prompt de sistema: os modelos só conhecem a data do treino.
+- **Data de hoje** no prompt de sistema (a hora exata vem da ferramenta `current_time`): os modelos só conhecem a data do treino. O prompt de sistema só muda uma vez por dia, para não impedir a continuação da conversa.
 - **Regras curtas contra erros típicos de modelos pequenos**: responder no idioma do usuário, admitir quando não sabe em vez de inventar nomes, datas e números, e resolver problemas de várias etapas passo a passo.
 - **Calculadora** (`calculate`): contas exatas com precedência, potências, funções e constantes, em vez de aritmética "de cabeça".
 - **Wikipedia Offline**: quando instalada, os agentes podem procurar (`wikipedia_search`) e ler (`wikipedia_read`) artigos, e, com a consulta automática ligada, perguntas que citam uma pessoa, lugar ou assunto recebem o começo do artigo correspondente (no máximo dois artigos, ~650 caracteres cada).

@@ -720,6 +720,7 @@ private fun resolveProvider(model: AiModelEntity, catalogModel: CatalogModel?): 
         "bonsai" in text || "prism" in text -> ModelProvider.PRISMML
         "minicpm" in text -> ModelProvider.OPENBMB
         "mellum" in text -> ModelProvider.JETBRAINS
+        "ornith" in text -> ModelProvider.ORNITH
         "qwen" in text || "alibaba" in text -> ModelProvider.ALIBABA
         "llama" in text || "meta" in text -> ModelProvider.META
         "gemma" in text || "google" in text -> ModelProvider.GOOGLE

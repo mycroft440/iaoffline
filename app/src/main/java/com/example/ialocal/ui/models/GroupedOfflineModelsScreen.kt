@@ -1179,6 +1179,15 @@ private fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (prov
         tagline = "Modelos da JetBrains especializados em programação",
         accent = Color(0xFFFACC15),
     )
+
+    ModelProvider.ORNITH -> ProviderUiMeta(
+        selectorName = "Ornith",
+        selectorSubtitle = "Ornith AI",
+        sectionName = "Ornith AI",
+        badge = "Ornith",
+        tagline = "Modelos com treino de autoaperfeiçoamento, fortes em raciocínio e código",
+        accent = Color(0xFFF97316),
+    )
 }
 
 private fun groupedDownloadStatus(state: ModelDownloadState, progress: String?): String = when (state.phase) {
@@ -1224,4 +1233,5 @@ private val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.OPENAI,
     ModelProvider.OPENBMB,
     ModelProvider.JETBRAINS,
+    ModelProvider.ORNITH,
 )

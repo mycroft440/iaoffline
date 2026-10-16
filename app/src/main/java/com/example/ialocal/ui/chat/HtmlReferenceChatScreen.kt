@@ -640,7 +640,9 @@ private fun HtmlDeepThink(agent: AgentEntity, model: AiModelEntity) {
     val context = LocalContext.current
     val store = remember(context) { DeepThinkStore(context.applicationContext) }
     var open by remember(agent.id) { mutableStateOf(false) }
-    var enabled by remember(agent.id) { mutableStateOf(store.isEnabled(agent.id)) }
+    var enabled by remember(agent.id, model.id) {
+        mutableStateOf(store.isEnabled(agent.id, DeepThinkSupport.capability(model).defaultEnabled))
+    }
     var level by remember(agent.id) { mutableStateOf(store.getLevel(agent.id)) }
     val accent = when { !enabled -> HMuted; level == DeepThinkLevel.HIGH -> Color(0xFFFBBF24); level == DeepThinkLevel.MEDIUM -> Color(0xFF818CF8); else -> Color(0xFF22D3EE) }
     val label = if (enabled) when (level) { DeepThinkLevel.HIGH -> "DeepThink: Máximo"; DeepThinkLevel.MEDIUM -> "DeepThink: Profundo"; DeepThinkLevel.LOW -> "DeepThink: Rápido"; DeepThinkLevel.AUTO -> "DeepThink: Automático" } else "DeepThink: Desativado"

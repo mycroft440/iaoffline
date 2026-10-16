@@ -57,10 +57,46 @@ class DeepThinkTest {
     }
 
     @Test
+    fun qwen35FamilyCanSkipReasoningByPrefillingAnEmptyThinkBlock() {
+        listOf(
+            model("Qwen3.5 4B", "local-catalog-qwen3.5-4b-q4-k-m-1"),
+            model("Qwen3.8 27B", "local-catalog-qwen3.8-27b-q4-k-m-1"),
+            model("Qwen3.6 35B-A3B", "local-catalog-qwen3.6-35b-a3b-q3-k-m-1"),
+            model("Ornith 1.5 9B", "local-catalog-ornith1.5-9b-iq4-xs-1", "qwen35"),
+            model("meu-finetune", "local-meu-finetune-1", "qwen35moe"),
+            model("MiniCPM5 2B", "local-catalog-minicpm5-2b-q4-k-m-1", "llama"),
+        ).forEach { model ->
+            val capability = DeepThinkSupport.capability(model)
+            assertEquals(model.name, DeepThinkControlMode.HYBRID_THINKING, capability.mode)
+            // Their own templates reason by default, so DeepThink starts on.
+            assertTrue(model.name, capability.defaultEnabled)
+            assertEquals("<think>\n", DeepThinkSupport.plan(model, 8192, true, DeepThinkLevel.HIGH).assistantPrefix)
+            assertEquals("<think>\n\n</think>\n\n", DeepThinkSupport.plan(model, 8192, false, DeepThinkLevel.HIGH).assistantPrefix)
+        }
+    }
+
+    @Test
+    fun gemma4AndGranite42SwitchReasoningTheirOwnWay() {
+        val gemma = model("Gemma 4 E4B QAT", "local-catalog-gemma4-e4b-it-qat-q4-0-1", "gemma4")
+        assertEquals(DeepThinkControlMode.HYBRID_THINKING, DeepThinkSupport.capability(gemma).mode)
+        assertTrue(DeepThinkSupport.capability(gemma).defaultEnabled)
+        assertFalse(DeepThinkSupport.plan(gemma, 8192, false, DeepThinkLevel.HIGH).templateThinking)
+        assertTrue(DeepThinkSupport.plan(gemma, 8192, true, DeepThinkLevel.HIGH).templateThinking)
+        assertEquals("", DeepThinkSupport.plan(gemma, 8192, false, DeepThinkLevel.HIGH).assistantPrefix)
+
+        val granite = model("Granite 4.2 8B", "local-catalog-granite4.2-8b-q3-k-m-1", "granite")
+        assertEquals("<think></think>", DeepThinkSupport.plan(granite, 8192, false, DeepThinkLevel.HIGH).assistantPrefix)
+        assertEquals("<think>\n", DeepThinkSupport.plan(granite, 8192, true, DeepThinkLevel.HIGH).assistantPrefix)
+    }
+
+    @Test
+    fun qwen3HybridStillStartsWithReasoningOff() {
+        assertFalse(DeepThinkSupport.capability(model("Qwen3 8B", "local-qwen3-8b-1")).defaultEnabled)
+    }
+
+    @Test
     fun newerQwenAndReasoningVariantsAlwaysReason() {
         listOf(
-            "Qwen3.5 4B" to "local-catalog-qwen3.5-4b-q4-k-m-1",
-            "Qwen3.8 27B" to "local-catalog-qwen3.8-27b-q4-k-m-1",
             "Ministral 3 8B Reasoning" to "local-catalog-ministral3-8b-reasoning-q4-k-m-1",
             "OLMo 3 7B Think" to "local-catalog-olmo3-7b-think-q4-k-m-1",
         ).forEach { (name, id) ->
@@ -99,7 +135,7 @@ class DeepThinkTest {
     @Test
     fun newMoeModelsAreClassified() {
         assertEquals(
-            DeepThinkControlMode.REASONING_MODEL,
+            DeepThinkControlMode.HYBRID_THINKING,
             DeepThinkSupport.capability(model("Qwen3.6 35B-A3B", "local-catalog-qwen3.6-35b-a3b-q3-k-m-1")).mode,
         )
         assertEquals(
@@ -159,16 +195,19 @@ class DeepThinkTest {
         listOf(
             "Bonsai 27B" to "local-catalog-bonsai-27b-q1-0-1",
             "Bonsai 2 Ternário 9B" to "local-catalog-bonsai2-ternary-9b-q2-0-1",
+            "Bonsai 2 Ternário 27B" to "local-catalog-bonsai2-ternary-27b-q2-0-1",
             "Ternary-Bonsai-2-4B" to "local-ternary-bonsai-2-4b-1",
         ).forEach { (name, id) ->
-            assertEquals(name, DeepThinkControlMode.REASONING_MODEL, DeepThinkSupport.capability(model(name, id, "qwen35")).mode)
+            val capability = DeepThinkSupport.capability(model(name, id, "qwen35"))
+            assertEquals(name, DeepThinkControlMode.HYBRID_THINKING, capability.mode)
+            assertTrue(name, capability.defaultEnabled)
         }
     }
 
     @Test
-    fun granite42AndMellumAlwaysReason() {
+    fun granite42IsSwitchableAndMellumAlwaysReasons() {
         assertEquals(
-            DeepThinkControlMode.REASONING_MODEL,
+            DeepThinkControlMode.HYBRID_THINKING,
             DeepThinkSupport.capability(model("Granite 4.2 8B", "local-catalog-granite4.2-8b-q3-k-m-1")).mode,
         )
         assertEquals(

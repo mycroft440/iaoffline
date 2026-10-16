@@ -42,13 +42,11 @@ class LlamaCppRuntime(
     private var loadedModelId: String? = null
     /** Context the native side allocated for the loaded model. */
     private var loadedContextTokens = RuntimeLimits.MIN_CONTEXT_TOKENS
-    /** setSystemPrompt can only be called directly after a load in the pinned binding. */
-    private var requestSessionConsumed = false
+    /** The conversation the native context holds, if the last answer ended normally. */
+    private var session: ChatSession? = null
 
     override suspend fun warmUp(model: AiModelEntity) = withContext(nativeDispatcher) {
-        mutex.withLock {
-            ensureFreshLoaded(model, forceReload = loadedModelId != model.id || requestSessionConsumed)
-        }
+        mutex.withLock { ensureLoaded(model) }
     }
 
     override suspend fun verify(model: AiModelEntity): VerificationResult = withContext(nativeDispatcher) {
@@ -56,9 +54,9 @@ class LlamaCppRuntime(
             var finalState = RuntimeState()
             try {
                 logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
-                ensureFreshLoaded(model, forceReload = true)
+                ensureLoaded(model, forceReload = true)
+                runCatching { Os.unsetenv(ASSISTANT_PREFIX_ENV) }
                 engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
-                requestSessionConsumed = true
                 _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
                 val output = engine.sendUserPrompt("Responda apenas: OK", predictLength = 8)
                     .toList().joinToString("").trim()
@@ -84,45 +82,73 @@ class LlamaCppRuntime(
         messages: List<AiChatMessage>,
         temperature: Float,
         maxTokens: Int,
+        turn: TurnOptions,
     ): Flow<String> = flow {
         require(kotlin.math.abs(temperature - FIXED_TEMPERATURE) < 0.0001f) {
             "O binding llama.cpp Android não aceita temperature por requisição; ele usa a recomendada pelo modelo ou $FIXED_TEMPERATURE."
         }
         mutex.lock()
         try {
-            ensureFreshLoaded(model, forceReload = requestSessionConsumed || loadedModelId != model.id)
+            ensureLoaded(model)
+            val outputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
                 messages = messages,
                 contextTokens = loadedContextTokens,
-                maxOutputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
+                maxOutputTokens = outputTokens,
             )
-            if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
+            val latestUser = prepared.latestUser + turn.userSuffix
+            val sessionKey = prepared.systemPrompt + "\u0000thinking=" + turn.templateThinking
+            val previous = session
+            // Invalid until this answer ends normally.
+            session = null
+            runCatching {
+                Os.setenv(THINKING_ENV, if (turn.templateThinking) "1" else "0", true)
+                if (turn.assistantPrefix.isEmpty()) Os.unsetenv(ASSISTANT_PREFIX_ENV)
+                else Os.setenv(ASSISTANT_PREFIX_ENV, turn.assistantPrefix, true)
+            }
+            val continuing = previous != null &&
+                previous.continuesWith(model.id, sessionKey, prepared.conversation) &&
+                previous.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)
+            if (continuing) {
+                logger?.info("PROMPT_TEMPLATE", "Continuando a conversa no contexto carregado (${previous?.tokens} tokens)")
+            } else {
+                if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
+                engine.setSystemPrompt(prepared.systemPrompt)
+                prepared.history.forEach { engine.addHistoryMessage(it.role, it.content) }
+                logger?.info("PROMPT_TEMPLATE", "Conversa montada com ${prepared.history.size} turnos anteriores")
+            }
 
-            engine.setSystemPrompt(prepared.systemPrompt)
-            requestSessionConsumed = true
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
-            logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$maxTokens; streaming=true")
-            var emitted = 0
+            logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$outputTokens; streaming=true")
+            val reply = StringBuilder()
             // gpt-oss answers in the harmony format; everything else passes through unchanged.
             val harmony = HarmonyNormalizer()
-            engine.sendUserPrompt(
-                message = prepared.latestUser,
-                predictLength = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
-            ).collect { chunk ->
+            engine.sendUserPrompt(message = latestUser, predictLength = outputTokens).collect { chunk ->
                 val text = harmony.push(chunk)
                 if (text.isNotEmpty()) {
-                    emitted += text.length
+                    reply.append(text)
                     emit(text)
                 }
             }
             harmony.finish().takeIf { it.isNotEmpty() }?.let { text ->
-                emitted += text.length
+                reply.append(text)
                 emit(text)
             }
-            require(emitted > 0) { "O modelo terminou sem produzir texto." }
+            require(reply.isNotEmpty()) { "O modelo terminou sem produzir texto." }
+            val ended = runCatching { Os.getenv(SESSION_CLEAN_ENV) == "1" }.getOrDefault(false)
+            val tokens = runCatching { Os.getenv(SESSION_TOKENS_ENV)?.toIntOrNull() }.getOrNull()
+            if (ended && tokens != null) {
+                session = ChatSession(
+                    modelId = model.id,
+                    key = sessionKey,
+                    conversation = prepared.conversation + AiChatMessage(PromptContextBuilder.USER, prepared.latestUser),
+                    reply = reply.toString(),
+                    tokens = tokens,
+                )
+            }
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
-            logger?.info("INFERENCE", "Resposta concluída ($emitted caracteres)")
+            logger?.info("INFERENCE", "Resposta concluída (${reply.length} caracteres)")
         } catch (cancel: CancellationException) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Geração cancelada pelo usuário")
@@ -142,8 +168,9 @@ class LlamaCppRuntime(
         messages: List<AiChatMessage>,
         temperature: Float,
         maxTokens: Int,
+        turn: TurnOptions,
     ): String {
-        val output = streamComplete(model, systemPrompt, messages, temperature, maxTokens)
+        val output = streamComplete(model, systemPrompt, messages, temperature, maxTokens, turn)
             .toList().joinToString(separator = "").trim()
         require(output.isNotBlank()) { "O modelo terminou sem produzir texto." }
         return output
@@ -153,9 +180,13 @@ class LlamaCppRuntime(
         mutex.withLock { unloadLocked() }
     }
 
-    private suspend fun ensureFreshLoaded(model: AiModelEntity, forceReload: Boolean) {
+    /**
+     * Loads [model] unless it is already loaded and healthy. The model stays loaded between
+     * messages, so a conversation does not pay for a reload (and its weight repacking) each turn.
+     */
+    private suspend fun ensureLoaded(model: AiModelEntity, forceReload: Boolean = false) {
         awaitEngineInitialized()
-        if (!forceReload && loadedModelId == model.id && !requestSessionConsumed) {
+        if (!forceReload && loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
         }
@@ -189,12 +220,12 @@ class LlamaCppRuntime(
                 ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
             logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")
             loadedModelId = model.id
-            requestSessionConsumed = false
+            session = null
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("MODEL_LOAD", "Modelo READY: ${model.apiModelId}")
         } catch (t: Throwable) {
             loadedModelId = null
-            requestSessionConsumed = false
+            session = null
             val message = humanize(t)
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
             logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}: $message", t)
@@ -223,7 +254,7 @@ class LlamaCppRuntime(
         val current = engine.state.value
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
-            requestSessionConsumed = false
+            session = null
             _state.value = finalState
             return
         }
@@ -237,7 +268,7 @@ class LlamaCppRuntime(
         runCatching { engine.cleanUp() }
             .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
         loadedModelId = null
-        requestSessionConsumed = false
+        session = null
         _state.value = finalState
     }
 
@@ -279,6 +310,10 @@ class LlamaCppRuntime(
         private const val CONTEXT_TOKENS_ENV = "IAOFFLINE_CONTEXT_TOKENS"
         private const val KV_BUDGET_ENV = "IAOFFLINE_KV_BUDGET_MB"
         private const val PRESENCE_PENALTY_ENV = "IAOFFLINE_PRESENCE_PENALTY"
+        private const val ASSISTANT_PREFIX_ENV = "IAOFFLINE_ASSISTANT_PREFIX"
+        private const val THINKING_ENV = "IAOFFLINE_ENABLE_THINKING"
+        private const val SESSION_CLEAN_ENV = "IAOFFLINE_SESSION_CLEAN"
+        private const val SESSION_TOKENS_ENV = "IAOFFLINE_SESSION_TOKENS"
         private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
     }
