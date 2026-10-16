@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +58,7 @@ fun WikipediaScreen(
     val autoContext by wikipedia.autoContext.collectAsStateWithLifecycle()
     var freeBytes by remember { mutableLongStateOf(wikipedia.freeBytes()) }
     var confirmRemoval by remember { mutableStateOf<WikipediaPackState?>(null) }
+    var confirmDownload by remember { mutableStateOf<WikipediaPackState?>(null) }
 
     LaunchedEffect(Unit) { wikipedia.refresh() }
     LaunchedEffect(states) { freeBytes = wikipedia.freeBytes() }
@@ -82,8 +84,9 @@ fun WikipediaScreen(
         ) {
             item {
                 Text(
-                    "Baixe a Wikipédia para os agentes consultarem sem internet. Com ela instalada, as IAs " +
+                    "Escolha qual edição da Wikipédia baixar para os agentes consultarem sem internet. Com ela instalada, as IAs " +
                         "conferem nomes, datas e fatos nos artigos em vez de inventá-los, sem precisar de um modelo maior. " +
+                        "Nada é baixado sem você tocar em Baixar e confirmar, e o app não atualiza as edições sozinho. " +
                         "Os arquivos são do Kiwix (formato ZIM) e são conferidos por SHA-256 depois do download.",
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall,
@@ -114,7 +117,7 @@ fun WikipediaScreen(
                             )
                             Text(
                                 "Quando a pergunta cita uma pessoa, lugar ou assunto, o começo do artigo vai junto para a IA. " +
-                                    "Os agentes também podem procurar e ler artigos por conta própria.",
+                                    "Os agentes também podem procurar e ler artigos nas edições que você baixou; eles nunca baixam nada.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -127,7 +130,7 @@ fun WikipediaScreen(
             items(states, key = { it.pack.id }) { state ->
                 WikipediaPackCard(
                     state = state,
-                    onDownload = { wikipedia.install(state.pack.id) },
+                    onDownload = { confirmDownload = state },
                     onCancel = { wikipedia.cancel(state.pack.id) },
                     onRemove = { confirmRemoval = state },
                 )
@@ -135,6 +138,41 @@ fun WikipediaScreen(
 
             item { Spacer(Modifier.padding(bottom = 12.dp)) }
         }
+    }
+
+    confirmDownload?.let { state ->
+        var wifiOnly by remember(state.pack.id) { mutableStateOf(true) }
+        AlertDialog(
+            onDismissRequest = { confirmDownload = null },
+            title = { Text("Baixar ${state.pack.title}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "O app vai baixar a edição mais recente do Kiwix, com cerca de " +
+                            "${OfflineWikipedia.formatSize(state.pack.approximateBytes)}. " +
+                            "Espaço livre: ${OfflineWikipedia.formatSize(freeBytes)}.",
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { wifiOnly = !wifiOnly },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = wifiOnly, onCheckedChange = { wifiOnly = it })
+                        Text("Baixar apenas pelo Wi-Fi")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    wikipedia.install(state.pack.id, wifiOnly)
+                    confirmDownload = null
+                }) { Text("Baixar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDownload = null }) { Text("Cancelar") }
+            },
+        )
     }
 
     confirmRemoval?.let { state ->

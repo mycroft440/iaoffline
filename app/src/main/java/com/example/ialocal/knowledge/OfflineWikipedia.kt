@@ -56,6 +56,10 @@ data class WikipediaPackState(
  * Offline Wikipedia for the agents: downloads Kiwix ZIM files with the system DownloadManager (it
  * keeps going in the background and resumes after network drops), checks them against Kiwix's
  * SHA-256 and answers lookups from the installed archives.
+ *
+ * The user decides what is downloaded: [install] is the only way a download starts, and only the
+ * Wikipedia screen calls it, after the user picks an edition and confirms. Nothing downloads or
+ * updates on its own, and the agents can only read the editions already installed.
  */
 class OfflineWikipedia(
     context: Context,
@@ -96,8 +100,11 @@ class OfflineWikipedia(
 
     fun isInstalled(): Boolean = _states.value.any { it.status == WikipediaPackStatus.INSTALLED }
 
-    /** Finds the newest Kiwix release of [packId] and hands it to the DownloadManager. */
-    fun install(packId: String) {
+    /**
+     * Downloads the newest Kiwix release of the edition the user chose and confirmed. With
+     * [wifiOnly] the DownloadManager waits for a network that is not metered.
+     */
+    fun install(packId: String, wifiOnly: Boolean) {
         val pack = PACKS.firstOrNull { it.id == packId } ?: return
         if (_states.value.first { it.pack.id == packId }.busy) return
         update(packId) { it.copy(status = WikipediaPackStatus.PREPARING, message = null) }
@@ -115,7 +122,7 @@ class OfflineWikipedia(
                     .setDescription("Baixando ${release.fileName}")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     .setDestinationInExternalFilesDir(appContext, DIRECTORY, release.fileName + PARTIAL_SUFFIX)
-                    .setAllowedOverMetered(true)
+                    .setAllowedOverMetered(!wifiOnly)
                     .setAllowedOverRoaming(false)
                 val downloadId = downloads.enqueue(request)
                 savePending(pack.id, Pending(downloadId, release.fileName, release.sha256))
