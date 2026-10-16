@@ -2,6 +2,7 @@ package com.example.ialocal.agent.tools
 
 import com.example.ialocal.data.ChatRepository
 import com.example.ialocal.diagnostics.AiEventLogger
+import com.example.ialocal.knowledge.OfflineWikipedia
 import com.example.ialocal.ui.codeeditor.CodeEditSessionStore
 import java.text.DateFormat
 import java.util.Date
@@ -23,12 +24,28 @@ class AgentToolRegistry(
     private val chats: ChatRepository,
     private val codeEdits: CodeEditSessionStore,
     private val logger: AiEventLogger? = null,
+    private val wikipedia: OfflineWikipedia? = null,
 ) {
     val definitions = listOf(
         ToolDefinition("list_recent_conversations", "Lista as conversas mais recentes do aplicativo.", "{\"limit\": número opcional de 1 a 20}"),
         ToolDefinition("search_conversations", "Busca conversas por palavras no título ou nas mensagens.", "{\"query\": texto, \"limit\": número opcional}"),
         ToolDefinition("read_conversation", "Lê as mensagens de uma conversa pelo id.", "{\"conversation_id\": texto}"),
         ToolDefinition("current_time", "Retorna a data e hora local atuais do aparelho.", "{}"),
+        ToolDefinition(
+            "calculate",
+            "Calcula uma expressão matemática com exatidão. Use para qualquer conta com mais de um passo ou números grandes, em vez de calcular de cabeça.",
+            "{\"expression\": texto com ponto decimal, + - * / % ^, parênteses, pi, e, sqrt, ln, log, sin, cos, tan, round, min, max, fact}",
+        ),
+        ToolDefinition(
+            "wikipedia_search",
+            "Procura artigos na Wikipedia offline do aparelho e devolve títulos com o começo do texto.",
+            "{\"query\": nome de pessoa, lugar, evento ou assunto}",
+        ),
+        ToolDefinition(
+            "wikipedia_read",
+            "Lê um artigo da Wikipedia offline pelo título. Use para conferir fatos, datas e nomes antes de responder.",
+            "{\"title\": título do artigo, \"max_chars\": número opcional de 500 a 8000}",
+        ),
         ToolDefinition(
             name = "replace_code_range",
             description = "Edita diretamente SOMENTE o trecho previamente autorizado pelo Canvas. A faixa pertence ao session_id; você não escolhe offsets e não pode tocar no restante do documento. Use uma única vez.",
@@ -37,9 +54,16 @@ class AgentToolRegistry(
         ),
     )
 
-    private fun availableDefinitions(): List<ToolDefinition> =
-        if (codeEdits.hasActiveSessions()) definitions
-        else definitions.filterNot { it.permission == ToolPermission.SCOPED_WRITE }
+    private fun availableDefinitions(): List<ToolDefinition> {
+        val wikipediaInstalled = wikipedia?.isInstalled() == true
+        return definitions.filter { definition ->
+            when {
+                definition.permission == ToolPermission.SCOPED_WRITE -> codeEdits.hasActiveSessions()
+                definition.name.startsWith("wikipedia_") -> wikipediaInstalled
+                else -> true
+            }
+        }
+    }
 
     fun promptInstructions(): String = buildString {
         append("\n\nVocê tem ferramentas locais. Use uma ferramenta apenas quando necessário.\n")
@@ -107,6 +131,41 @@ class AgentToolRegistry(
                 .put("local_time", DateFormat.getDateTimeInstance(DateFormat.FULL, DateFormat.LONG).format(Date()))
                 .put("epoch_ms", System.currentTimeMillis())
                 .toString()
+            "calculate" -> {
+                val expression = call.arguments.optString("expression").trim()
+                require(expression.isNotBlank()) { "Informe 'expression'." }
+                val result = runCatching { Calculator.evaluate(expression) }
+                JSONObject().put("expression", expression).apply {
+                    result.onSuccess { put("result", Calculator.format(it)) }
+                    result.onFailure { put("error", it.message ?: "Expressão inválida.") }
+                }.toString()
+            }
+            "wikipedia_search" -> {
+                val query = call.arguments.optString("query").trim()
+                require(query.isNotBlank()) { "A busca precisa de 'query'." }
+                val hits = requireNotNull(wikipedia).search(query, WIKIPEDIA_SEARCH_LIMIT)
+                JSONObject().put("query", query).put(
+                    "results",
+                    JSONArray().apply {
+                        hits.forEach { put(JSONObject().put("title", it.title).put("snippet", it.text)) }
+                    },
+                ).apply { if (hits.isEmpty()) put("note", "Nenhum artigo encontrado na Wikipedia offline.") }.toString()
+            }
+            "wikipedia_read" -> {
+                val title = call.arguments.optString("title").trim()
+                require(title.isNotBlank()) { "Informe 'title'." }
+                val maxChars = call.arguments.optInt("max_chars", WIKIPEDIA_READ_CHARS).coerceIn(500, 8000)
+                val hit = requireNotNull(wikipedia).read(title, maxChars)
+                if (hit == null) {
+                    JSONObject().put("title", title).put("error", "Artigo não encontrado na Wikipedia offline.").toString()
+                } else {
+                    JSONObject()
+                        .put("title", hit.title)
+                        .put("facts", JSONArray(hit.facts))
+                        .put("text", hit.text)
+                        .toString()
+                }
+            }
             "replace_code_range" -> {
                 val sessionId = call.arguments.optString("session_id").trim()
                 require(sessionId.isNotBlank()) { "Informe 'session_id'." }
@@ -124,5 +183,10 @@ class AgentToolRegistry(
             }
             else -> error("Ferramenta não implementada.")
         }
+    }
+
+    private companion object {
+        const val WIKIPEDIA_SEARCH_LIMIT = 5
+        const val WIKIPEDIA_READ_CHARS = 3000
     }
 }

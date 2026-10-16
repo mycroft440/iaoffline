@@ -50,6 +50,11 @@ android {
         versionCode = ciVersionCode ?: 1
         versionName = ciVersionName ?: "0.1.0"
         manifestPlaceholders["admobAppId"] = testAdMobAppId
+        // The llama.cpp binding only ships these ABIs; other libraries' 32-bit copies would make
+        // the APK install on phones where the runtime cannot load.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -121,6 +126,10 @@ dependencies {
 
     // Code language packs are tiny JSON prompt guides downloaded on demand.
     // No compiler, linter or Tree-sitter grammar is embedded in the base APK.
+
+    // Offline Wikipedia: Kiwix ZIM files compress their articles with zstd.
+    implementation("com.github.luben:zstd-jni:1.5.7-20@aar")
+    testImplementation("com.github.luben:zstd-jni:1.5.7-20")
 
     // Generated from the official ggml-org/llama.cpp Android binding.
     // Run scripts/prepare_llama_android.sh before building the app.

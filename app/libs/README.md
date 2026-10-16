@@ -8,5 +8,5 @@ Generate it from the official `ggml-org/llama.cpp` Android binding with:
 ./scripts/prepare_llama_android.sh
 ```
 
-The script pins llama.cpp to `v0.4.0` by default and copies the generated AAR into this directory.
+The script pins llama.cpp to `v0.7.0` by default (the first release that runs the ternary Bonsai 2 models) and copies the generated AAR into this directory.
 The GitHub Actions workflow runs this step automatically before compiling the APK.

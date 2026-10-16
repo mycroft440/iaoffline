@@ -27,6 +27,7 @@ class AiOrchestrator(
     private val runtime: ModelRuntime,
     private val tools: AgentToolRegistry,
     private val deepThinkStore: DeepThinkStore,
+    private val guidance: AnswerGuidance = AnswerGuidance(),
 ) {
     suspend fun chatCompletion(
         modelSelector: String?,
@@ -107,7 +108,8 @@ class AiOrchestrator(
         )
         val expectReasoning = capability.mode == DeepThinkControlMode.REASONING_MODEL ||
             (capability.mode == DeepThinkControlMode.HYBRID_THINKING && deepThinkEnabled)
-        val systemPrompt = agent.systemPrompt + tools.promptInstructions() + plan.systemSuffix
+        // Thinking switches such as Nemotron's /no_think must stay at the very end.
+        val systemPrompt = agent.systemPrompt + guidance.systemSuffix(messages) + tools.promptInstructions() + plan.systemSuffix
         val temperature = temperatureOverride ?: agent.temperature
 
         val chunks = agentStream(

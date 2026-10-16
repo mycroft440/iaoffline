@@ -6,12 +6,13 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 - Android 13+; arm64-v8a/x86_64.
 - Runtime local baseado no binding Android do llama.cpp.
-- Catálogo integrado para baixar modelos em GGUF diretamente no app:
-  - Qwen3 0.6B Q4_K_M
-  - Qwen3 1.7B Q4_K_M
-  - Qwen3 4B Q4_K_M
-  - Qwen3 8B Q4_K_M
-  - Qwen3.8 27B Q3_K_XL (opção avançada, ~13 GB; texto no app atual)
+- Catálogo integrado para baixar modelos em GGUF diretamente no app, organizado por empresa (PrismML/Bonsai, DeepSeek, Qwen, Mistral, Meta, Google, Microsoft, IBM, Liquid AI, Ai2, NVIDIA, OpenAI, OpenBMB e JetBrains).
+- **Bonsai (PrismML)**: modelos com todos os pesos em 1 bit (Q1_0) ou ternários (Q2_0), que levam a capacidade de modelos grandes para pouca memória:
+  - Bonsai 1.7B, 4B e 8B (1 bit, baseados no Qwen3): 250 MB, 570 MB e 1,2 GB.
+  - Bonsai 8B Ternário: 2,3 GB, mais preciso que o 1 bit.
+  - Bonsai 27B (1 bit, baseado no Qwen3.6 27B, com raciocínio): um modelo da classe 27B em 3,8 GB.
+  - Bonsai 2 Ternário 2B, 4B e 9B (baseados no Qwen3.5, com raciocínio): 550 MB, 1,2 GB e 2,6 GB.
+- Outros modelos novos que rodam no celular: Granite 4.2 3B e 8B (IBM, com raciocínio), MiniCPM5 2B (OpenBMB) e Mellum 2.1 12B-A2.5B (JetBrains, especialista em código; MoE com 2,5B ativos).
 - Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
 - Fila de downloads: é possível escolher várias IAs enquanto outra baixa; elas baixam uma de cada vez e a próxima começa assim que a anterior é instalada (ou falha). **Minhas I.As** mostra cada download com o progresso e as ações Pausar, Continuar, Tentar novamente e Remover; a fila sobrevive ao fechamento do app e retoma dos arquivos parciais.
 - Modelos concluídos do catálogo são mantidos na pasta `IAs Offline` na raiz do armazenamento compartilhado do telefone para sobreviver à desinstalação.
@@ -33,6 +34,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - Editor anatômico de código com parser formal de sintaxe e análise semântica complementar por IA offline.
 - SQL usa JSqlParser 5.3; o restante da cobertura formal usa o catálogo Tree-sitter, inclusive gramáticas reconhecidas dinamicamente por nome, extensão ou caminho.
 
+- Amostragem recomendada pelo próprio modelo: o runtime lê temperatura, top-k, top-p, min-p e penalidade de repetição gravados no GGUF (`general.sampling.*`) em vez de usar sempre 0,3, e aplica a penalidade de presença que o cartão do modelo pede (Bonsai 2). Modelos que raciocinam e modelos de poucos bits entram menos em repetição assim, sem custo de memória.
+
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
 Os banners de publicidade usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece.
@@ -42,6 +45,24 @@ Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downlo
 As respostas da I.A continuam sendo geradas quando o app vai para segundo plano, quando a tela é desligada ou quando o usuário sai da conversa. No máximo duas conversas são respondidas ao mesmo tempo; uma mensagem enviada de uma terceira conversa aparece como **Na fila** e é respondida na ordem de chegada assim que uma das outras termina. Enquanto houver uma resposta ou mensagens na fila, um serviço em primeiro plano mostra a notificação **Gerando resposta…** (com a ação **Parar**) e mantém a CPU ativa; ele é encerrado automaticamente quando a geração termina.
 
 Modelos que raciocinam mostram o raciocínio enquanto ele é gerado, num bloco **Raciocínio** que pode ser expandido ou recolhido; ao terminar, o bloco se recolhe e exibe quanto tempo o modelo raciocinou, e cada resposta mostra o tempo total (**Respondeu em …**). O seletor **DeepThink** aparece apenas nos modelos em que o raciocínio pode ser ligado e desligado (Qwen3 e Nemotron Nano v2); com ele desligado, o app envia `/no_think`. Modelos que sempre raciocinam (DeepSeek R1, Qwen3.5 e posteriores, variantes *Reasoning* e *Think*) não têm o seletor. Todos os perfis pedem respostas de até 8192 tokens, um contexto nativo inteiro; o modelo para antes quando termina, e se passar da janela de contexto o llama.cpp desloca o contexto (mantendo o prompt de sistema) em vez de cortar a resposta. No prompt, no máximo metade do contexto é reservada para a resposta, para o histórico continuar cabendo.
+
+## Respostas melhores sem modelo maior
+
+Além da amostragem recomendada pelo modelo, cada conversa recebe técnicas que custam poucos tokens de prompt e nenhuma memória extra:
+
+- **Data e hora atuais** no prompt de sistema: os modelos só conhecem a data do treino.
+- **Regras curtas contra erros típicos de modelos pequenos**: responder no idioma do usuário, admitir quando não sabe em vez de inventar nomes, datas e números, e resolver problemas de várias etapas passo a passo.
+- **Calculadora** (`calculate`): contas exatas com precedência, potências, funções e constantes, em vez de aritmética "de cabeça".
+- **Wikipedia Offline**: quando instalada, os agentes podem procurar (`wikipedia_search`) e ler (`wikipedia_read`) artigos, e, com a consulta automática ligada, perguntas que citam uma pessoa, lugar ou assunto recebem o começo do artigo correspondente (no máximo dois artigos, ~650 caracteres cada).
+
+## Ferramentas offline
+
+Em **Configurações → Ferramentas offline** há duas entradas:
+
+- **Baixar compiladores**: os pacotes de linguagem do editor de código (veja abaixo).
+- **Wikipedia Offline**: edições da Wikipédia publicadas pelo [Kiwix](https://kiwix.org) no formato ZIM, para os agentes consultarem sem internet. Há resumos dos 50 mil artigos essenciais em português (~150 MB), resumos de todos os artigos em português (~1,7 GB), os artigos essenciais completos (~1 GB), a Wikipédia em português completa sem imagens (~7 GB) e resumos em inglês. O app sempre baixa a edição mais recente, usando o gerenciador de downloads do Android (continua em segundo plano e retoma após quedas de rede), confere o arquivo com o SHA-256 publicado pelo Kiwix e o guarda na pasta do app em `Android/data`.
+
+O leitor de ZIM é do próprio app: ele procura artigos por título com buscas binárias nos índices do arquivo e descomprime (zstd) só o trecho necessário, então consultar a Wikipédia completa usa quase nada de RAM. Não há busca de texto completo: os artigos são encontrados pelo título, a partir do assunto da pergunta.
 
 ## Editor de código e diagnósticos
 
@@ -147,7 +168,7 @@ Se os Secrets ainda não estiverem configurados, o CI continua executando testes
 
 ## Limitações atuais
 
-- Temperature fixa em 0.3 pelo binding Android utilizado atualmente.
+- O binding Android não aceita temperature por requisição: vale a recomendada no GGUF do modelo ou, sem ela, 0.3.
 - Contexto efetivo limitado a 8192 tokens no runtime Android atual.
 - Modelos grandes podem não caber na RAM de todos os aparelhos; o app mostra uma recomendação e ainda exige um teste real antes de ativar.
 - O Qwen3.8 é multimodal na origem, mas esta integração usa apenas texto; suporte a imagem exigiria integrar o projetor multimodal correspondente.

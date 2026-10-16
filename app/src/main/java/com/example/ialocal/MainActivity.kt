@@ -34,6 +34,8 @@ import com.example.ialocal.ads.AdsManager
 import com.example.ialocal.data.ThemeMode
 import com.example.ialocal.diagnostics.LastExitReport
 import com.example.ialocal.diagnostics.LastExitReporter
+import com.example.ialocal.knowledge.WikipediaPackState
+import com.example.ialocal.knowledge.WikipediaPackStatus
 import com.example.ialocal.models.AutomaticModelImportEvent
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.models.PublicModelDownloads
@@ -48,8 +50,10 @@ import com.example.ialocal.ui.models.HtmlAiHomeScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.models.MyAisScreen
+import com.example.ialocal.ui.settings.CompilersScreen
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
+import com.example.ialocal.ui.settings.WikipediaScreen
 import com.example.ialocal.ui.theme.LocalAiTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -389,6 +393,7 @@ private fun LocalAiApp(
             )
             val importProgress by container.automaticModelImporter.progress.collectAsStateWithLifecycle()
             val selectedProfile by container.modelRepository.selectedProfile.collectAsStateWithLifecycle()
+            val wikipediaStates by container.offlineWikipedia.states.collectAsStateWithLifecycle()
             SettingsScreen(
                 viewModel = vm,
                 importProgress = importProgress,
@@ -397,8 +402,41 @@ private fun LocalAiApp(
                 onSelectProfile = container.modelRepository::setSelectedProfile,
                 privacyOptionsRequired = adsManager.privacyOptionsRequired,
                 onPrivacyOptions = onPrivacyOptions,
+                wikipediaSummary = wikipediaSummary(wikipediaStates),
+                onOpenCompilers = { navController.navigate("compilers") },
+                onOpenWikipedia = { navController.navigate("wikipedia") },
                 onBack = { navController.popBackStack() },
             )
         }
+
+        composable("compilers") {
+            val vm: SettingsViewModel = viewModel(
+                factory = SettingsViewModel.Factory(
+                    container.themeRepository,
+                    container.codeLanguagePacks,
+                ),
+            )
+            CompilersScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("wikipedia") {
+            WikipediaScreen(
+                wikipedia = container.offlineWikipedia,
+                onBack = { navController.popBackStack() },
+            )
+        }
+    }
+}
+
+private fun wikipediaSummary(states: List<WikipediaPackState>): String {
+    val installed = states.filter { it.status == WikipediaPackStatus.INSTALLED }
+    return when {
+        states.any { it.busy } -> "Baixando a Wikipédia…"
+        installed.size == 1 -> "Instalada: ${installed.single().pack.title}"
+        installed.size > 1 -> "${installed.size} edições instaladas"
+        else -> "Enciclopédia para os agentes consultarem sem internet"
     }
 }

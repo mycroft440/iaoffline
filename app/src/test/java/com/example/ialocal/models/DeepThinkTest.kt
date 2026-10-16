@@ -145,12 +145,48 @@ class DeepThinkTest {
         assertEquals(8192, DeepThinkSupport.plan(r1, 1024, enabled = false, level = DeepThinkLevel.AUTO).maxTokens)
     }
 
-    private fun model(name: String, apiModelId: String) = AiModelEntity(
+    @Test
+    fun bonsaiGenerationsAreClassified() {
+        // The first Bonsai generation keeps the qwen3 architecture but never thinks, so it must not
+        // be treated as a Qwen3 hybrid that understands /no_think.
+        listOf(
+            "Bonsai 8B" to "local-catalog-bonsai-8b-q1-0-1a2b3c4d",
+            "Bonsai 8B Ternário" to "local-catalog-bonsai-ternary-8b-q2-0-27b00000",
+            "Bonsai 1.7B" to "local-catalog-bonsai-1.7b-q1-0-1",
+        ).forEach { (name, id) ->
+            assertEquals(name, DeepThinkControlMode.NONE, DeepThinkSupport.capability(model(name, id, "qwen3")).mode)
+        }
+        listOf(
+            "Bonsai 27B" to "local-catalog-bonsai-27b-q1-0-1",
+            "Bonsai 2 Ternário 9B" to "local-catalog-bonsai2-ternary-9b-q2-0-1",
+            "Ternary-Bonsai-2-4B" to "local-ternary-bonsai-2-4b-1",
+        ).forEach { (name, id) ->
+            assertEquals(name, DeepThinkControlMode.REASONING_MODEL, DeepThinkSupport.capability(model(name, id, "qwen35")).mode)
+        }
+    }
+
+    @Test
+    fun granite42AndMellumAlwaysReason() {
+        assertEquals(
+            DeepThinkControlMode.REASONING_MODEL,
+            DeepThinkSupport.capability(model("Granite 4.2 8B", "local-catalog-granite4.2-8b-q3-k-m-1")).mode,
+        )
+        assertEquals(
+            DeepThinkControlMode.NONE,
+            DeepThinkSupport.capability(model("Granite 4.1 8B", "local-catalog-granite4.1-8b-q4-k-m-1")).mode,
+        )
+        assertEquals(
+            DeepThinkControlMode.REASONING_MODEL,
+            DeepThinkSupport.capability(model("Mellum 2.1 12B-A2.5B", "local-catalog-mellum2.1-12b-a2.5b-thinking-q3-k-m-1")).mode,
+        )
+    }
+
+    private fun model(name: String, apiModelId: String, architecture: String? = null) = AiModelEntity(
         id = "model-id",
         name = name,
         apiModelId = apiModelId,
         format = "GGUF",
-        architecture = null,
+        architecture = architecture,
         filePath = "/tmp/model.gguf",
         sizeBytes = 1,
         importedAt = 1,

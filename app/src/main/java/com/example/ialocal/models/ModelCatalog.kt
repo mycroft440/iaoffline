@@ -1,6 +1,7 @@
 package com.example.ialocal.models
 
 enum class ModelProvider(val sectionLabel: String) {
+    PRISMML("Modelos da PrismML / Bonsai"),
     GOOGLE("Modelos do Google"),
     ALIBABA("Modelos da Alibaba / Qwen"),
     META("Modelos da Meta"),
@@ -12,6 +13,8 @@ enum class ModelProvider(val sectionLabel: String) {
     AI2("Modelos da Ai2 / OLMo"),
     NVIDIA("Modelos da NVIDIA / Nemotron"),
     OPENAI("Modelos da OpenAI"),
+    OPENBMB("Modelos da OpenBMB / MiniCPM"),
+    JETBRAINS("Modelos da JetBrains / Mellum"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -30,6 +33,11 @@ data class CatalogModel(
     val description: String,
     /** How the model compares with the others of its size class, shown in the details dialog. */
     val strengths: String? = null,
+    /**
+     * Presence penalty the model card recommends. GGUF has no key for it, unlike temperature and
+     * top-k/top-p, which the runtime reads from the file itself.
+     */
+    val presencePenalty: Float = 0f,
 ) {
     val downloadUrl: String
         get() = "https://huggingface.co/$repository/resolve/main/$fileName?download=true"
@@ -57,6 +65,119 @@ data class CatalogModel(
  */
 object ModelCatalog {
     val entries: List<CatalogModel> = listOf(
+        // Bonsai (PrismML): every weight, embeddings and output head included, is 1-bit (Q1_0) or
+        // ternary (Q2_0), so a model takes a fraction of the memory of the usual 4-bit files.
+        CatalogModel(
+            id = "bonsai-1.7b-q1-0",
+            displayName = "Bonsai 1.7B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Bonsai-1.7B-gguf",
+            fileName = "Bonsai-1.7B-Q1_0.gguf",
+            quantization = "Q1_0",
+            approximateSizeBytes = 248_302_272L,
+            sha256 = "3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3",
+            recommendedRamBytes = 1_500_000_000L,
+            totalParametersBillions = 1.7,
+            description = "Bonsai 1-bit da PrismML baseado no Qwen3 1.7B: só 250 MB, roda em praticamente qualquer celular e responde muito rápido.",
+        ),
+        CatalogModel(
+            id = "bonsai-4b-q1-0",
+            displayName = "Bonsai 4B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Bonsai-4B-gguf",
+            fileName = "Bonsai-4B-Q1_0.gguf",
+            quantization = "Q1_0",
+            approximateSizeBytes = 572_270_624L,
+            sha256 = "4524b3f997f0f06444e568d1f26e2efd69effa3218c7ad3047432fb171e42168",
+            recommendedRamBytes = 2_000_000_000L,
+            totalParametersBillions = 4.0,
+            description = "Bonsai 1-bit baseado no Qwen3 4B: capacidade de um modelo 4B em menos de 600 MB, para celulares com pouca RAM.",
+        ),
+        CatalogModel(
+            id = "bonsai-8b-q1-0",
+            displayName = "Bonsai 8B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Bonsai-8B-gguf",
+            fileName = "Bonsai-8B-Q1_0.gguf",
+            quantization = "Q1_0",
+            approximateSizeBytes = 1_158_654_496L,
+            sha256 = "284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54",
+            recommendedRamBytes = 3_000_000_000L,
+            totalParametersBillions = 8.19,
+            description = "O Bonsai original: um 8B (Qwen3 8B) inteiro em 1 bit, 14 vezes menor que o FP16. Cabe em 1,2 GB e fica perto dos 8B completos em conversa, matemática e código.",
+            strengths = "Na tabela da PrismML, média 70,5 em seis testes, perto do Llama 3.1 8B (67,1) e do Ministral 3 8B (71,0), que ocupam 16 GB.",
+        ),
+        CatalogModel(
+            id = "bonsai-ternary-8b-q2-0",
+            displayName = "Bonsai 8B Ternário",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Ternary-Bonsai-8B-gguf",
+            fileName = "Ternary-Bonsai-8B-Q2_0_g64.gguf",
+            quantization = "Q2_0",
+            approximateSizeBytes = 2_310_125_920L,
+            sha256 = "e17b298d84ee78797916ae5c2ecc8211469cc65cccfe3080cd9a9bb503fbc55e",
+            recommendedRamBytes = 4_000_000_000L,
+            totalParametersBillions = 8.19,
+            description = "Bonsai 8B com pesos ternários (-1, 0, +1): o dobro do tamanho do 1-bit, mas bem mais preciso. Cerca de 2,3 GB.",
+            strengths = "Na tabela da PrismML, média 75,5 contra 79,3 do Qwen3 8B completo, ocupando um oitavo do espaço.",
+        ),
+        CatalogModel(
+            id = "bonsai-27b-q1-0",
+            displayName = "Bonsai 27B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Bonsai-27B-gguf",
+            fileName = "Bonsai-27B-Q1_0.gguf",
+            quantization = "Q1_0",
+            approximateSizeBytes = 3_803_452_480L,
+            sha256 = "17ef842e47450caeb8eaa3ebfbbab5d2f2278b62b79be107985fb69a2f819aa0",
+            recommendedRamBytes = 7_000_000_000L,
+            totalParametersBillions = 27.3,
+            description = "Qwen3.6 27B em 1 bit: um modelo da classe 27B com raciocínio em 3,8 GB. Mais lento que os Bonsai menores; pede um celular com 8 GB de RAM ou mais.",
+            strengths = "Mantém cerca de 90% da nota do Qwen3.6 27B completo (76 contra 85 na média de 15 testes com raciocínio), forte em matemática e código. Um 27B comum em 4 bits precisa de 17 GB.",
+        ),
+        CatalogModel(
+            id = "bonsai2-ternary-2b-q2-0",
+            displayName = "Bonsai 2 Ternário 2B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Ternary-Bonsai-2-2B-gguf",
+            fileName = "Ternary-Bonsai-2-2B-Q2_0.gguf",
+            quantization = "Q2_0",
+            approximateSizeBytes = 546_689_504L,
+            sha256 = "c2893fa6f951daee8b7263d5f49b455e57989ef56417a22125b03566dc560650",
+            recommendedRamBytes = 2_000_000_000L,
+            totalParametersBillions = 2.0,
+            description = "Bonsai 2, a geração mais nova da PrismML, baseada no Qwen3.5 2B. Raciocina antes de responder e ocupa 550 MB.",
+            presencePenalty = 1.0f,
+        ),
+        CatalogModel(
+            id = "bonsai2-ternary-4b-q2-0",
+            displayName = "Bonsai 2 Ternário 4B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Ternary-Bonsai-2-4B-gguf",
+            fileName = "Ternary-Bonsai-2-4B-Q2_0.gguf",
+            quantization = "Q2_0",
+            approximateSizeBytes = 1_212_103_520L,
+            sha256 = "64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4",
+            recommendedRamBytes = 3_000_000_000L,
+            totalParametersBillions = 4.0,
+            description = "Bonsai 2 baseado no Qwen3.5 4B, com raciocínio e contexto longo, em 1,2 GB.",
+            presencePenalty = 1.0f,
+        ),
+        CatalogModel(
+            id = "bonsai2-ternary-9b-q2-0",
+            displayName = "Bonsai 2 Ternário 9B",
+            provider = ModelProvider.PRISMML,
+            repository = "prism-ml/Ternary-Bonsai-2-9B-gguf",
+            fileName = "Ternary-Bonsai-2-9B-Q2_0.gguf",
+            quantization = "Q2_0",
+            approximateSizeBytes = 2_556_640_128L,
+            sha256 = "1f884aa56aacd2bbbb2e4b7abaead2b1102b74a9c75a23fc33dab916813a384d",
+            recommendedRamBytes = 4_500_000_000L,
+            totalParametersBillions = 8.95,
+            description = "Bonsai 2 baseado no Qwen3.5 9B: o mais capaz dos Bonsai que rodam bem em celular, com raciocínio, em 2,6 GB (o Qwen3.5 9B em 3 bits ocupa 4,7 GB).",
+            presencePenalty = 1.0f,
+        ),
+
         CatalogModel(
             id = "gemma4-e2b-it-q4-0",
             displayName = "Gemma 4 E2B",
@@ -401,6 +522,32 @@ object ModelCatalog {
         ),
 
         CatalogModel(
+            id = "granite4.2-3b-q4-k-m",
+            displayName = "Granite 4.2 3B",
+            provider = ModelProvider.IBM,
+            repository = "ibm-granite/granite-4.2-3b-GGUF",
+            fileName = "granite-4.2-3b-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 2_244_011_552L,
+            sha256 = "e0406663965846ae22a403456eb826ccce5f450840491f71952f18a7cb78e7d5",
+            recommendedRamBytes = 5_000_000_000L,
+            totalParametersBillions = 3.0,
+            description = "Granite 4.2 da IBM (agosto de 2026): primeira geração Granite que raciocina antes de responder. Testado em português, bom em código, ferramentas e RAG.",
+        ),
+        CatalogModel(
+            id = "granite4.2-8b-q3-k-m",
+            displayName = "Granite 4.2 8B",
+            provider = ModelProvider.IBM,
+            repository = "ibm-granite/granite-4.2-8b-GGUF",
+            fileName = "granite-4.2-8b-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 4_347_052_160L,
+            sha256 = "921fd8b015a34420607300831cf70ed306581b9bf33742ae804e42b894a2ca9a",
+            recommendedRamBytes = 8_100_000_000L,
+            totalParametersBillions = 8.0,
+            description = "Granite 4.2 8B com raciocínio embutido, para matemática, código, agentes e documentos longos. GGUF oficial da IBM.",
+        ),
+        CatalogModel(
             id = "granite4.1-3b-q4-k-m",
             displayName = "Granite 4.1 3B",
             provider = ModelProvider.IBM,
@@ -640,6 +787,37 @@ object ModelCatalog {
             recommendedRamBytes = 13_000_000_000L,
             totalParametersBillions = 15.0,
             description = "Conversão GGUF do backbone textual do Phi-4 Reasoning Vision. O encoder de visão não está incluído porque o runtime atual não suporta phi4-siglip.",
+        ),
+
+        CatalogModel(
+            id = "minicpm5-2b-q4-k-m",
+            displayName = "MiniCPM5 2B",
+            provider = ModelProvider.OPENBMB,
+            repository = "openbmb/MiniCPM5-2B-GGUF",
+            fileName = "MiniCPM5-2B-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 1_561_318_368L,
+            sha256 = "ec2d5801640099e97d8d7e8003ad4d81f336e757811f03a26173dddf386602fd",
+            recommendedRamBytes = 3_500_000_000L,
+            totalParametersBillions = 2.5,
+            description = "MiniCPM5 2B (setembro de 2026), feito para rodar no aparelho: forte em código, matemática, ferramentas e textos longos para o tamanho.",
+            strengths = "Segundo a OpenBMB, o melhor modelo aberto da classe 2B, com média acima de modelos 4B na mesma comparação.",
+        ),
+
+        CatalogModel(
+            id = "mellum2.1-12b-a2.5b-thinking-q3-k-m",
+            displayName = "Mellum 2.1 12B-A2.5B",
+            provider = ModelProvider.JETBRAINS,
+            repository = "bartowski/Mellum2.1-12B-A2.5B-Thinking-GGUF",
+            fileName = "Mellum2.1-12B-A2.5B-Thinking-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 6_702_480_096L,
+            sha256 = "8c793bb811ed7e65b7e8ec11bb09edba9d9a5ee2a082374e8db65accff807b0b",
+            recommendedRamBytes = 10_000_000_000L,
+            totalParametersBillions = 12.0,
+            activeParametersBillions = 2.5,
+            description = "Modelo de programação da JetBrains, a empresa do IntelliJ e do Kotlin: MoE com 12B no total e só 2,5B ativos por palavra, por isso responde rápido. Sempre raciocina antes de responder.",
+            strengths = "Especialista em código e matemática: a JetBrains informa 82 no LiveCodeBench v6 e 91,5 no HumanEval+. Para conversa geral, prefira outro modelo.",
         ),
     )
 

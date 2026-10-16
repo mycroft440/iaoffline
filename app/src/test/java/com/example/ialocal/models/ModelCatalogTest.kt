@@ -69,6 +69,41 @@ class ModelCatalogTest {
     }
 
     @Test
+    fun bonsaiModelsAreOfferedInTheirLowBitFormats() {
+        val bonsai = ModelCatalog.entries.filter { it.provider == ModelProvider.PRISMML }
+        assertEquals(
+            setOf(
+                "bonsai-1.7b-q1-0", "bonsai-4b-q1-0", "bonsai-8b-q1-0", "bonsai-ternary-8b-q2-0", "bonsai-27b-q1-0",
+                "bonsai2-ternary-2b-q2-0", "bonsai2-ternary-4b-q2-0", "bonsai2-ternary-9b-q2-0",
+            ),
+            bonsai.map { it.id }.toSet(),
+        )
+        bonsai.forEach { model ->
+            assertTrue(model.repository.startsWith("prism-ml/"))
+            assertTrue(model.quantization == "Q1_0" || model.quantization == "Q2_0")
+            // PrismML-only packings (PQ2_0, PTQ1_0) are refused by upstream llama.cpp.
+            assertFalse(model.fileName.contains("PQ2_0") || model.fileName.contains("PTQ1_0"))
+        }
+        // The first ternary generation is only upstream-compatible in its 64-weight groups.
+        assertEquals("Ternary-Bonsai-8B-Q2_0_g64.gguf", ModelCatalog.requireById("bonsai-ternary-8b-q2-0").fileName)
+        // A 27B that fits a phone: dense, but under 4 GB.
+        val bonsai27 = ModelCatalog.requireById("bonsai-27b-q1-0")
+        assertFalse(bonsai27.isExperimental)
+        assertTrue(bonsai27.approximateSizeBytes < 4_000_000_000L)
+        // Bonsai 2's model card asks for a presence penalty; the others need none.
+        assertTrue(bonsai.filter { it.id.startsWith("bonsai2-") }.all { it.presencePenalty == 1.0f })
+        assertTrue(ModelCatalog.entries.filterNot { it.id.startsWith("bonsai2-") }.all { it.presencePenalty == 0f })
+    }
+
+    @Test
+    fun newPhoneSizedModelsArePresent() {
+        listOf("granite4.2-3b-q4-k-m", "granite4.2-8b-q3-k-m", "minicpm5-2b-q4-k-m", "mellum2.1-12b-a2.5b-thinking-q3-k-m")
+            .forEach { id -> assertNotNull(id, ModelCatalog.entries.firstOrNull { it.id == id }) }
+        // 12B in total but only 2.5B active: it fits in RAM, so it is not one of the slow experimental MoE.
+        assertFalse(ModelCatalog.requireById("mellum2.1-12b-a2.5b-thinking-q3-k-m").isExperimental)
+    }
+
+    @Test
     fun onlyLargeMoeModelsAreExperimental() {
         val experimental = ModelCatalog.entries.filter { it.isExperimental }.map { it.id }.toSet()
         assertTrue("gemma4-26b-a4b-it-q4-0" in experimental)

@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LLAMA_TAG="${LLAMA_CPP_TAG:-v0.4.0}"
+# v0.7.0 (b11669) is the first release with the Hadamard activation runtime that the ternary
+# Bonsai 2 models need (b11555+); older builds load their Q2_0 files and output gibberish.
+LLAMA_TAG="${LLAMA_CPP_TAG:-v0.7.0}"
 LLAMA_DIR="${ROOT_DIR}/third_party/llama.cpp"
 AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
@@ -18,7 +20,7 @@ else
   git -C "${LLAMA_DIR}" clean -fdx
 fi
 
-# v0.4.0 resets State.Error without unloading a model that may already have
+# The binding resets State.Error without unloading a model that may already have
 # been allocated natively. Track native ownership and unload it on recovery so
 # retrying a failed request/model does not leak or overwrite the previous model.
 # The upstream binding also maps every native load failure to
@@ -37,7 +39,7 @@ def replace_once(old: str, new: str) -> None:
     global text
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"Unexpected llama.cpp v0.4.0 source shape: expected 1 match, got {count}")
+        raise SystemExit(f"Unexpected llama.cpp Android binding source shape: expected 1 match, got {count}")
     text = text.replace(old, new, 1)
 
 replace_once(
@@ -109,8 +111,51 @@ def replace_once(old: str, new: str) -> None:
     global text
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"Unexpected llama.cpp v0.4.0 native source shape: expected 1 match, got {count}")
+        raise SystemExit(f"Unexpected llama.cpp Android binding native source shape: expected 1 match, got {count}")
     text = text.replace(old, new, 1)
+
+# 10. Sample with the settings the model's authors recommend in the GGUF
+#     (general.sampling.*) instead of the binding's fixed 0.3 temperature, plus the presence
+#     penalty the app passes in IAOFFLINE_PRESENCE_PENALTY for models whose cards ask for one
+#     (there is no GGUF key for it). Reasoning and low-bit models loop or degrade at a low fixed
+#     temperature; the recommended values cost no memory or compute.
+replace_once(
+    "static common_sampler *new_sampler(float temp) {\n"
+    "    common_params_sampling sparams;\n"
+    "    sparams.temp = temp;\n"
+    "    return common_sampler_init(g_model, sparams);\n"
+    "}",
+    "static bool iaoffline_meta_float(llama_model_meta_key key, float &dst, float min_value, float max_value) {\n"
+    "    char buf[64] = {0};\n"
+    "    if (llama_model_meta_val_str(g_model, llama_model_meta_key_str(key), buf, sizeof(buf)) <= 0) return false;\n"
+    "    char *end = nullptr;\n"
+    "    const float value = strtof(buf, &end);\n"
+    "    if (end == buf || !(value >= min_value && value <= max_value)) return false;\n"
+    "    dst = value;\n"
+    "    return true;\n"
+    "}\n\n"
+    "static common_sampler *new_sampler(float temp) {\n"
+    "    common_params_sampling sparams;\n"
+    "    sparams.temp = temp;\n"
+    "    float top_k = (float) sparams.top_k;\n"
+    "    float last_n = (float) sparams.penalty_last_n;\n"
+    "    const bool recommended = iaoffline_meta_float(LLAMA_MODEL_META_KEY_SAMPLING_TEMP, sparams.temp, 0.0f, 2.0f);\n"
+    "    if (iaoffline_meta_float(LLAMA_MODEL_META_KEY_SAMPLING_TOP_K, top_k, 0.0f, 1000.0f)) sparams.top_k = (int32_t) top_k;\n"
+    "    iaoffline_meta_float(LLAMA_MODEL_META_KEY_SAMPLING_TOP_P, sparams.top_p, 0.01f, 1.0f);\n"
+    "    iaoffline_meta_float(LLAMA_MODEL_META_KEY_SAMPLING_MIN_P, sparams.min_p, 0.0f, 0.99f);\n"
+    "    iaoffline_meta_float(LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT, sparams.penalty_repeat, 1.0f, 1.5f);\n"
+    "    if (iaoffline_meta_float(LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N, last_n, 0.0f, 4096.0f)) sparams.penalty_last_n = (int32_t) last_n;\n"
+    "    const char *presence = getenv(\"IAOFFLINE_PRESENCE_PENALTY\");\n"
+    "    if (presence != nullptr) {\n"
+    "        const float value = strtof(presence, nullptr);\n"
+    "        if (value > 0.0f && value <= 2.0f) sparams.penalty_present = value;\n"
+    "    }\n"
+    "    LOGi(\"%s: %s sampling: temp %.2f, top_k %d, top_p %.2f, min_p %.2f, repeat %.2f, presence %.2f\",\n"
+    "         __func__, recommended ? \"model-recommended\" : \"default\", sparams.temp, sparams.top_k,\n"
+    "         sparams.top_p, sparams.min_p, sparams.penalty_repeat, sparams.penalty_present);\n"
+    "    return common_sampler_init(g_model, sparams);\n"
+    "}",
+)
 
 replace_once(
     "#include <string>\n#include <unistd.h>",
