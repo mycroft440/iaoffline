@@ -46,6 +46,12 @@
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
+        <!-- The model runs here: Android can stop this process for lack of memory and the app stays open. -->
+        <service
+            android:name=".runtime.remote.InferenceService"
+            android:exported="false"
+            android:process=":ai" />
+
         <service
             android:name=".chat.ChatGenerationService"
             android:exported="false"

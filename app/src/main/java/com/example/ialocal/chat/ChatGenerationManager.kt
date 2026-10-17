@@ -19,6 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -249,23 +251,43 @@ class ChatGenerationManager(
             return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs)
         }
         try {
-            aiGateway.streamChat(
-                AiChatRequest(
-                    conversationId = conversationId,
-                    messages = history,
-                    attachments = attachments,
-                    agentId = agent.id,
-                )
-            ).collect { chunk ->
-                accumulated.append(chunk)
-                val text = accumulated.toString()
-                if (reasoningStartedAt == null && AssistantContent.hasReasoningStarted(text)) {
-                    reasoningStartedAt = System.currentTimeMillis()
+            // Each saved update re-reads the conversation and redraws the chat, so the text is
+            // saved a few times per second instead of on every token: on the main thread, a long
+            // answer saved per token kept the screen from responding.
+            coroutineScope {
+                var unsaved = false
+                val saver = launch {
+                    while (true) {
+                        delay(UI_UPDATE_INTERVAL_MS)
+                        if (unsaved) {
+                            unsaved = false
+                            repository.updateMessageContent(replyId, accumulated.toString())
+                        }
+                    }
                 }
-                if (reasoningStartedAt != null && reasoningEndedAt == null && AssistantContent.hasReasoningEnded(text)) {
-                    reasoningEndedAt = System.currentTimeMillis()
+                try {
+                    aiGateway.streamChat(
+                        AiChatRequest(
+                            conversationId = conversationId,
+                            messages = history,
+                            attachments = attachments,
+                            agentId = agent.id,
+                        )
+                    ).collect { chunk ->
+                        accumulated.append(chunk)
+                        // Only the end of the text can hold a tag that just arrived.
+                        val tail = accumulated.substring(maxOf(0, accumulated.length - chunk.length - TAG_WINDOW))
+                        if (reasoningStartedAt == null && AssistantContent.hasReasoningStarted(tail)) {
+                            reasoningStartedAt = System.currentTimeMillis()
+                        }
+                        if (reasoningStartedAt != null && reasoningEndedAt == null && AssistantContent.hasReasoningEnded(tail)) {
+                            reasoningEndedAt = System.currentTimeMillis()
+                        }
+                        unsaved = true
+                    }
+                } finally {
+                    saver.cancel()
                 }
-                repository.updateMessageContent(replyId, text)
             }
             repository.updateMessageContent(replyId, finalContent())
             repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
@@ -304,6 +326,9 @@ class ChatGenerationManager(
 
     companion object {
         const val MAX_CONCURRENT_ANSWERS = 2
+        private const val UI_UPDATE_INTERVAL_MS = 200L
+        /** Longer than any reasoning tag ("<|channel>thought", "</reasoning>"). */
+        private const val TAG_WINDOW = 32
         private const val MAX_HISTORY_ATTACHMENT_PER_FILE = 4_000
         private const val MAX_HISTORY_ATTACHMENT_CHARS = 6_000
     }

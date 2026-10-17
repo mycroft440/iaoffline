@@ -16,6 +16,8 @@ class LocalAiApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The ":ai" process only hosts the model (InferenceService); the app's setup is not for it.
+        if (Application.getProcessName() != applicationInfo.processName) return
         LastExitReporter(this).installUncaughtExceptionRecorder()
         Thread(
             {

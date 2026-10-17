@@ -27,8 +27,11 @@ class LastExitReporter(
         // Lowers the memory use of a model that was loading or answering when the app died.
         val recovery = crashGuard?.recoverInterruptedRun()
         val activityManager = appContext.getSystemService(ActivityManager::class.java) ?: return null
+        // Only the app's own process: when the ":ai" process is stopped, the app stayed open and
+        // already told the user in the chat.
         val latest = runCatching {
-            activityManager.getHistoricalProcessExitReasons(null, 0, 1).firstOrNull()
+            activityManager.getHistoricalProcessExitReasons(null, 0, MAX_EXIT_RECORDS)
+                .firstOrNull { it.processName == appContext.applicationInfo.processName }
         }.getOrNull() ?: return null
 
         val lastSeen = preferences.getLong(KEY_LAST_SEEN, 0L)
@@ -112,5 +115,6 @@ class LastExitReporter(
         const val KEY_LAST_SEEN = "last_seen_timestamp"
         const val KEY_UNCAUGHT = "last_uncaught_exception"
         const val MAX_TRACE_LINES = 60
+        const val MAX_EXIT_RECORDS = 16
     }
 }

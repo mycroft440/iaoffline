@@ -373,6 +373,13 @@ replace_once(
     "        return 1;\n"
     "    }",
 )
+# The compute buffer grows with the micro-batch; for models with large vocabularies (Gemma,
+# Qwen) 512 tokens take about 570 MB of it. 256 halves that, and measured on the same CPU the
+# prompt is read at least as fast. Calls still pass up to 512 tokens; llama.cpp splits them.
+replace_once(
+    "    ctx_params.n_ubatch = BATCH_SIZE;\n",
+    "    ctx_params.n_ubatch = BATCH_SIZE / 2;\n",
+)
 replace_once(
     "    ctx_params.n_threads_batch = n_threads;\n"
     "    auto *context = llama_init_from_model(g_model, ctx_params);\n"

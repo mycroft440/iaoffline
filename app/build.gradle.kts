@@ -82,6 +82,8 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // The model runs in its own process behind an AIDL interface (runtime/remote).
+        aidl = true
     }
 
     compileOptions {
@@ -136,6 +138,8 @@ dependencies {
     implementation(files("libs/llama-android.aar"))
 
     testImplementation("junit:junit:4.13.2")
+    // android.jar only has stubs of org.json; the AI process protocol is JSON.
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

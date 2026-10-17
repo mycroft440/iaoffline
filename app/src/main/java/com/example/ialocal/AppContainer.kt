@@ -23,9 +23,9 @@ import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.ModelDownloader
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
-import com.example.ialocal.runtime.LlamaCppRuntime
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.remote.RemoteModelRuntime
 import com.example.ialocal.ui.codeeditor.CodeEditSessionStore
 import com.example.ialocal.ui.codeeditor.CodeLanguagePackRepository
 
@@ -44,7 +44,7 @@ class AppContainer(context: Context) {
 
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
     val modelCrashGuard = ModelCrashGuard(appContext, diagnostics)
-    val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics, crashGuard = modelCrashGuard)
+    val modelRuntime: ModelRuntime = RemoteModelRuntime(appContext, diagnostics, modelCrashGuard)
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
     val modelManager = ModelManager(
         appContext,
