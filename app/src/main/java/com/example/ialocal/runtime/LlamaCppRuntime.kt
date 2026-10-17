@@ -26,12 +26,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** Runtime backed by the official llama.cpp Android binding pinned by the build script. */
+/**
+ * Runtime backed by the official llama.cpp Android binding pinned by the build script. It runs in
+ * the ":ai" process ([com.example.ialocal.runtime.remote.InferenceService]); the app talks to it
+ * through [com.example.ialocal.runtime.remote.RemoteModelRuntime].
+ */
 class LlamaCppRuntime(
     context: Context,
     private val logger: AiEventLogger? = null,
     private val promptBuilder: PromptContextBuilder = PromptContextBuilder(),
-    private val crashGuard: ModelCrashGuard? = null,
+    /** Memory level for a model after crashes, decided by the app ([ModelCrashGuard]). */
+    private val safeLevelOf: (modelId: String) -> Int = { 0 },
 ) : ModelRuntime {
     private val appContext = context.applicationContext
     private val mutex = Mutex()
@@ -57,7 +62,6 @@ class LlamaCppRuntime(
                 logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
                 ensureLoaded(model, forceReload = true)
                 runCatching { Os.unsetenv(ASSISTANT_PREFIX_ENV) }
-                crashGuard?.begin(model.id, model.name, ModelCrashGuard.Phase.GENERATION)
                 engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
                 _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
                 val output = engine.sendUserPrompt("Responda apenas: OK", predictLength = 8)
@@ -71,7 +75,6 @@ class LlamaCppRuntime(
                 logger?.error("INFERENCE", "Falha no teste real de inferência", t)
                 throw t
             } finally {
-                crashGuard?.end()
                 // A verification is only a smoke test. Do not keep a multi-GB model resident in RAM
                 // before the user actually opens/activates it.
                 unloadLocked(finalState)
@@ -93,8 +96,6 @@ class LlamaCppRuntime(
         mutex.lock()
         try {
             ensureLoaded(model)
-            // Reading the conversation and answering fill the context memory.
-            crashGuard?.begin(model.id, model.name, ModelCrashGuard.Phase.GENERATION)
             val outputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
@@ -163,7 +164,6 @@ class LlamaCppRuntime(
             logger?.error("INFERENCE", "Falha durante geração", t)
             throw t
         } finally {
-            crashGuard?.end()
             mutex.unlock()
         }
     }.flowOn(nativeDispatcher)
@@ -218,15 +218,21 @@ class LlamaCppRuntime(
         // the rest of the weights takes RAM: about half of a Gemma 4 E2B/E4B file.
         val onDemandBytes = runCatching { GgufInspector().inspect(File(model.filePath)).onDemandBytes }.getOrDefault(0L)
         val modelBytes = (fileBytes - onDemandBytes).coerceAtLeast(0L)
+        // Read after the previous model was freed, so its memory counts as free.
         val memory = DeviceMemory.read(appContext)
-        val totalMemory = memory.totalBytes
         // A model that already made the app close for lack of memory loads with less of it.
-        val safeLevel = crashGuard?.safeLevel(model.id) ?: 0
-        val lowMemory = experimental || safeLevel > 0 || RuntimeLimits.needsLowMemoryMode(modelBytes, totalMemory)
-        val kvBudgetMb = RuntimeLimits.safeKvBudgetBytes(
-            RuntimeLimits.kvCacheBudgetBytes(modelBytes, totalMemory, experimental),
-            safeLevel,
-        ) / (1024 * 1024)
+        val safeLevel = safeLevelOf(model.id)
+        val plan = RuntimeLimits.planMemory(modelBytes, memory, experimental, safeLevel)
+        if (!plan.fits) {
+            val message = "${model.name} precisa de cerca de ${gigabytes(plan.minimumBytes)} de RAM, mas a IA pode usar " +
+                "${gigabytes(plan.budgetBytes)} agora (a RAM livre menos 0,5 GB para o Android e o app). Carregar " +
+                "assim faria o celular travar lendo o modelo do armazenamento. Feche outros apps ou escolha um modelo menor."
+            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
+            logger?.error("MODEL_LOAD", message)
+            throw IllegalStateException(message)
+        }
+        val lowMemory = plan.lowMemory
+        val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, the memory that sizes the (Q4_0) context and the presence penalty
         // the model card recommends (the other sampling settings come from the GGUF itself).
@@ -241,18 +247,13 @@ class LlamaCppRuntime(
             "MODEL_LOAD",
             "Carregando ${model.name} (${model.filePath}); pesos na RAM ${modelBytes / MB} MB" +
                 (if (onDemandBytes > 0) " (+${onDemandBytes / MB} MB lidos do arquivo sob demanda)" else "") +
-                "; RAM livre ${memory.availableBytes / MB} MB de " +
-                "${memory.totalBytes / MB} MB; memória para contexto: $kvBudgetMb MB" +
+                "; RAM livre ${memory.availableBytes / MB} MB de ${memory.totalBytes / MB} MB; " +
+                "limite da IA ${plan.budgetBytes / MB} MB; memória para contexto: $kvBudgetMb MB" +
                 (if (lowMemory) " em modo de pouca memória" else "") +
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
         try {
-            crashGuard?.begin(model.id, model.name, ModelCrashGuard.Phase.LOAD)
-            try {
-                engine.loadModel(model.filePath)
-            } finally {
-                crashGuard?.end()
-            }
+            engine.loadModel(model.filePath)
             loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
                 ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
             logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")
@@ -269,6 +270,9 @@ class LlamaCppRuntime(
             throw IllegalStateException(message, t)
         }
     }
+
+    private fun gigabytes(bytes: Long): String =
+        String.format(java.util.Locale.forLanguageTag("pt-BR"), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 
     private suspend fun awaitEngineInitialized() {
         val current = engine.state.value

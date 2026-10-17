@@ -46,6 +46,66 @@ object RuntimeLimits {
     fun needsLowMemoryMode(modelBytes: Long, deviceTotalMemory: Long): Boolean =
         deviceTotalMemory > 0 && modelBytes > deviceTotalMemory * LOW_MEMORY_MODEL_FRACTION
 
+    /** Kept free for Android and the app's own screens when the AI takes its share. */
+    const val AI_MARGIN_BYTES = 512L * 1024 * 1024
+    /** Compute buffers (about 290 MB with 256-token micro-batches) and native overhead. */
+    const val WORKING_MEMORY_BYTES = 512L * 1024 * 1024
+
+    /**
+     * RAM the AI may use: what is free, or what Android frees by closing background apps,
+     * minus [AI_MARGIN_BYTES]. With 8 GB free it is 7.5 GB.
+     */
+    fun aiBudgetBytes(memory: MemorySnapshot): Long =
+        (memory.foregroundBudgetBytes - AI_MARGIN_BYTES).coerceAtLeast(0L)
+
+    /** How a model is loaded within the AI's share of the RAM. */
+    data class MemoryPlan(
+        val budgetBytes: Long,
+        /** Weights stay file-backed, without the repacked copy. */
+        val lowMemory: Boolean,
+        val kvBudgetBytes: Long,
+        /** False when even the smallest configuration needs more than the budget. */
+        val fits: Boolean,
+        /** What the smallest configuration needs. */
+        val minimumBytes: Long,
+    )
+
+    /**
+     * Fits the weights in RAM ([residentWeightsBytes], without what is read from the file on
+     * demand), the context and the working memory into [aiBudgetBytes]. A dense model reads all
+     * its weights for every token, so they must fit even when file-backed, or the phone spends
+     * its time reading them from storage and stops responding. Experimental MoE models read only
+     * a few experts per token and are meant to run from storage.
+     */
+    fun planMemory(
+        residentWeightsBytes: Long,
+        memory: MemorySnapshot,
+        experimental: Boolean,
+        safeLevel: Int,
+    ): MemoryPlan {
+        val budget = aiBudgetBytes(memory)
+        val minimum = residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+        // While the weights are repacked, the copy and the mapped file are in RAM together.
+        val repackFits = 2 * residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES <= budget
+        val lowMemory = experimental || safeLevel > 0 || !repackFits ||
+            needsLowMemoryMode(residentWeightsBytes, memory.totalBytes)
+        val kvBudget = if (experimental) {
+            kvCacheBudgetBytes(residentWeightsBytes, memory.totalBytes, experimental = true)
+        } else {
+            minOf(
+                kvCacheBudgetBytes(residentWeightsBytes, memory.totalBytes, experimental = false),
+                budget - residentWeightsBytes - WORKING_MEMORY_BYTES,
+            ).coerceAtLeast(MIN_KV_BUDGET_BYTES)
+        }
+        return MemoryPlan(
+            budgetBytes = budget,
+            lowMemory = lowMemory,
+            kvBudgetBytes = safeKvBudgetBytes(kvBudget, safeLevel),
+            fits = experimental || minimum <= budget,
+            minimumBytes = minimum,
+        )
+    }
+
     /**
      * Context memory for a model that already made the app close for lack of memory
      * ([ModelCrashGuard]): half after the first time, the minimum (a 2K context) after that.

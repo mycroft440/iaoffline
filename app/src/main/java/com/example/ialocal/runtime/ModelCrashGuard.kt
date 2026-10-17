@@ -8,9 +8,10 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import java.util.UUID
 
 /**
- * Remembers which model is loading or answering. If Android kills the app for lack of memory, or
- * the native engine crashes, in the middle of it, later loads of that model use less memory
- * (weights read from storage and a shorter context) instead of crashing the same way again.
+ * Remembers which model is loading or answering. If Android stops the AI process (or the whole
+ * app) for lack of memory, or the native engine crashes, in the middle of it, later loads of that
+ * model use less memory (weights read from storage and a shorter context) instead of crashing
+ * the same way again. Used only in the app's main process.
  */
 class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = null) {
     enum class Phase { LOAD, GENERATION }
@@ -83,6 +84,22 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
                 "$modelName (motivo ${exit?.reason}); próximos carregamentos usam o nível de economia $level",
         )
         return Recovery(modelId, modelName, phase, level).also { recovery = it }
+    }
+
+    /**
+     * The AI process died while it was loading or answering with [modelName]: only memory
+     * pressure or a native fault stop it while the app stays open. Returns the new level.
+     */
+    @Synchronized
+    fun recordAiProcessDeath(modelId: String, modelName: String, phase: Phase): Recovery {
+        val level = nextLevel(safeLevel(modelId))
+        preferences.edit().putInt(levelKey(modelId), level).apply()
+        logger?.error(
+            "MODEL_SAFETY",
+            "O processo da IA foi encerrado durante ${if (phase == Phase.LOAD) "o carregamento" else "uma resposta"} " +
+                "de $modelName; próximos carregamentos usam o nível de economia $level",
+        )
+        return Recovery(modelId, modelName, phase, level)
     }
 
     private fun levelKey(modelId: String) = "level_$modelId"
