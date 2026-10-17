@@ -130,7 +130,8 @@ class MainActivity : ComponentActivity() {
 
         if (savedInstanceState == null) {
             lifecycleScope.launch(Dispatchers.IO) {
-                val report = LastExitReporter(applicationContext, container.diagnostics).takeUnreportedExit()
+                val report = LastExitReporter(applicationContext, container.diagnostics, container.modelCrashGuard)
+                    .takeUnreportedExit()
                 if (report != null) withContext(Dispatchers.Main) { lastExitReport = report }
             }
         }

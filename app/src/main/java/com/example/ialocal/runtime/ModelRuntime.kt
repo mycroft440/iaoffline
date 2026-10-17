@@ -50,4 +50,7 @@ interface ModelRuntime {
     ): String
 
     suspend fun unload()
+
+    /** Frees the loaded model unless it is loading or answering; true if it was freed. */
+    suspend fun releaseIfIdle(): Boolean = false
 }

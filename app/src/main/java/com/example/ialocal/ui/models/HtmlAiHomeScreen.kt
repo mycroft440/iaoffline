@@ -1,6 +1,5 @@
 package com.example.ialocal.ui.models
 
-import android.app.ActivityManager
 import android.content.Context
 import android.os.BatteryManager
 import android.os.StatFs
@@ -56,6 +55,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.BuildConfig
 import com.example.ialocal.ads.InlineAdBanner
+import com.example.ialocal.runtime.DeviceMemory
+import com.example.ialocal.ui.rememberLiveMemory
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -99,7 +100,9 @@ fun HtmlAiHomeScreen(
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val hardware = remember(context) { readHtmlHardwareSnapshot(context) }
+    val storageAndBattery = remember(context) { readHtmlHardwareSnapshot(context) }
+    val memory = rememberLiveMemory()
+    val hardware = storageAndBattery.copy(availableRamBytes = memory.availableBytes, totalRamBytes = memory.totalBytes)
     var showExitDialog by remember { mutableStateOf(false) }
     var clock by remember { mutableStateOf(currentClockText()) }
 
@@ -478,8 +481,7 @@ private fun HtmlNavigationCard(
 }
 
 private fun readHtmlHardwareSnapshot(context: Context): HtmlHardwareSnapshot {
-    val activityManager = context.getSystemService(ActivityManager::class.java)
-    val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+    val memory = DeviceMemory.read(context)
     val storage = StatFs(context.filesDir.absolutePath)
     val battery = context.getSystemService(BatteryManager::class.java)
         .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -487,8 +489,8 @@ private fun readHtmlHardwareSnapshot(context: Context): HtmlHardwareSnapshot {
     return HtmlHardwareSnapshot(
         freeStorageBytes = storage.availableBytes,
         totalStorageBytes = storage.totalBytes,
-        availableRamBytes = memory.availMem,
-        totalRamBytes = memory.totalMem,
+        availableRamBytes = memory.availableBytes,
+        totalRamBytes = memory.totalBytes,
         batteryPercent = battery,
     )
 }

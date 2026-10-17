@@ -228,7 +228,8 @@ object ModelCatalog {
             quantization = "Q4_0 (QAT)",
             approximateSizeBytes = 3_349_516_256L,
             sha256 = "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
-            recommendedRamBytes = 6_500_000_000L,
+            // 1.9 GB of the file are per-layer embeddings read on demand: about 2.5 GB in use.
+            recommendedRamBytes = 4_000_000_000L,
             totalParametersBillions = 5.1,
             description = "Gemma 4 E2B oficial do Google treinado para 4 bits (QAT): quase a qualidade da versão completa, no formato mais rápido para processadores ARM.",
             strengths = "QAT: o Google treinou o modelo já sabendo que ele rodaria em 4 bits, por isso perde muito menos qualidade que uma quantização comum do mesmo tamanho.",
@@ -242,9 +243,10 @@ object ModelCatalog {
             quantization = "Q4_0 (QAT)",
             approximateSizeBytes = 5_154_941_280L,
             sha256 = "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
-            recommendedRamBytes = 9_000_000_000L,
+            // 2.3 GB of the file are per-layer embeddings read on demand: 3 to 5 GB in use.
+            recommendedRamBytes = 6_000_000_000L,
             totalParametersBillions = 8.0,
-            description = "Gemma 4 E4B oficial treinado para 4 bits (QAT): o melhor Gemma para celulares de 8 a 12 GB, com qualidade próxima da versão completa.",
+            description = "Gemma 4 E4B oficial treinado para 4 bits (QAT): o melhor Gemma para celulares de 6 a 12 GB, com qualidade próxima da versão completa.",
             strengths = "QAT: o Google treinou o modelo já sabendo que ele rodaria em 4 bits, por isso perde muito menos qualidade que uma quantização comum do mesmo tamanho.",
         ),
         CatalogModel(

@@ -159,7 +159,8 @@ PY
 #    keeps smaller-memory phones usable instead of reporting the model as incompatible.
 #    The size in use is published as IAOFFLINE_ACTIVE_CONTEXT_TOKENS for the app.
 # 7. When the app sets IAOFFLINE_LOW_MEMORY=1 (model large for the device RAM),
-#    skip the repacked CPU buffers from the start.
+#    skip the repacked CPU buffers from the start. Tensors the architecture marks for
+#    on-demand reading (per-layer embeddings) are always read from the file as needed.
 # 8. Use a Q4_0 KV cache (about a quarter of F16) when the model supports flash
 #    attention, falling back to a smaller F16 context otherwise.
 # 9. Format chat turns with llama.cpp's built-in templates and, when a model's
@@ -335,6 +336,11 @@ replace_once(
     "    model_params.n_gpu_layers = 0;\n"
     "    model_params.split_mode = LLAMA_SPLIT_MODE_NONE;\n"
     "    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;\n"
+    "    // Per-layer embedding tables (Gemma 4 E2B/E4B: about 1.8 GB of a 3.3 GB E2B file) stay in\n"
+    "    // the file and only the rows of the tokens in use are read, a few KB per token. Upstream\n"
+    "    // does this only above 4 GiB; on a phone it cuts the model's RAM by about half with the\n"
+    "    // same output and speed.\n"
+    "    model_params.lazy_mode = LLAMA_LAZY_MODE_ON;\n"
     "    if (iaoffline_low_memory_mode()) {\n"
     "        // Repacked CPU buffers copy every weight into anonymous memory; without them the\n"
     "        // weights stay file-backed and the kernel can page them instead of killing the app.\n"

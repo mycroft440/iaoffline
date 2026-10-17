@@ -45,4 +45,14 @@ object RuntimeLimits {
 
     fun needsLowMemoryMode(modelBytes: Long, deviceTotalMemory: Long): Boolean =
         deviceTotalMemory > 0 && modelBytes > deviceTotalMemory * LOW_MEMORY_MODEL_FRACTION
+
+    /**
+     * Context memory for a model that already made the app close for lack of memory
+     * ([ModelCrashGuard]): half after the first time, the minimum (a 2K context) after that.
+     */
+    fun safeKvBudgetBytes(budget: Long, safeLevel: Int): Long = when {
+        safeLevel <= 0 -> budget
+        safeLevel == 1 -> (budget / 2).coerceAtLeast(MIN_KV_BUDGET_BYTES)
+        else -> MIN_KV_BUDGET_BYTES
+    }
 }
