@@ -1,8 +1,6 @@
 package com.example.ialocal.ui.chat
 
 import android.Manifest
-import android.app.ActivityManager
-import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +48,8 @@ import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
+import com.example.ialocal.ui.formatMemoryGb
+import com.example.ialocal.ui.rememberLiveMemory
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -752,11 +752,6 @@ private fun historyGroup(timestamp: Long): String {
 }
 private data class MemoryStats(val used: String, val total: String, val fraction: Float)
 @Composable private fun rememberDeviceMemory(): MemoryStats {
-    val context = LocalContext.current
-    return remember(context) {
-        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val info = ActivityManager.MemoryInfo(); manager.getMemoryInfo(info)
-        val total = info.totalMem.coerceAtLeast(1L); val used = (total - info.availMem).coerceAtLeast(0L); val gb = 1024.0 * 1024.0 * 1024.0
-        MemoryStats(String.format(Locale.getDefault(), "%.1f GB", used / gb), String.format(Locale.getDefault(), "%.1f GB", total / gb), (used.toDouble() / total).toFloat().coerceIn(0f, 1f))
-    }
+    val memory = rememberLiveMemory()
+    return MemoryStats(formatMemoryGb(memory.usedBytes), formatMemoryGb(memory.totalBytes), memory.usedFraction)
 }

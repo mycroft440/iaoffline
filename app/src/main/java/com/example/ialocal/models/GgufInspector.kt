@@ -3,6 +3,7 @@ package com.example.ialocal.models
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
 
@@ -17,12 +18,19 @@ class GgufInspector {
         val sizeLabel: String?,
         val contextLength: Int?,
         val hasChatTemplate: Boolean,
+        /**
+         * Bytes of tensors the native runtime reads from the file on demand instead of keeping in
+         * RAM (per-layer embeddings, about half of a Gemma 4 E2B/E4B file).
+         */
+        val onDemandBytes: Long = 0L,
     )
 
-    fun inspect(file: File): Metadata = BufferedInputStream(FileInputStream(file), 256 * 1024).use(::inspect)
+    fun inspect(file: File): Metadata =
+        BufferedInputStream(FileInputStream(file), 256 * 1024).use { inspect(it, file.length()) }
 
-    fun inspect(raw: InputStream): Metadata {
-        val input = if (raw is BufferedInputStream) raw else BufferedInputStream(raw, 256 * 1024)
+    /** [totalBytes] is the file size when known; it sizes an on-demand tensor stored last. */
+    fun inspect(raw: InputStream, totalBytes: Long? = null): Metadata {
+        val input = CountingInputStream(if (raw is BufferedInputStream) raw else BufferedInputStream(raw, 256 * 1024))
         val magic = ByteArray(4)
         readFully(input, magic)
         if (!magic.contentEquals(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))) {
@@ -40,6 +48,7 @@ class GgufInspector {
         var sizeLabel: String? = null
         var contextLength: Int? = null
         var hasChatTemplate = false
+        var alignment = DEFAULT_ALIGNMENT
 
         var i = 0L
         while (i < kvCount) {
@@ -49,6 +58,7 @@ class GgufInspector {
                 key == "general.architecture" ||
                 key == "general.size_label" ||
                 key == "tokenizer.chat_template" ||
+                key == "general.alignment" ||
                 key.endsWith(".context_length")
             val value = readValue(input, type, wanted)
 
@@ -57,6 +67,7 @@ class GgufInspector {
                 "general.architecture" -> architecture = value as? String
                 "general.size_label" -> sizeLabel = value?.toString()
                 "tokenizer.chat_template" -> hasChatTemplate = (value as? String)?.isNotBlank() == true
+                "general.alignment" -> alignment = (value as? Number)?.toLong()?.takeIf { it > 0 } ?: alignment
                 else -> if (key.endsWith(".context_length")) {
                     contextLength = when (value) {
                         is Number -> value.toInt()
@@ -67,6 +78,9 @@ class GgufInspector {
             i++
         }
 
+        // Only sizes memory use: a header read without its tensor table still describes the model.
+        val onDemandBytes = runCatching { readOnDemandBytes(input, tensorCount, alignment, totalBytes) }.getOrDefault(0L)
+
         return Metadata(
             version = version,
             tensorCount = tensorCount,
@@ -76,7 +90,36 @@ class GgufInspector {
             sizeLabel = sizeLabel,
             contextLength = contextLength,
             hasChatTemplate = hasChatTemplate,
+            onDemandBytes = onDemandBytes,
         )
+    }
+
+    /**
+     * Reads the tensor table that follows the metadata. A tensor's size is the distance to the next
+     * tensor's data (the last one ends at the file end), which needs no table of quantization types.
+     */
+    private fun readOnDemandBytes(input: CountingInputStream, tensorCount: Long, alignment: Long, totalBytes: Long?): Long {
+        if (tensorCount < 0 || tensorCount > MAX_TENSORS) throw IOException("Cabeçalho GGUF inválido.")
+        val offsets = LongArray(tensorCount.toInt())
+        val onDemand = ArrayList<Int>()
+        for (index in 0 until tensorCount.toInt()) {
+            val name = readString(input, 64 * 1024)
+            val dimensions = readU32(input)
+            if (dimensions > MAX_DIMENSIONS) throw IOException("Tensor GGUF inválido.")
+            skipFully(input, dimensions * 8)
+            readU32(input) // quantization type
+            offsets[index] = readU64(input)
+            if (name in ON_DEMAND_TENSORS) onDemand += index
+        }
+        if (onDemand.isEmpty()) return 0L
+        val dataStart = (input.count + alignment - 1) / alignment * alignment
+        val dataEnd = totalBytes?.minus(dataStart)
+        val sorted = offsets.sortedArray()
+        return onDemand.sumOf { index ->
+            val start = offsets[index]
+            val next = sorted.firstOrNull { it > start } ?: dataEnd ?: start
+            (next - start).coerceAtLeast(0L)
+        }
     }
 
     private fun readValue(input: InputStream, type: Int, materialize: Boolean): Any? = when (type) {
@@ -161,6 +204,27 @@ class GgufInspector {
             if (read < 0) throw IOException("Fim inesperado do arquivo GGUF.")
             offset += read
         }
+    }
+
+    /** Counts the bytes consumed, to find where the tensor data starts. */
+    private class CountingInputStream(input: InputStream) : FilterInputStream(input) {
+        var count = 0L
+            private set
+
+        override fun read(): Int = super.read().also { if (it >= 0) count++ }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int =
+            super.read(b, off, len).also { if (it > 0) count += it }
+
+        override fun skip(n: Long): Long = super.skip(n).also { if (it > 0) count += it }
+    }
+
+    private companion object {
+        const val DEFAULT_ALIGNMENT = 32L
+        const val MAX_TENSORS = 1_000_000L
+        const val MAX_DIMENSIONS = 8L
+        /** Tensors llama.cpp reads row by row from the file when lazy mode is on, as the app sets it. */
+        val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
     }
 
     private fun skipFully(input: InputStream, count: Long) {

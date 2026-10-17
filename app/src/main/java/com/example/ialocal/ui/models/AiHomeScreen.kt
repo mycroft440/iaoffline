@@ -22,7 +22,6 @@ import androidx.compose.foundation.background
 import android.os.StatFs
 import android.os.BatteryManager
 import android.content.Context
-import android.app.ActivityManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -77,6 +76,7 @@ import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelProvider
+import com.example.ialocal.runtime.DeviceMemory
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
@@ -765,8 +765,7 @@ private fun HomeFooter(
 }
 
 private fun readHomeHardwareSnapshot(context: Context): HomeHardwareSnapshot {
-    val activityManager = context.getSystemService(ActivityManager::class.java)
-    val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+    val memory = DeviceMemory.read(context)
     val storage = StatFs(context.filesDir.absolutePath)
     val battery = context.getSystemService(BatteryManager::class.java)
         .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -775,8 +774,8 @@ private fun readHomeHardwareSnapshot(context: Context): HomeHardwareSnapshot {
     return HomeHardwareSnapshot(
         freeStorageBytes = storage.availableBytes,
         totalStorageBytes = storage.totalBytes,
-        availableRamBytes = memory.availMem,
-        totalRamBytes = memory.totalMem,
+        availableRamBytes = memory.availableBytes,
+        totalRamBytes = memory.totalBytes,
         batteryPercent = battery,
     )
 }

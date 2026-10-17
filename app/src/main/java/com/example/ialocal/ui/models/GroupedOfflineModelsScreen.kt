@@ -1,6 +1,5 @@
 package com.example.ialocal.ui.models
 
-import android.app.ActivityManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -66,7 +65,9 @@ import com.example.ialocal.models.DownloadEntryStatus
 import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelProvider
+import com.example.ialocal.runtime.DeviceMemory
 import com.example.ialocal.ui.branding.ProviderLogo
+import com.example.ialocal.ui.formatAdvertisedGb
 import kotlinx.coroutines.launch
 
 private val CatalogBackground = Color(0xFF0A0D14)
@@ -85,7 +86,8 @@ private val CatalogAmber = Color(0xFFFBBF24)
 private val CatalogRose = Color(0xFFFB7185)
 
 private data class CatalogHardwareSnapshot(
-    val totalRamBytes: Long,
+    /** The phone's RAM as sold ("12 GB"), the unit the catalog requirements are written in. */
+    val advertisedRamGb: Double,
     val availableRamBytes: Long,
 )
 
@@ -789,7 +791,7 @@ private fun ModelSpecsGrid(
         )
         SpecCell(
             label = "REQUISITOS MÍN.",
-            value = "${groupedFormatBytes(model.recommendedRamBytes)} RAM",
+            value = "${formatRamRequirement(model.recommendedRamBytes)} RAM",
             valueColor = requirementAccent,
             modifier = Modifier.weight(1f),
         )
@@ -920,7 +922,7 @@ private fun ModelDetailsDialog(
                     } ?: "Tipo: denso, todos os parâmetros usados em cada palavra",
                 )
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
-                Text("Requisitos: ${groupedFormatBytes(model.recommendedRamBytes)} RAM")
+                Text("Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM")
                 Text(
                     text = compatibility.label,
                     color = compatibility.accent,
@@ -1020,11 +1022,10 @@ private fun CatalogActionButton(
 }
 
 private fun readCatalogHardwareSnapshot(context: Context): CatalogHardwareSnapshot {
-    val activityManager = context.getSystemService(ActivityManager::class.java)
-    val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+    val memory = DeviceMemory.read(context)
     return CatalogHardwareSnapshot(
-        totalRamBytes = memory.totalMem,
-        availableRamBytes = memory.availMem,
+        advertisedRamGb = memory.advertisedGigabytes,
+        availableRamBytes = memory.availableBytes,
     )
 }
 
@@ -1032,14 +1033,18 @@ private fun catalogCompatibility(
     model: CatalogModel,
     hardware: CatalogHardwareSnapshot,
 ): CatalogCompatibility {
+    // Android reports less RAM than the phone is sold with (a 12 GB phone shows about 11 GB), so
+    // the requirement is compared with the advertised size, and the free RAM with what the model
+    // itself needs (its file plus working memory), not with the whole requirement.
+    val deviceRamBytes = (hardware.advertisedRamGb * 1_000_000_000L).toLong()
     return when {
-        hardware.totalRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
-            label = "Requer ${groupedFormatBytes(model.recommendedRamBytes)} RAM",
+        deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
+            label = "Requer ${formatRamRequirement(model.recommendedRamBytes)} RAM",
             accent = CatalogRose,
             canRunComfortably = false,
         )
 
-        hardware.availableRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
+        hardware.availableRamBytes < model.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES -> CatalogCompatibility(
             label = "Atenção: RAM Justa",
             accent = CatalogAmber,
             canRunComfortably = true,
@@ -1208,6 +1213,12 @@ private fun groupedFormatParameters(value: Double): String =
     } else {
         "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
     }
+
+/** Catalog requirements are written in the gigabytes phones are sold with: 12_000_000_000 is "12 GB". */
+private fun formatRamRequirement(bytes: Long): String = formatAdvertisedGb(bytes / 1_000_000_000.0)
+
+/** Context, compute buffers and the app itself, on top of the model file. */
+private const val CATALOG_WORKING_MEMORY_BYTES = 768L * 1024 * 1024
 
 private fun groupedFormatBytes(bytes: Long): String {
     val gb = bytes / (1024.0 * 1024.0 * 1024.0)

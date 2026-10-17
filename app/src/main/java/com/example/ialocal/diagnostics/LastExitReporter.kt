@@ -3,6 +3,7 @@ package com.example.ialocal.diagnostics
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
+import com.example.ialocal.runtime.ModelCrashGuard
 import java.text.DateFormat
 import java.util.Date
 
@@ -13,12 +14,18 @@ data class LastExitReport(val summary: String, val details: String)
  * Reads Android's record of how the previous process ended. A native crash, an uncaught exception or
  * a kill for lack of memory is reported once, so the user can see what happened and share it.
  */
-class LastExitReporter(context: Context, private val logger: AiEventLogger? = null) {
+class LastExitReporter(
+    context: Context,
+    private val logger: AiEventLogger? = null,
+    private val crashGuard: ModelCrashGuard? = null,
+) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /** Returns the latest unexpected exit not reported yet, or null. Does disk I/O. */
     fun takeUnreportedExit(): LastExitReport? {
+        // Lowers the memory use of a model that was loading or answering when the app died.
+        val recovery = crashGuard?.recoverInterruptedRun()
         val activityManager = appContext.getSystemService(ActivityManager::class.java) ?: return null
         val latest = runCatching {
             activityManager.getHistoricalProcessExitReasons(null, 0, 1).firstOrNull()
@@ -35,8 +42,15 @@ class LastExitReporter(context: Context, private val logger: AiEventLogger? = nu
                 "O app foi fechado por uma falha no motor de IA (código nativo)."
             ApplicationExitInfo.REASON_CRASH ->
                 "O app foi fechado por um erro inesperado."
-            ApplicationExitInfo.REASON_LOW_MEMORY ->
+            ApplicationExitInfo.REASON_LOW_MEMORY -> {
+                // Android closes apps in the background to free memory all the time; that is not a
+                // failure of the app unless it was in use or running a model.
+                if (recovery == null && latest.importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE) {
+                    logger?.info("APP_EXIT", "O Android encerrou o app em segundo plano para liberar memória")
+                    return null
+                }
                 "O Android fechou o app por falta de memória."
+            }
             ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE ->
                 "O Android fechou o app por uso excessivo de recursos."
             ApplicationExitInfo.REASON_ANR ->
@@ -44,7 +58,7 @@ class LastExitReporter(context: Context, private val logger: AiEventLogger? = nu
             ApplicationExitInfo.REASON_SIGNALED ->
                 "O sistema encerrou o app (sinal ${latest.status})."
             else -> return null
-        }
+        } + recovery?.let { " " + recoveryNotice(it) }.orEmpty()
 
         val details = buildString {
             appendLine(summary)
@@ -71,6 +85,13 @@ class LastExitReporter(context: Context, private val logger: AiEventLogger? = nu
 
         logger?.error("APP_EXIT", details)
         return LastExitReport(summary, details)
+    }
+
+    private fun recoveryNotice(recovery: ModelCrashGuard.Recovery): String {
+        val moment = if (recovery.phase == ModelCrashGuard.Phase.LOAD) "carregava" else "respondia com"
+        return "Isso aconteceu enquanto o app $moment ${recovery.modelName}. Para não se repetir, " +
+            "esse modelo passa a usar menos memória: pesos lidos do armazenamento e " +
+            if (recovery.level >= ModelCrashGuard.MAX_LEVEL) "o menor contexto." else "metade do contexto."
     }
 
     /** Keeps the stack of an uncaught exception, which Android does not include in its record. */

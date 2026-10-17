@@ -24,6 +24,7 @@ import com.example.ialocal.models.ModelDownloader
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.LlamaCppRuntime
+import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.ui.codeeditor.CodeEditSessionStore
 import com.example.ialocal.ui.codeeditor.CodeLanguagePackRepository
@@ -42,9 +43,17 @@ class AppContainer(context: Context) {
     private val attachmentContextBuilder = AttachmentContextBuilder()
 
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
-    val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics)
+    val modelCrashGuard = ModelCrashGuard(appContext, diagnostics)
+    val modelRuntime: ModelRuntime = LlamaCppRuntime(appContext, diagnostics, crashGuard = modelCrashGuard)
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
-    val modelManager = ModelManager(appContext, modelRepository, modelRuntime, modelDownloader, diagnostics)
+    val modelManager = ModelManager(
+        appContext,
+        modelRepository,
+        modelRuntime,
+        modelDownloader,
+        diagnostics,
+        crashGuard = modelCrashGuard,
+    )
     val automaticModelImporter = AutomaticModelImporter(appContext, modelRepository, diagnostics)
     val offlineWikipedia = OfflineWikipedia(appContext, diagnostics)
     val agentTools = AgentToolRegistry(chatRepository, codeEditSessions, diagnostics, offlineWikipedia)

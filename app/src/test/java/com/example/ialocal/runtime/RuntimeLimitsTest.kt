@@ -39,6 +39,31 @@ class RuntimeLimitsTest {
     }
 
     @Test
+    fun aModelThatCrashedTheAppGetsLessContextMemoryEachTime() {
+        val budget = 2 * gb
+        assertEquals(budget, RuntimeLimits.safeKvBudgetBytes(budget, safeLevel = 0))
+        assertEquals(gb, RuntimeLimits.safeKvBudgetBytes(budget, safeLevel = 1))
+        assertEquals(RuntimeLimits.MIN_KV_BUDGET_BYTES, RuntimeLimits.safeKvBudgetBytes(budget, safeLevel = 2))
+        // Never below the smallest context.
+        assertEquals(
+            RuntimeLimits.MIN_KV_BUDGET_BYTES,
+            RuntimeLimits.safeKvBudgetBytes(RuntimeLimits.MIN_KV_BUDGET_BYTES, safeLevel = 1),
+        )
+    }
+
+    @Test
+    fun gemma4E4bWithItsEmbeddingsOnStorageGetsARealContext() {
+        // E4B QAT: 5.15 GB file, 2.31 GB of per-layer embeddings read on demand.
+        val resident = 5_154_941_280L - 2_312_110_080L
+        val budget = RuntimeLimits.kvCacheBudgetBytes(resident, 11 * gb, experimental = false)
+        assertTrue(budget > gb)
+        assertEquals(
+            RuntimeLimits.MIN_KV_BUDGET_BYTES,
+            RuntimeLimits.kvCacheBudgetBytes(5_154_941_280L, 11 * gb, experimental = false),
+        )
+    }
+
+    @Test
     fun experimentalModelsGetAFixedKvBudget() {
         assertEquals(
             RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES,

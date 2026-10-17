@@ -1,8 +1,6 @@
 package com.example.ialocal.ui.chat
 
 import android.Manifest
-import android.app.ActivityManager
-import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -123,6 +121,8 @@ import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
+import com.example.ialocal.ui.formatMemoryGb
+import com.example.ialocal.ui.rememberLiveMemory
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
@@ -400,7 +400,7 @@ private fun ExactDrawer(
         }
     }
     val groups = remember(filtered) { filtered.groupBy { exactHistoryGroup(it.updatedAt) } }
-    val memory = rememberExactMemory()
+    val memory = rememberLiveMemory()
 
     Column(Modifier.fillMaxSize().background(PSurface)) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -579,7 +579,7 @@ private fun ExactDrawer(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Memória do dispositivo", fontSize = 11.sp, color = Color(0xFF94A3B8))
                         Text(
-                            "${memory.used} / ${memory.total}",
+                            "${formatMemoryGb(memory.usedBytes)} / ${formatMemoryGb(memory.totalBytes)}",
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,
@@ -589,10 +589,18 @@ private fun ExactDrawer(
                     Spacer(Modifier.height(4.dp))
                     Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(Color(0xFF1E293B))) {
                         Box(
-                            Modifier.fillMaxWidth(memory.fraction).fillMaxHeight()
+                            Modifier.fillMaxWidth(memory.usedFraction).fillMaxHeight()
                                 .background(Brush.horizontalGradient(listOf(PIndigo, PPurple)))
                         )
                     }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Livre ${formatMemoryGb(memory.availableBytes)}" +
+                            if (memory.appBytes > 0) " · Este app ${formatMemoryGb(memory.appBytes)}" else "",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color(0xFF64748B),
+                    )
                 }
             }
             Surface(
@@ -1662,21 +1670,3 @@ private fun exactHistoryGroup(timestamp: Long): String {
     }
 }
 
-private data class ExactMemoryInfo(val used: String, val total: String, val fraction: Float)
-
-@Composable
-private fun rememberExactMemory(): ExactMemoryInfo {
-    val context = LocalContext.current
-    return remember(context) {
-        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val info = ActivityManager.MemoryInfo()
-        manager.getMemoryInfo(info)
-        val totalGb = info.totalMem / 1_073_741_824.0
-        val usedGb = (info.totalMem - info.availMem) / 1_073_741_824.0
-        ExactMemoryInfo(
-            used = String.format(Locale.getDefault(), "%.1f GB", usedGb),
-            total = String.format(Locale.getDefault(), "%.0f GB", totalGb),
-            fraction = if (info.totalMem > 0L) ((info.totalMem - info.availMem).toFloat() / info.totalMem.toFloat()).coerceIn(0f, 1f) else 0f,
-        )
-    }
-}

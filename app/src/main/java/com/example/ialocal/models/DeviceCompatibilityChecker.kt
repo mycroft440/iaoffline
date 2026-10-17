@@ -1,9 +1,9 @@
 package com.example.ialocal.models
 
-import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
 import android.os.StatFs
+import com.example.ialocal.runtime.DeviceMemory
 import kotlin.math.roundToLong
 
 class DeviceCompatibilityChecker(private val context: Context) {
@@ -26,8 +26,7 @@ class DeviceCompatibilityChecker(private val context: Context) {
     }
 
     fun check(modelSizeBytes: Long?): Result {
-        val activity = context.getSystemService(ActivityManager::class.java)
-        val memoryInfo = ActivityManager.MemoryInfo().also(activity::getMemoryInfo)
+        val memory = DeviceMemory.read(context)
         val storage = StatFs(context.filesDir.absolutePath).availableBytes
         val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
         val supportedAbi = Build.SUPPORTED_ABIS.any { it == "arm64-v8a" || it == "x86_64" }
@@ -39,7 +38,8 @@ class DeviceCompatibilityChecker(private val context: Context) {
         val canStore = modelSizeBytes?.takeIf { it > 0 }?.let {
             storage > it + COPY_STORAGE_HEADROOM
         } ?: true
-        val likelyFits = estimate?.let { it < memoryInfo.totalMem * MAX_RAM_SHARE }
+        // What a foreground app can count on, not the whole RAM: the system keeps a share.
+        val likelyFits = estimate?.let { it < memory.foregroundBudgetBytes }
 
         val warnings = buildList {
             if (!supportedAbi) {
@@ -49,7 +49,7 @@ class DeviceCompatibilityChecker(private val context: Context) {
             if (likelyFits == false) {
                 add("A estimativa indica alta pressão de RAM, mas ela não bloqueia o modelo; o app ainda executará o teste real de carregamento.")
             }
-            if (memoryInfo.availMem < 1L * 1024 * 1024 * 1024) {
+            if (memory.availableBytes < 1L * 1024 * 1024 * 1024) {
                 add("Há menos de 1 GB de RAM disponível agora. O app ainda tentará carregar o modelo, e o Android pode encerrar o processo se faltar memória.")
             }
         }
@@ -57,8 +57,8 @@ class DeviceCompatibilityChecker(private val context: Context) {
         return Result(
             primaryAbi = primaryAbi,
             supportedAbi = supportedAbi,
-            totalRamBytes = memoryInfo.totalMem,
-            availableRamBytes = memoryInfo.availMem,
+            totalRamBytes = memory.totalBytes,
+            availableRamBytes = memory.availableBytes,
             availableStorageBytes = storage,
             estimatedModelRamBytes = estimate,
             canStore = canStore,
@@ -69,6 +69,5 @@ class DeviceCompatibilityChecker(private val context: Context) {
 
     companion object {
         private const val COPY_STORAGE_HEADROOM = 256L * 1024 * 1024
-        private const val MAX_RAM_SHARE = 0.82
     }
 }

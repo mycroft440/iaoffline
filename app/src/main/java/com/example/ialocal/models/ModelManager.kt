@@ -5,6 +5,7 @@ import android.net.Uri
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
+import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.RuntimeState
 import java.io.File
@@ -44,6 +45,7 @@ class ModelManager(
     private val runtime: ModelRuntime,
     private val downloader: ModelDownloader,
     private val logger: AiEventLogger? = null,
+    private val crashGuard: ModelCrashGuard? = null,
 ) {
     private val appContext = context.applicationContext
     private val persistentDownloads = PublicModelDownloads(appContext)
@@ -462,6 +464,7 @@ class ModelManager(
         if (runtime.state.value.modelId == modelId) runtime.unload()
         if (catalogModel != null) persistentDownloads.deletePersistedModel(catalogModel)
         repository.deleteModel(modelId)
+        crashGuard?.forget(modelId)
     }
 
     suspend fun unload() = runtime.unload()
