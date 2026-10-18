@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -85,6 +86,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -94,6 +96,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -977,8 +980,9 @@ private fun ExactAssistantMessage(
     val parsed = remember(item.message.content) { AssistantContent.parse(item.message.content) }
     val sending = item.message.status == MessageStatus.SENDING.name
     val thinking = sending && parsed.reasoningInProgress
-    // Open while the model is thinking so the reasoning can be followed live; folded once done.
-    var reasoningOpen by remember(item.message.id) { mutableStateOf(thinking) }
+    // While the model thinks, only its last two lines show unless the user opens the whole
+    // reasoning; everything folds once it is done.
+    var reasoningOpen by remember(item.message.id) { mutableStateOf(false) }
     LaunchedEffect(thinking) { if (!thinking) reasoningOpen = false }
     val clipboard = LocalClipboardManager.current
 
@@ -1027,7 +1031,11 @@ private fun ExactAssistantMessage(
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    if (reasoningOpen) "Ocultar" else "Mostrar",
+                                    when {
+                                        reasoningOpen -> "Ocultar"
+                                        thinking -> "Mostrar tudo"
+                                        else -> "Mostrar"
+                                    },
                                     fontSize = 11.sp,
                                     color = accent.copy(alpha = 0.85f),
                                 )
@@ -1039,6 +1047,7 @@ private fun ExactAssistantMessage(
                                 )
                             }
                         }
+                        if (thinking && !reasoningOpen) ReasoningTail(parsed.reasoning)
                         AnimatedVisibility(reasoningOpen) {
                             Text(
                                 parsed.reasoning.ifBlank { "…" },
@@ -1137,6 +1146,32 @@ private fun ExactInlineAction(label: String, enabled: Boolean = true, onClick: (
         fontSize = 12.sp,
         color = if (enabled) PMuted else PMuted.copy(alpha = 0.45f),
     )
+}
+
+/** The last two lines of the reasoning being written, the earlier ones scrolled out of view. */
+@Composable
+private fun ReasoningTail(reasoning: String) {
+    val tail = remember(reasoning) { reasoningTail(reasoning).ifBlank { "…" } }
+    val lineHeight = 18.sp
+    val twoLines = with(LocalDensity.current) { (lineHeight * REASONING_PREVIEW_LINES).toDp() }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.20f))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .height(twoLines)
+            .clipToBounds(),
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        Text(
+            tail,
+            modifier = Modifier.fillMaxWidth().wrapContentHeight(align = Alignment.Bottom, unbounded = true),
+            fontSize = 12.sp,
+            lineHeight = lineHeight,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xFF94A3B8),
+        )
+    }
 }
 
 /** The logo of the company behind the model that answered; the robot when it is not known. */
