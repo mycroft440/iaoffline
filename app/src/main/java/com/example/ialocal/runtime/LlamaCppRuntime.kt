@@ -13,6 +13,7 @@ import com.example.ialocal.models.ModelCatalog
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -253,7 +254,11 @@ class LlamaCppRuntime(
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
         try {
-            engine.loadModel(model.filePath)
+            // The native load cannot be interrupted. A stop during it used to end the load as a
+            // failure that forgot the model the engine did load, so every later message failed
+            // with "Cannot load model in ModelReady". The load finishes and is recorded instead,
+            // and the stop takes effect at the next step of the answer.
+            withContext(NonCancellable) { engine.loadModel(model.filePath) }
             loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
                 ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
             logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")

@@ -263,7 +263,9 @@ class ChatGenerationManager(
                 "O modelo selecionado não está mais disponível."
             }
             if (selectedModel.verificationStatus != ModelVerificationStatus.VERIFIED.name) {
-                modelManager.retryVerification(selectedModel.id)
+                // The test answer runs in the AI process and cannot be interrupted; a stop during it
+                // would otherwise record the model as failing verification. Its real result is kept.
+                withContext(NonCancellable) { modelManager.retryVerification(selectedModel.id) }
             }
         }
 
