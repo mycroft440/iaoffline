@@ -69,7 +69,7 @@ import com.example.ialocal.ui.rememberLiveMemory
 /** At most this many installed AIs are listed on the home screen; Minhas I.As has them all. */
 private const val HOME_MODEL_LIMIT = 4
 
-private data class HomeHardwareSnapshot(
+private data class HomeDeviceSnapshot(
     val freeStorageBytes: Long,
     val availableRamBytes: Long,
     val totalRamBytes: Long,
@@ -100,7 +100,7 @@ fun HtmlAiHomeScreen(
     val server by viewModel.serverState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val storageAndBattery = remember(context) { readHomeHardwareSnapshot(context) }
+    val storageAndBattery = remember(context) { readHomeDeviceSnapshot(context) }
     val memory = rememberLiveMemory()
     val hardware = storageAndBattery.copy(availableRamBytes = memory.availableBytes, totalRamBytes = memory.totalBytes)
     var showExitDialog by remember { mutableStateOf(false) }
@@ -264,7 +264,7 @@ private fun HomeActionsSection(
         }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HomeActionCard(
+            HomeShortcutCard(
                 title = "Chat com I.A",
                 subtitle = "Nova conversa",
                 icon = Icons.Default.SmartToy,
@@ -274,7 +274,7 @@ private fun HomeActionsSection(
                 modifier = Modifier.weight(1f),
                 onClick = onStartChat,
             )
-            HomeActionCard(
+            HomeShortcutCard(
                 title = "Minhas I.As",
                 subtitle = "No aparelho",
                 icon = Icons.Default.Memory,
@@ -285,7 +285,7 @@ private fun HomeActionsSection(
             )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HomeActionCard(
+            HomeShortcutCard(
                 title = "Baixar I.As",
                 subtitle = "Catálogo por empresa",
                 icon = Icons.Default.Download,
@@ -294,7 +294,7 @@ private fun HomeActionsSection(
                 modifier = Modifier.weight(1f),
                 onClick = onOpenOfflineModels,
             )
-            HomeActionCard(
+            HomeShortcutCard(
                 title = "Utilizar API",
                 subtitle = "API local do aparelho",
                 icon = Icons.Default.Api,
@@ -309,7 +309,7 @@ private fun HomeActionsSection(
 
 /** A card like the catalog's company filter: icon, title, subtitle and a colored badge. */
 @Composable
-private fun HomeActionCard(
+private fun HomeShortcutCard(
     title: String,
     subtitle: String,
     icon: ImageVector,
@@ -592,7 +592,7 @@ private fun HomeModelCard(model: AiModelEntity, onClick: () -> Unit) {
 
 /** Free space and memory, in the catalog's grid of specifications. */
 @Composable
-private fun HomeDeviceSection(snapshot: HomeHardwareSnapshot) {
+private fun HomeDeviceSection(snapshot: HomeDeviceSnapshot) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         HomeSectionHeader(
             title = "Este aparelho",
@@ -621,14 +621,14 @@ private fun HomeDeviceSection(snapshot: HomeHardwareSnapshot) {
                 Box(Modifier.width(1.dp).height(34.dp).background(CatalogBorder))
                 SpecCell(
                     label = "RAM EM USO",
-                    value = "${formatHomeGb(snapshot.usedRamBytes)} / ${formatHomeGb(snapshot.totalRamBytes)} GB",
+                    value = "${formatDeviceGb(snapshot.usedRamBytes)} / ${formatDeviceGb(snapshot.totalRamBytes)} GB",
                     valueColor = Color(0xFFE2E8F0),
                     modifier = Modifier.weight(1f),
                 )
                 Box(Modifier.width(1.dp).height(34.dp).background(CatalogBorder))
                 SpecCell(
                     label = "RAM LIVRE",
-                    value = "${formatHomeGb(snapshot.availableRamBytes)} GB",
+                    value = "${formatDeviceGb(snapshot.availableRamBytes)} GB",
                     valueColor = CatalogEmerald,
                     modifier = Modifier.weight(1f),
                 )
@@ -652,13 +652,13 @@ private fun HomeDeviceSection(snapshot: HomeHardwareSnapshot) {
     }
 }
 
-private fun readHomeHardwareSnapshot(context: Context): HomeHardwareSnapshot {
+private fun readHomeDeviceSnapshot(context: Context): HomeDeviceSnapshot {
     val memory = DeviceMemory.read(context)
     val storage = StatFs(context.filesDir.absolutePath)
     val battery = context.getSystemService(BatteryManager::class.java)
         .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         .coerceIn(0, 100)
-    return HomeHardwareSnapshot(
+    return HomeDeviceSnapshot(
         freeStorageBytes = storage.availableBytes,
         availableRamBytes = memory.availableBytes,
         totalRamBytes = memory.totalBytes,
@@ -666,5 +666,5 @@ private fun readHomeHardwareSnapshot(context: Context): HomeHardwareSnapshot {
     )
 }
 
-private fun formatHomeGb(bytes: Long): String =
+private fun formatDeviceGb(bytes: Long): String =
     "%.1f".format(bytes / (1024.0 * 1024.0 * 1024.0))
