@@ -13,6 +13,8 @@ val testInterstitialAdUnitId = "ca-app-pub-3940256099942544/1033173712"
 val productionAdMobAppId = providers.environmentVariable("ADMOB_APP_ID").orNull?.trim().orEmpty()
 val productionBannerAdUnitId = providers.environmentVariable("ADMOB_BANNER_AD_UNIT_ID").orNull?.trim().orEmpty()
 val productionInterstitialAdUnitId = providers.environmentVariable("ADMOB_INTERSTITIAL_AD_UNIT_ID").orNull?.trim().orEmpty()
+// Until the production IDs are configured, the release uses Google's test IDs so the ads can be tried.
+val useTestAds = productionAdMobAppId.isEmpty()
 require(productionAdMobAppId.isEmpty() == productionBannerAdUnitId.isEmpty()) {
     "Configure ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID juntos."
 }
@@ -82,12 +84,20 @@ android {
         getByName("debug") {
             buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
             buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$testInterstitialAdUnitId\"")
+            buildConfigField("boolean", "TEST_ADS", "true")
         }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
-            manifestPlaceholders["admobAppId"] = productionAdMobAppId.ifEmpty { testAdMobAppId }
-            buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$productionBannerAdUnitId\"")
-            buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$productionInterstitialAdUnitId\"")
+            if (useTestAds) {
+                manifestPlaceholders["admobAppId"] = testAdMobAppId
+                buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
+                buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$testInterstitialAdUnitId\"")
+            } else {
+                manifestPlaceholders["admobAppId"] = productionAdMobAppId
+                buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$productionBannerAdUnitId\"")
+                buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$productionInterstitialAdUnitId\"")
+            }
+            buildConfigField("boolean", "TEST_ADS", "$useTestAds")
         }
     }
 

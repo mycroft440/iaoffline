@@ -29,7 +29,8 @@ class AdsManager(private val appContext: Context) {
     fun start(activity: Activity) {
         if (BuildConfig.BANNER_AD_UNIT_ID.isBlank()) return
 
-        if (BuildConfig.DEBUG) {
+        // Google's test ads need no consent form: there is no AdMob privacy message for test IDs.
+        if (BuildConfig.TEST_ADS) {
             initializeAds()
             return
         }
@@ -84,7 +85,7 @@ class AdsManager(private val appContext: Context) {
 
     private fun initializeAds() {
         if (initialized) {
-            adsReady = BuildConfig.DEBUG || consentInformation.canRequestAds()
+            adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
             return
         }
         if (initializing) return
@@ -96,7 +97,7 @@ class AdsManager(private val appContext: Context) {
                         mainHandler.post {
                             initializing = false
                             initialized = true
-                            adsReady = BuildConfig.DEBUG || consentInformation.canRequestAds()
+                            adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
                         }
                     }
                 }.onFailure {

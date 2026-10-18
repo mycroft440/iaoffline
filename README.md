@@ -134,7 +134,15 @@ Para ganhar o máximo com esse anúncio, crie no AdMob um bloco do tipo **Inters
 
 **Banners.** Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
 
-Para habilitar anúncios reais em um build `release`, configure os valores abaixo no ambiente de build. Sem os dois primeiros, a release não solicita anúncios; sem o terceiro, ela mostra os banners mas não o anúncio de download:
+**IDs de teste (configuração atual).** Enquanto `ADMOB_APP_ID` não estiver configurado, a release também usa os IDs de teste do Google, então os banners e o anúncio de download já funcionam e mostram o selo "Test Ad". Anúncios de teste não geram receita e não pedem o formulário de consentimento. Os IDs usados:
+
+| Uso | ID de teste do Google |
+| --- | --- |
+| Aplicativo | `ca-app-pub-3940256099942544~3347511713` |
+| Banner adaptável | `ca-app-pub-3940256099942544/9214589741` |
+| Intersticial (vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
+
+Para trocar pelos anúncios reais (que geram receita) em um build `release`, configure os valores abaixo no ambiente de build. Os dois primeiros vão juntos e desligam os IDs de teste; sem o terceiro, a release mostra os banners reais mas não o anúncio de download:
 
 ```bash
 export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
