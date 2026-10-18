@@ -40,6 +40,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - O gpt-oss 20B da OpenAI responde no formato "harmony"; o app converte o canal `analysis` em raciocínio expansível e o canal `final` em resposta.
 - Modelos cujo formato de conversa não está entre os embutidos no llama.cpp (como o Gemma 4) usam o template Jinja do próprio GGUF, em vez de derrubar o app. O raciocínio do Gemma 4 (`<|channel>thought … <channel|>`) aparece como raciocínio expansível.
 - Um modelo só vira `VERIFIED` e pode ser ativado após uma inferência real no dispositivo.
+- No chat, cada resposta mostra o logo da empresa do modelo que a escreveu (DeepSeek, Mistral, Google…), gravado junto com a resposta: trocar de modelo no meio da conversa não muda o logo das respostas anteriores. Empresas sem logo próprio no app e modelos desconhecidos aparecem com um ícone genérico.
+- A tela inicial usa o mesmo visual do catálogo **Baixar I.As offline** (cores, cards, rótulos e quadro de especificações), com os atalhos em grade, as IAs instaladas e a memória e o espaço livres do aparelho.
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.
 - Teste end-to-end dentro do app.
