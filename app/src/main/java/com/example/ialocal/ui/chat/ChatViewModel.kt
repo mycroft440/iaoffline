@@ -68,10 +68,15 @@ class ChatViewModel(
     // Generation lives in the app-scoped manager so leaving this screen never cancels an answer.
     private val generation = generationManager.session(conversationId)
     val isGenerating: StateFlow<Boolean> = generation.isGenerating
-    /** The message is waiting while other conversations are being answered. */
+    /** This conversation's turn waits for the answer in another conversation to end. */
     val waitingForSlot: StateFlow<Boolean> = generation.waitingForSlot
+    /** The message waiting for another conversation's answer; it joins the chat when its turn comes. */
+    val waitingMessage: StateFlow<QueuedChatMessage?> = generation.waitingMessage
     private val _isProcessingAttachments = MutableStateFlow(false); val isProcessingAttachments = _isProcessingAttachments.asStateFlow()
-    val queuedMessages: StateFlow<List<QueuedChatMessage>> = generation.queued
+    /** Messages not in the chat yet, in the order they will be answered (the waiting one first). */
+    val queuedMessages: StateFlow<List<QueuedChatMessage>> =
+        combine(generation.waitingMessage, generation.queued) { waiting, queued -> listOfNotNull(waiting) + queued }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
@@ -220,6 +225,23 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Deletes a conversation from the history, stopping its answer and dropping its queue first. When
+     * it is the one open here, [onDeletedCurrent] receives a new empty conversation to open instead.
+     */
+    fun deleteConversation(id: String, onDeletedCurrent: (String) -> Unit) {
+        viewModelScope.launch {
+            runCatching {
+                generationManager.discard(id).forEach(::deleteAttachmentFiles)
+                repository.deleteConversation(id)
+            }.onSuccess {
+                if (id == conversationId) onDeletedCurrent(repository.createConversation())
+            }.onFailure {
+                _error.value = it.message ?: "Não foi possível excluir a conversa."
+            }
+        }
+    }
+
     fun createConversation(onCreated: (String) -> Unit) {
         viewModelScope.launch {
             runCatching { repository.createConversation() }
@@ -262,9 +284,12 @@ class ChatViewModel(
         removed?.let { viewModelScope.launch(Dispatchers.IO) { runCatching { File(it.localPath).delete() } } }
     }
 
-    fun removeQueuedMessage(index: Int) {
-        val removed = generationManager.removeQueued(conversationId, index) ?: return
-        removed.attachments.forEach { attachment ->
+    fun removeQueuedMessage(messageId: String) {
+        generationManager.removeQueued(conversationId, messageId)?.let(::deleteAttachmentFiles)
+    }
+
+    private fun deleteAttachmentFiles(message: QueuedChatMessage) {
+        message.attachments.forEach { attachment ->
             viewModelScope.launch(Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
         }
     }

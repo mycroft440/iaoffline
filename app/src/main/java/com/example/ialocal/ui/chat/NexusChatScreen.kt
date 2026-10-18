@@ -628,7 +628,7 @@ private fun NexusChatBody(
     onStop: () -> Unit,
     onRerun: (String) -> Unit,
     onRemoveAttachment: (String) -> Unit,
-    onRemoveQueuedMessage: (Int) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit,
     onSuggestion: (String) -> Unit,
 ) {
     Column(modifier.background(NexusColors.Surface900)) {
@@ -1272,7 +1272,7 @@ private fun NexusComposer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
-    onRemoveQueuedMessage: (Int) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit,
 ) {
     Surface(
         color = NexusColors.Surface850.copy(alpha = 0.98f),
@@ -1323,7 +1323,7 @@ private fun NexusComposer(
                                         fontSize = 11.sp,
                                         color = NexusColors.TextSecondary,
                                     )
-                                    IconButton(onClick = { onRemoveQueuedMessage(index) }, modifier = Modifier.size(28.dp)) {
+                                    IconButton(onClick = { onRemoveQueuedMessage(queued.id) }, modifier = Modifier.size(28.dp)) {
                                         Icon(Icons.Default.Close, contentDescription = "Remover da fila", modifier = Modifier.size(13.dp), tint = NexusColors.TextMuted)
                                     }
                                 }

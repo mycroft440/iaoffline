@@ -6,13 +6,17 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.files.AttachmentContextBuilder
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -61,8 +65,10 @@ class LocalApiAiGateway(
             setRequestProperty("Accept", "text/event-stream")
             setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
         }
-        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { connection.disconnect() }
-        try {
+        // The reads below block and never notice a Stop, and while the model loads or reads a long
+        // prompt the server sends only keep-alive comments, which are not emitted. So the stop would
+        // wait for the first word of the answer; closing the connection ends the read right away.
+        closingOnCancel(close = connection::disconnect) {
             connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
             if (status !in 200..299) {
@@ -86,9 +92,31 @@ class LocalApiAiGateway(
                     if (content.isNotEmpty()) emit(content)
                 }
             }
-        } finally {
-            cancelHandle?.dispose()
-            connection.disconnect()
         }
     }.flowOn(Dispatchers.IO)
+}
+
+/**
+ * Runs [block], which may be blocked reading a connection, and calls [close] as soon as the caller
+ * is cancelled, so the read ends right away instead of when the next data arrives. A failure caused
+ * by that close ends as the cancellation. [close] also runs when [block] ends.
+ */
+internal suspend fun <T> closingOnCancel(close: () -> Unit, block: suspend CoroutineScope.() -> T): T = coroutineScope {
+    // Started undispatched so it is already waiting, even if the caller is cancelled at once.
+    val closeOnCancel = launch(start = CoroutineStart.UNDISPATCHED) {
+        try {
+            awaitCancellation()
+        } finally {
+            close()
+        }
+    }
+    try {
+        block()
+    } catch (failure: Exception) {
+        ensureActive()
+        throw failure
+    } finally {
+        closeOnCancel.cancel()
+        close()
+    }
 }

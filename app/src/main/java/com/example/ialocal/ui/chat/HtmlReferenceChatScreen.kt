@@ -370,7 +370,7 @@ private fun HtmlBody(
     queued: List<QueuedChatMessage>, generating: Boolean, processing: Boolean, recording: Boolean, deepThinkSupported: Boolean,
     onMenu: () -> Unit, onProfile: () -> Unit, onModel: () -> Unit, onNew: () -> Unit, onDraft: (String) -> Unit,
     onAttach: () -> Unit, onMic: () -> Unit, onSend: () -> Unit, onStop: () -> Unit,
-    onRerun: (String) -> Unit, onRemoveAttachment: (String) -> Unit, onRemoveQueued: (Int) -> Unit,
+    onRerun: (String) -> Unit, onRemoveAttachment: (String) -> Unit, onRemoveQueued: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxSize().background(HBg)) {
         HtmlTopBar(selectedAgent?.name ?: "Perfil", selectedModel?.name ?: "Modelo", onMenu, onProfile, onModel)
@@ -556,7 +556,7 @@ private fun HtmlComposer(
     draft: String, attachments: List<PendingAttachment>, queued: List<QueuedChatMessage>, generating: Boolean,
     processing: Boolean, recording: Boolean, agent: AgentEntity?, model: AiModelEntity?, deepThinkSupported: Boolean,
     onDraft: (String) -> Unit, onAttach: () -> Unit, onMic: () -> Unit, onSend: () -> Unit, onStop: () -> Unit,
-    onRemoveAttachment: (String) -> Unit, onRemoveQueued: (Int) -> Unit,
+    onRemoveAttachment: (String) -> Unit, onRemoveQueued: (String) -> Unit,
 ) {
     Surface(color = HBg) {
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 9.dp)) {
@@ -566,7 +566,7 @@ private fun HtmlComposer(
                         Surface(Modifier.fillMaxWidth(), RoundedCornerShape(9.dp), HCard, border = BorderStroke(1.dp, HBorder)) {
                             Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("${i + 1}", fontSize = 8.sp, color = Color(0xFF818CF8)); Spacer(Modifier.width(7.dp)); Text(q.content, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 9.sp, color = HText2)
-                                IconButton({ onRemoveQueued(i) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Remover", tint = HMuted, modifier = Modifier.size(12.dp)) }
+                                IconButton({ onRemoveQueued(q.id) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Remover", tint = HMuted, modifier = Modifier.size(12.dp)) }
                             }
                         }
                     }

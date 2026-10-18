@@ -13,6 +13,7 @@ import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.models.provider
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -20,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,12 +29,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 data class QueuedChatMessage(
     val content: String,
     val attachments: List<PendingAttachment> = emptyList(),
+    val id: String = UUID.randomUUID().toString(),
 )
 
 /** The model/profile the user had selected when a message was sent. */
@@ -61,8 +63,9 @@ class ChatGenerationManager(
     val activeGenerations: StateFlow<Int> = _activeGenerations.asStateFlow()
 
     /**
-     * At most [MAX_CONCURRENT_ANSWERS] conversations are answered at once. The semaphore is fair, so
-     * a message sent from a third conversation waits and is answered in the order it arrived.
+     * One answer at a time across all conversations: the model runs one answer at a time anyway, so
+     * a message sent from another conversation waits for the current answer to end instead of
+     * competing with it. The semaphore is fair, so waiting conversations go in the order they sent.
      */
     private val answerSlots = Semaphore(MAX_CONCURRENT_ANSWERS)
 
@@ -77,8 +80,14 @@ class ChatGenerationManager(
         /** The agent actually used by the latest generation in this conversation. */
         val resolvedAgentId: StateFlow<String?> = _resolvedAgentId.asStateFlow()
         internal val _waitingForSlot = MutableStateFlow(false)
-        /** True while this conversation's message waits for other conversations to be answered. */
+        /** True while this conversation's turn waits for another conversation's answer to end. */
         val waitingForSlot: StateFlow<Boolean> = _waitingForSlot.asStateFlow()
+        internal val _waitingMessage = MutableStateFlow<QueuedChatMessage?>(null)
+        /**
+         * The message waiting for another conversation's answer. It is not in the chat yet: it joins
+         * it when its turn comes, and until then it can be cancelled like the queued ones.
+         */
+        val waitingMessage: StateFlow<QueuedChatMessage?> = _waitingMessage.asStateFlow()
         internal var job: Job? = null
         internal var queuedTarget: GenerationTarget? = null
     }
@@ -102,10 +111,9 @@ class ChatGenerationManager(
             session.queuedTarget = target
         } else {
             launchGeneration(conversationId, session, target, "Falha ao gerar a resposta.") {
-                // The message shows up in the chat right away, even if it has to wait for a slot.
-                val historyBeforeSend = repository.getMessages(conversationId).map(::toAiMessage)
-                repository.addMessage(conversationId, MessageRole.USER, outgoing.content, outgoing.attachments)
-                awaitAnswerSlot(session) {
+                awaitAnswerSlot(session, waiting = outgoing) {
+                    val historyBeforeSend = repository.getMessages(conversationId).map(::toAiMessage)
+                    repository.addMessage(conversationId, MessageRole.USER, outgoing.content, outgoing.attachments)
                     generateAssistant(
                         conversationId,
                         session,
@@ -131,7 +139,7 @@ class ChatGenerationManager(
                 snapshot[it].message.role == MessageRole.USER.name
             } ?: return@launchGeneration
             val history = snapshot.take(userIndex + 1).map(::toAiMessage)
-            awaitAnswerSlot(session) { generateAssistant(conversationId, session, target, history, emptyList()) }
+            awaitAnswerSlot(session, waiting = null) { generateAssistant(conversationId, session, target, history, emptyList()) }
         }
     }
 
@@ -146,12 +154,30 @@ class ChatGenerationManager(
         }
     }
 
-    fun removeQueued(conversationId: String, index: Int): QueuedChatMessage? {
+    /** Cancels a message that is not in the chat yet; returns it so its attachments can be deleted. */
+    fun removeQueued(conversationId: String, messageId: String): QueuedChatMessage? {
         val session = sessions[conversationId] ?: return null
+        session._waitingMessage.value?.takeIf { it.id == messageId }?.let { waiting ->
+            // Ending the wait drops the message; the next queued one takes its place in line.
+            session.job?.cancel()
+            return waiting
+        }
         val current = session._queued.value
-        val removed = current.getOrNull(index) ?: return null
-        session._queued.value = current.filterIndexed { itemIndex, _ -> itemIndex != index }
+        val removed = current.firstOrNull { it.id == messageId } ?: return null
+        session._queued.value = current.filterNot { it.id == messageId }
         return removed
+    }
+
+    /**
+     * Stops a conversation that is being deleted and drops what it still had to send, so nothing
+     * writes it back afterwards. Returns the dropped messages so their attachments can be deleted.
+     */
+    suspend fun discard(conversationId: String): List<QueuedChatMessage> {
+        val session = sessions[conversationId] ?: return emptyList()
+        val dropped = listOfNotNull(session._waitingMessage.value) + session._queued.value
+        session._queued.value = emptyList()
+        session.job?.cancelAndJoin()
+        return dropped
     }
 
     fun clearError(conversationId: String) {
@@ -188,15 +214,22 @@ class ChatGenerationManager(
         }
     }
 
-    private suspend fun awaitAnswerSlot(session: Session, block: suspend () -> Unit) {
-        session._waitingForSlot.value = true
-        try {
-            answerSlots.withPermit {
+    /** Runs [block] once no other conversation is being answered; [waiting] is shown meanwhile. */
+    private suspend fun awaitAnswerSlot(session: Session, waiting: QueuedChatMessage?, block: suspend () -> Unit) {
+        if (!answerSlots.tryAcquire()) {
+            session._waitingForSlot.value = true
+            session._waitingMessage.value = waiting
+            try {
+                answerSlots.acquire()
+            } finally {
                 session._waitingForSlot.value = false
-                block()
+                session._waitingMessage.value = null
             }
+        }
+        try {
+            block()
         } finally {
-            session._waitingForSlot.value = false
+            answerSlots.release()
         }
     }
 
@@ -328,7 +361,7 @@ class ChatGenerationManager(
     }
 
     companion object {
-        const val MAX_CONCURRENT_ANSWERS = 2
+        const val MAX_CONCURRENT_ANSWERS = 1
         private const val UI_UPDATE_INTERVAL_MS = 200L
         /** Longer than any reasoning tag ("<|channel>thought", "</reasoning>"). */
         private const val TAG_WINDOW = 32

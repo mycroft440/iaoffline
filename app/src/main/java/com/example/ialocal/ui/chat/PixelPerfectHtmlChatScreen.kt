@@ -7,9 +7,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.FilledIconButton
@@ -77,6 +80,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -161,6 +165,8 @@ private val PMuted = Color(0xFF64748B)
 fun PixelPerfectHtmlChatScreen(
     viewModel: ChatViewModel,
     onOpenConversation: (String) -> Unit,
+    /** Opens another conversation in place of this one, which was deleted. */
+    onReplaceConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -174,6 +180,7 @@ fun PixelPerfectHtmlChatScreen(
     val attachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val generating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val waitingForSlot by viewModel.waitingForSlot.collectAsStateWithLifecycle()
+    val waitingMessage by viewModel.waitingMessage.collectAsStateWithLifecycle()
     val processing by viewModel.isProcessingAttachments.collectAsStateWithLifecycle()
     val queued by viewModel.queuedMessages.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -193,6 +200,7 @@ fun PixelPerfectHtmlChatScreen(
     var modelOpen by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     var pendingAudio by remember { mutableStateOf<android.net.Uri?>(null) }
+    var deleteTarget by remember { mutableStateOf<ConversationListItem?>(null) }
 
     val readyModels = remember(models) {
         models.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
@@ -296,6 +304,7 @@ fun PixelPerfectHtmlChatScreen(
                             onOpenConversation(id)
                             scope.launch { drawerState.close() }
                         },
+                        onDeleteConversation = { deleteTarget = it },
                         onSettings = {
                             onOpenSettings()
                             scope.launch { drawerState.close() }
@@ -316,6 +325,7 @@ fun PixelPerfectHtmlChatScreen(
                 queued = queued,
                 generating = generating,
                 waitingForSlot = waitingForSlot,
+                waitingMessage = waitingMessage,
                 processing = processing,
                 recording = recording,
                 deepThinkSupported = deepThinkSupported,
@@ -337,6 +347,34 @@ fun PixelPerfectHtmlChatScreen(
                 onRemoveQueued = viewModel::removeQueuedMessage,
             )
         }
+    }
+
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            containerColor = PSurface,
+            titleContentColor = PText,
+            textContentColor = PText2,
+            title = { Text("Excluir conversa?", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text(
+                    "\"${target.title}\" e todo o histórico serão removidos.",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteConversation(target.id, onDeletedCurrent = onReplaceConversation)
+                        deleteTarget = null
+                    },
+                ) { Text("Excluir", color = Color(0xFFF87171), fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("Cancelar", color = PText2) }
+            },
+        )
     }
 
     if (profileOpen) {
@@ -390,6 +428,7 @@ fun PixelPerfectHtmlChatScreen(
     val keepHistoryCallback = onOpenHistory
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ExactDrawer(
     conversations: List<ConversationListItem>,
@@ -400,6 +439,8 @@ private fun ExactDrawer(
     onClose: () -> Unit,
     onNew: () -> Unit,
     onConversation: (String) -> Unit,
+    /** Touch and hold a conversation to delete it. */
+    onDeleteConversation: (ConversationListItem) -> Unit,
     onSettings: () -> Unit,
 ) {
     val filtered = remember(conversations, query) {
@@ -520,7 +561,11 @@ private fun ExactDrawer(
                     items(groupItems, key = { it.id }) { item ->
                         val active = item.id == currentId
                         Surface(
-                            modifier = Modifier.fillMaxWidth().clickable { onConversation(item.id) },
+                            modifier = Modifier.fillMaxWidth().combinedClickable(
+                                onLongClickLabel = "Excluir conversa",
+                                onLongClick = { onDeleteConversation(item) },
+                                onClick = { onConversation(item.id) },
+                            ),
                             shape = RoundedCornerShape(12.dp),
                             color = if (active) Color(0xFF1E1B4B).copy(alpha = 0.40f) else PCard.copy(alpha = 0.60f),
                             border = BorderStroke(
@@ -646,6 +691,7 @@ private fun ExactChatBody(
     queued: List<QueuedChatMessage>,
     generating: Boolean,
     waitingForSlot: Boolean,
+    waitingMessage: QueuedChatMessage?,
     processing: Boolean,
     recording: Boolean,
     deepThinkSupported: Boolean,
@@ -660,7 +706,7 @@ private fun ExactChatBody(
     onStop: () -> Unit,
     onRerun: (String) -> Unit,
     onRemoveAttachment: (String) -> Unit,
-    onRemoveQueued: (Int) -> Unit,
+    onRemoveQueued: (String) -> Unit,
 ) {
     val sendingAssistantId = if (generating) {
         messages.lastOrNull {
@@ -734,7 +780,8 @@ private fun ExactChatBody(
                             ) { onRerun(item.message.id) }
                         }
                     }
-                    if (generating && sendingAssistantId == null) {
+                    // A message waiting for another conversation shows in the queue above the composer.
+                    if (generating && sendingAssistantId == null && waitingMessage == null) {
                         item { ExactLoading(provider = selectedProvider, waitingForSlot = waitingForSlot) }
                     }
                 }
@@ -745,7 +792,10 @@ private fun ExactChatBody(
             draft = draft,
             attachments = attachments,
             queued = queued,
+            waitingForOtherChat = waitingForSlot,
             generating = generating,
+            // Nothing is being answered here while the message waits; its X cancels it.
+            answering = generating && waitingMessage == null,
             processing = processing,
             recording = recording,
             agent = selectedAgent,
@@ -1092,9 +1142,19 @@ private fun ExactAssistantMessage(
                     fontSize = 12.sp,
                     color = PMuted,
                 )
+            } else if (!sending) {
+                // Stopped (or failed) before the model wrote anything, e.g. while it was still loading.
+                Text(
+                    if (item.message.status == MessageStatus.ERROR.name) "Não foi possível gerar esta resposta."
+                    else "Resposta interrompida antes de começar.",
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                    fontSize = 12.sp,
+                    color = PMuted,
+                )
             }
 
-            if (!sending && (parsed.answer.isNotBlank() || parsed.reasoning != null)) {
+            val wroteSomething = parsed.answer.isNotBlank() || parsed.reasoning != null
+            if (!sending) {
                 Row(
                     modifier = Modifier.padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1105,15 +1165,17 @@ private fun ExactAssistantMessage(
                         Text("·", fontSize = 12.sp, color = PMuted)
                     }
                     ExactInlineAction("Regenerar", enabled = canRerun, onClick = onRerun)
-                    Text("·", fontSize = 12.sp, color = PMuted)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Bolt, null, tint = PEmerald.copy(alpha = 0.80f), modifier = Modifier.size(11.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text(
-                            parsed.responseMs?.let { "Respondeu em ${formatExactDuration(it)}" } ?: "NPU Local",
-                            fontSize = 11.sp,
-                            color = PEmerald.copy(alpha = 0.80f),
-                        )
+                    if (wroteSomething) {
+                        Text("·", fontSize = 12.sp, color = PMuted)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Bolt, null, tint = PEmerald.copy(alpha = 0.80f), modifier = Modifier.size(11.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                parsed.responseMs?.let { "Respondeu em ${formatExactDuration(it)}" } ?: "NPU Local",
+                                fontSize = 11.sp,
+                                color = PEmerald.copy(alpha = 0.80f),
+                            )
+                        }
                     }
                 }
             }
@@ -1248,7 +1310,7 @@ private fun ExactLoading(provider: ModelProvider?, startedAt: Long? = null, wait
                 val elapsed = startedAt?.let { rememberElapsedMs(it) }
                 Text(
                     if (waitingForSlot) {
-                        "Na fila: aguardando outras conversas serem respondidas…"
+                        "Na fila: aguardando a I.A terminar em outra conversa…"
                     } else {
                         "Preparando a resposta…${elapsed?.let { " ${formatExactDuration(it)}" }.orEmpty()}"
                     },
@@ -1265,7 +1327,9 @@ private fun ExactComposer(
     draft: String,
     attachments: List<PendingAttachment>,
     queued: List<QueuedChatMessage>,
+    waitingForOtherChat: Boolean,
     generating: Boolean,
+    answering: Boolean,
     processing: Boolean,
     recording: Boolean,
     agent: AgentEntity?,
@@ -1277,7 +1341,7 @@ private fun ExactComposer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
-    onRemoveQueued: (Int) -> Unit,
+    onRemoveQueued: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().imePadding().background(PBg)) {
         if (attachments.isNotEmpty()) {
@@ -1321,23 +1385,7 @@ private fun ExactComposer(
         }
 
         AnimatedVisibility(queued.isNotEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                queued.take(2).forEachIndexed { index, queuedMessage ->
-                    Surface(shape = RoundedCornerShape(10.dp), color = PCard, border = BorderStroke(1.dp, PBorder)) {
-                        Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("${index + 1}", fontSize = 10.sp, color = Color(0xFF818CF8))
-                            Spacer(Modifier.width(8.dp))
-                            Text(queuedMessage.content, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = PText2)
-                            ExactSquareIconButton(size = 30.dp, onClick = { onRemoveQueued(index) }) {
-                                Icon(Icons.Default.Close, "Remover da fila", tint = PMuted, modifier = Modifier.size(13.dp))
-                            }
-                        }
-                    }
-                }
-            }
+            ExactQueue(queued = queued, waitingForOtherChat = waitingForOtherChat, onRemove = onRemoveQueued)
         }
 
         AnimatedVisibility(processing || recording) {
@@ -1417,7 +1465,7 @@ private fun ExactComposer(
                                     modifier = Modifier.size(14.dp),
                                 )
                             }
-                            if (generating) {
+                            if (answering) {
                                 Surface(
                                     modifier = Modifier.size(32.dp).clickable(onClick = onStop),
                                     shape = RoundedCornerShape(12.dp),
@@ -1467,6 +1515,122 @@ private fun ExactComposer(
                 Modifier.width(128.dp).height(4.dp).align(Alignment.CenterHorizontally)
                     .clip(CircleShape).background(Color(0xFF334155).copy(alpha = 0.60f))
             )
+        }
+    }
+}
+
+private val QueueRowHeight = 34.dp
+private val QueueRowGap = 5.dp
+/** Queued messages shown at once; the earlier ones are above them and scroll into view. */
+private const val VISIBLE_QUEUE_ROWS = 2
+
+/**
+ * Messages waiting for their turn, newest at the bottom next to the composer. Only the last two
+ * show; the earlier ones (answered first) are above and come into view by scrolling the list,
+ * and a badge says how many are hidden there.
+ */
+@Composable
+private fun ExactQueue(
+    queued: List<QueuedChatMessage>,
+    waitingForOtherChat: Boolean,
+    onRemove: (String) -> Unit,
+) {
+    // Reversed, so the list starts at its bottom: item 0 is the newest message.
+    val listState = rememberLazyListState()
+    val newestId = queued.lastOrNull()?.id
+    // A new message would otherwise open below the rows in view, since the list keeps its place.
+    LaunchedEffect(newestId) { if (newestId != null) listState.scrollToItem(0) }
+    val total = queued.size
+    val hiddenAbove by remember(total) {
+        derivedStateOf { (total - VISIBLE_QUEUE_ROWS - listState.firstVisibleItemIndex).coerceAtLeast(0) }
+    }
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
+        // Stays while there are more than two, so scrolling to the top does not resize the composer.
+        if (waitingForOtherChat || total > VISIBLE_QUEUE_ROWS) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (waitingForOtherChat) {
+                    CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.2.dp, color = PMuted)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Aguardando a I.A terminar em outra conversa",
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 10.5.sp,
+                        color = PMuted,
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                if (total > VISIBLE_QUEUE_ROWS) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = PIndigo.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.35f)),
+                    ) {
+                        Row(
+                            Modifier.padding(start = 6.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (hiddenAbove > 0) {
+                                Icon(Icons.Default.KeyboardArrowUp, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
+                                Spacer(Modifier.width(2.dp))
+                            }
+                            Text(
+                                if (hiddenAbove > 0) "+$hiddenAbove na fila acima" else "$total na fila",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFFC7D2FE),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxWidth()
+                .heightIn(max = QueueRowHeight * VISIBLE_QUEUE_ROWS + QueueRowGap * (VISIBLE_QUEUE_ROWS - 1)),
+            reverseLayout = true,
+            verticalArrangement = Arrangement.spacedBy(QueueRowGap, Alignment.Bottom),
+        ) {
+            items(queued.asReversed(), key = { it.id }) { message ->
+                ExactQueuedRow(message, onRemove = { onRemove(message.id) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExactQueuedRow(message: QueuedChatMessage, onRemove: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(QueueRowHeight),
+        shape = RoundedCornerShape(10.dp),
+        color = PCard,
+        border = BorderStroke(1.dp, PBorder),
+    ) {
+        Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Próxima →", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF818CF8))
+            Spacer(Modifier.width(8.dp))
+            if (message.attachments.isNotEmpty()) {
+                Icon(Icons.Default.AttachFile, null, tint = PMuted, modifier = Modifier.size(11.dp))
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                message.content,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontSize = 11.5.sp,
+                color = PText2,
+            )
+            ExactSquareIconButton(size = 30.dp, onClick = onRemove) {
+                Icon(Icons.Default.Close, "Cancelar mensagem da fila", tint = PMuted, modifier = Modifier.size(13.dp))
+            }
         }
     }
 }

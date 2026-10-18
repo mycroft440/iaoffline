@@ -407,6 +407,12 @@ private fun LocalAiApp(
                         }
                     }
                 },
+                onReplaceConversation = { targetId ->
+                    // The deleted conversation leaves the back stack, so Back does not return to it.
+                    navController.navigate("chat/$targetId") {
+                        popUpTo(entry.destination.id) { inclusive = true }
+                    }
+                },
                 onOpenHistory = {
                     if (!navController.popBackStack("home", inclusive = false)) {
                         navController.navigate("home")

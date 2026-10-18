@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 fun ChatWithDeepThinkScreen(
     viewModel: ChatViewModel,
     onOpenConversation: (String) -> Unit,
+    onReplaceConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -14,6 +15,7 @@ fun ChatWithDeepThinkScreen(
     PixelPerfectHtmlChatScreen(
         viewModel = viewModel,
         onOpenConversation = onOpenConversation,
+        onReplaceConversation = onReplaceConversation,
         onOpenHistory = onOpenHistory,
         onOpenModels = onOpenModels,
         onOpenSettings = onOpenSettings,
