@@ -12,6 +12,7 @@ import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.models.provider
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -240,6 +241,8 @@ class ChatGenerationManager(
             repository.setConversationAgent(conversationId, agent.id)
         }
 
+        // Shown next to the reply: the company of the model answering it.
+        val provider = modelRepository.getModel(agent.modelId)?.provider()
         val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
         val startedAt = System.currentTimeMillis()
         var reasoningStartedAt: Long? = null
@@ -248,7 +251,7 @@ class ChatGenerationManager(
         fun finalContent(): String {
             val now = System.currentTimeMillis()
             val reasoningMs = reasoningStartedAt?.let { start -> (reasoningEndedAt ?: now) - start }
-            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs)
+            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs, provider)
         }
         try {
             // Each saved update re-reads the conversation and redraws the chat, so the text is

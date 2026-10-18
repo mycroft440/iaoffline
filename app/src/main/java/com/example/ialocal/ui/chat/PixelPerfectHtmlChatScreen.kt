@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -90,8 +91,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -121,11 +124,14 @@ import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
+import com.example.ialocal.models.ModelProvider
+import com.example.ialocal.models.provider
 import com.example.ialocal.ui.formatMemoryGb
 import com.example.ialocal.ui.rememberLiveMemory
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
+import com.example.ialocal.ui.branding.logoRes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -660,6 +666,8 @@ private fun ExactChatBody(
     } else {
         null
     }
+    // The model answering now; also stands in for replies saved before their company was recorded.
+    val selectedProvider = remember(selectedModel) { selectedModel?.provider() }
     val bannerMessageIds = remember(messages) {
         ChatAdSchedule.assistantIdsWithBanner(
             messages,
@@ -700,10 +708,11 @@ private fun ExactChatBody(
                 ) {
                     items(messages, key = { it.message.id }) { item ->
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
-                            ExactLoading(startedAt = item.message.createdAt)
+                            ExactLoading(provider = selectedProvider, startedAt = item.message.createdAt)
                         } else {
                             ExactMessage(
                                 item = item,
+                                fallbackProvider = selectedProvider,
                                 canRerun = !generating,
                                 showAd = adsEnabled &&
                                     item.message.id in bannerMessageIds &&
@@ -711,7 +720,9 @@ private fun ExactChatBody(
                             ) { onRerun(item.message.id) }
                         }
                     }
-                    if (generating && sendingAssistantId == null) item { ExactLoading(waitingForSlot = waitingForSlot) }
+                    if (generating && sendingAssistantId == null) {
+                        item { ExactLoading(provider = selectedProvider, waitingForSlot = waitingForSlot) }
+                    }
                 }
             }
         }
@@ -882,11 +893,17 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
 }
 
 @Composable
-private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
+private fun ExactMessage(
+    item: MessageWithAttachments,
+    fallbackProvider: ModelProvider?,
+    canRerun: Boolean,
+    showAd: Boolean,
+    onRerun: () -> Unit,
+) {
     if (item.message.role == MessageRole.USER.name) {
         ExactUserMessage(item)
     } else {
-        ExactAssistantMessage(item, canRerun, showAd, onRerun)
+        ExactAssistantMessage(item, fallbackProvider, canRerun, showAd, onRerun)
     }
 }
 
@@ -950,7 +967,13 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 }
 
 @Composable
-private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
+private fun ExactAssistantMessage(
+    item: MessageWithAttachments,
+    fallbackProvider: ModelProvider?,
+    canRerun: Boolean,
+    showAd: Boolean,
+    onRerun: () -> Unit,
+) {
     val parsed = remember(item.message.content) { AssistantContent.parse(item.message.content) }
     val sending = item.message.status == MessageStatus.SENDING.name
     val thinking = sending && parsed.reasoningInProgress
@@ -964,16 +987,7 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(32.dp).padding(top = 1.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF181C2D),
-            border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.SmartToy, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
-            }
-        }
+        AssistantAvatar(parsed.provider ?: fallbackProvider, Modifier.padding(top = 1.dp))
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (parsed.reasoning != null) {
@@ -1125,23 +1139,38 @@ private fun ExactInlineAction(label: String, enabled: Boolean = true, onClick: (
     )
 }
 
+/** The logo of the company behind the model that answered; the robot when it is not known. */
 @Composable
-private fun ExactLoading(startedAt: Long? = null, waitingForSlot: Boolean = false) {
+private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.size(32.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF181C2D),
+        border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (provider != null) {
+                Image(
+                    painter = painterResource(provider.logoRes()),
+                    contentDescription = provider.brandName(),
+                    modifier = Modifier.size(20.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Icon(Icons.Default.SmartToy, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExactLoading(provider: ModelProvider?, startedAt: Long? = null, waitingForSlot: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(0.96f),
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(32.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF181C2D),
-            border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.SmartToy, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
-            }
-        }
+        AssistantAvatar(provider)
         Surface(shape = RoundedCornerShape(12.dp), color = PCard, border = BorderStroke(1.dp, PBorder)) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Color(0xFFC084FC))

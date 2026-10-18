@@ -60,6 +60,7 @@ import com.example.ialocal.models.AutomaticModelImportStep
 import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelProvider
+import com.example.ialocal.models.providerFromName
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.logoRes
 
@@ -711,29 +712,8 @@ private fun catalogModelFor(model: AiModelEntity, catalog: List<CatalogModel>): 
     catalog.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
         ?: catalog.firstOrNull { it.displayName.equals(model.name, ignoreCase = true) }
 
-private fun resolveProvider(model: AiModelEntity, catalogModel: CatalogModel?): ModelProvider? {
-    catalogModel?.provider?.let { return it }
-    val text = "${model.name} ${model.architecture.orEmpty()}".lowercase()
-    return when {
-        "deepseek" in text -> ModelProvider.DEEPSEEK
-        // Bonsai is built on Qwen, so it must be recognized before the Qwen check.
-        "bonsai" in text || "prism" in text -> ModelProvider.PRISMML
-        "minicpm" in text -> ModelProvider.OPENBMB
-        "mellum" in text -> ModelProvider.JETBRAINS
-        "ornith" in text -> ModelProvider.ORNITH
-        "qwen" in text || "alibaba" in text -> ModelProvider.ALIBABA
-        "llama" in text || "meta" in text -> ModelProvider.META
-        "gemma" in text || "google" in text -> ModelProvider.GOOGLE
-        "mistral" in text || "ministral" in text || "mixtral" in text -> ModelProvider.MISTRAL
-        "phi" in text || "microsoft" in text -> ModelProvider.MICROSOFT
-        "granite" in text || "ibm" in text -> ModelProvider.IBM
-        "nemotron" in text || "nvidia" in text -> ModelProvider.NVIDIA
-        "gpt-oss" in text || "gpt_oss" in text || "openai" in text -> ModelProvider.OPENAI
-        "olmo" in text || "ai2" in text -> ModelProvider.AI2
-        "liquid" in text || Regex("(^|[^a-z])lfm([^a-z]|$)").containsMatchIn(text) -> ModelProvider.LIQUID
-        else -> null
-    }
-}
+private fun resolveProvider(model: AiModelEntity, catalogModel: CatalogModel?): ModelProvider? =
+    catalogModel?.provider ?: providerFromName("${model.name} ${model.architecture.orEmpty()}")
 
 private fun resolveParameter(model: AiModelEntity, catalogModel: CatalogModel?): String? {
     catalogModel?.let { return formatParameter(it.totalParametersBillions) }
