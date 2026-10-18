@@ -117,6 +117,7 @@ import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.ConversationListItem
+import com.example.ialocal.data.MessageEntity
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
@@ -671,6 +672,15 @@ private fun ExactChatBody(
     }
     // The model answering now; also stands in for replies saved before their company was recorded.
     val selectedProvider = remember(selectedModel) { selectedModel?.provider() }
+    // The code block open full screen; it is looked up again as the reply grows, so it follows the code being written.
+    var openCanvas by remember { mutableStateOf<CanvasRef?>(null) }
+    val canvas = remember(openCanvas, messages) {
+        openCanvas?.let { ref ->
+            messages.firstOrNull { it.message.id == ref.messageId }
+                ?.let { CodeCanvases.at(AssistantContent.parse(it.message.content).answer, ref.codeIndex) }
+        }
+    }
+    canvas?.let { CodeCanvasDialog(it, onDismiss = { openCanvas = null }) }
     val bannerMessageIds = remember(messages) {
         ChatAdSchedule.assistantIdsWithBanner(
             messages,
@@ -716,6 +726,7 @@ private fun ExactChatBody(
                             ExactMessage(
                                 item = item,
                                 fallbackProvider = selectedProvider,
+                                onOpenCanvas = { openCanvas = it },
                                 canRerun = !generating,
                                 showAd = adsEnabled &&
                                     item.message.id in bannerMessageIds &&
@@ -899,6 +910,7 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
 private fun ExactMessage(
     item: MessageWithAttachments,
     fallbackProvider: ModelProvider?,
+    onOpenCanvas: (CanvasRef) -> Unit,
     canRerun: Boolean,
     showAd: Boolean,
     onRerun: () -> Unit,
@@ -906,7 +918,7 @@ private fun ExactMessage(
     if (item.message.role == MessageRole.USER.name) {
         ExactUserMessage(item)
     } else {
-        ExactAssistantMessage(item, fallbackProvider, canRerun, showAd, onRerun)
+        ExactAssistantMessage(item, fallbackProvider, onOpenCanvas, canRerun, showAd, onRerun)
     }
 }
 
@@ -973,6 +985,7 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 private fun ExactAssistantMessage(
     item: MessageWithAttachments,
     fallbackProvider: ModelProvider?,
+    onOpenCanvas: (CanvasRef) -> Unit,
     canRerun: Boolean,
     showAd: Boolean,
     onRerun: () -> Unit,
@@ -1065,11 +1078,12 @@ private fun ExactAssistantMessage(
             if (parsed.answer.isNotBlank()) {
                 if (showAd) {
                     val (beforeAd, afterAd) = remember(parsed.answer) { ChatAdSchedule.splitForBanner(parsed.answer) }
-                    if (beforeAd.isNotBlank()) ExactAnswerBubble(beforeAd)
+                    // The banner goes before the first code block, so the code numbering of afterAd starts at 0.
+                    if (beforeAd.isNotBlank()) ExactAnswerContent(beforeAd, item.message, onOpenCanvas)
                     InlineAdBanner(enabled = true)
-                    if (afterAd.isNotBlank()) ExactAnswerBubble(afterAd)
+                    if (afterAd.isNotBlank()) ExactAnswerContent(afterAd, item.message, onOpenCanvas)
                 } else {
-                    ExactAnswerBubble(parsed.answer)
+                    ExactAnswerContent(parsed.answer, item.message, onOpenCanvas)
                 }
             } else if (!sending && parsed.reasoning != null) {
                 Text(
@@ -1118,6 +1132,27 @@ private fun rememberElapsedMs(startedAt: Long): Long {
         }
     }
     return (now - startedAt).coerceAtLeast(0L)
+}
+
+/** Prose in bubbles; long or runnable code as canvas cards that open full screen, short code inline. */
+@Composable
+private fun ExactAnswerContent(text: String, message: MessageEntity, onOpenCanvas: (CanvasRef) -> Unit) {
+    val parts = remember(text) { splitAnswer(text) }
+    var codeIndex = 0
+    parts.forEach { part ->
+        when (part) {
+            is AnswerPart.Prose -> ExactAnswerBubble(part.text)
+            is AnswerPart.Code -> {
+                val index = codeIndex++
+                if (CodeCanvases.isCanvas(part)) {
+                    val canvas = remember(part) { CodeCanvases.of(part) }
+                    CodeCanvasCard(canvas, message.createdAt) { onOpenCanvas(CanvasRef(message.id, index)) }
+                } else {
+                    InlineCodeBlock(part)
+                }
+            }
+        }
+    }
 }
 
 @Composable
