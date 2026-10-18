@@ -16,11 +16,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -39,6 +42,7 @@ import com.example.ialocal.knowledge.WikipediaPackStatus
 import com.example.ialocal.models.AutomaticModelImportEvent
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.models.PublicModelDownloads
+import com.example.ialocal.runtime.RuntimeStatus
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.chat.ChatWithDeepThinkScreen
 import com.example.ialocal.ui.codeeditor.CodeEditorScreen
@@ -65,6 +69,21 @@ class MainActivity : ComponentActivity() {
     private var pendingStorageAction: (() -> Unit)? = null
     private var lastExitReport by mutableStateOf<LastExitReport?>(null)
 
+    // Coming back from a screen the app opened itself (a file picker, Android settings, an ad's
+    // page) is not a return to the app, so it never shows the app open ad.
+    private var returningFromOwnActivity = false
+    private var skipReplayedForeground = false
+    private val appForegroundObserver = LifecycleEventObserver { _, event ->
+        if (event != Lifecycle.Event.ON_START) return@LifecycleEventObserver
+        when {
+            skipReplayedForeground -> skipReplayedForeground = false
+            !returningFromOwnActivity -> {
+                val status = container.modelManager.runtimeState.value.status
+                adsManager.onAppForeground(this, aiIdle = status == RuntimeStatus.IDLE || status == RuntimeStatus.ERROR)
+            }
+        }
+    }
+
     // ComponentActivity owns the Activity Result registry; this activity does not use Fragment.
     @SuppressLint("InvalidFragmentVersionForActivityResult")
     private val storageAccessLauncher = registerForActivityResult(
@@ -81,7 +100,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         container = (application as LocalAiApplication).container
-        adsManager = AdsManager(applicationContext)
+        adsManager = container.adsManager
+        val processLifecycle = ProcessLifecycleOwner.get().lifecycle
+        // A recreated activity registers while the app is in the foreground; that replays ON_START.
+        skipReplayedForeground = processLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        processLifecycle.addObserver(appForegroundObserver)
         lifecycleScope.launch(Dispatchers.IO) {
             container.modelRepository.getModels().forEach { model ->
                 runCatching { container.modelRepository.ensureStarterProfiles(model.id) }
@@ -99,6 +122,7 @@ class MainActivity : ComponentActivity() {
                     onScanStorage = { requestStorageScan(AutomaticModelScanMode.FULL) },
                     onEnsureStorageAccess = ::requestStorageAccess,
                     onPrivacyOptions = { adsManager.showPrivacyOptions(this) },
+                    onDownloadStarted = ::showDownloadAd,
                     onExitApp = { finish() },
                 )
                 lastExitReport?.let { report ->
@@ -143,6 +167,24 @@ class MainActivity : ComponentActivity() {
         adsManager.start(this)
     }
 
+    override fun onResume() {
+        super.onResume()
+        returningFromOwnActivity = false
+    }
+
+    override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(appForegroundObserver)
+        super.onDestroy()
+    }
+
+    // Every activity the app opens goes through here, including the Activity Result API's launches.
+    @Deprecated("Deprecated in ComponentActivity")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        returningFromOwnActivity = true
+        @Suppress("DEPRECATION")
+        super.startActivityForResult(intent, requestCode, options)
+    }
+
     /** Tells the user, on any screen, when an AI is found in storage and when it is imported. */
     private fun showStorageImportNotices() {
         lifecycleScope.launch {
@@ -156,6 +198,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Full-screen ad after a download starts. Skipped while an answer is being generated: the ad's
+     * video player would take RAM from the model and could get its process stopped mid-answer.
+     */
+    private fun showDownloadAd() {
+        if (container.chatGenerationManager.activeGenerations.value > 0) return
+        adsManager.showDownloadAd(this)
     }
 
     private fun runInitialStorageScanOnce() {
@@ -203,6 +254,7 @@ private fun LocalAiApp(
     onScanStorage: () -> Unit,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
     onPrivacyOptions: () -> Unit,
+    onDownloadStarted: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -279,6 +331,7 @@ private fun LocalAiApp(
             )
             CodeEditorScreen(
                 viewModel = vm,
+                adsEnabled = adsManager.adsReady,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -294,10 +347,12 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
+            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
             GroupedOfflineModelsScreen(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
                 onEnsureStorageAccess = onEnsureStorageAccess,
+                onDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -313,6 +368,7 @@ private fun LocalAiApp(
                         navController.navigate("ai-home")
                     }
                 },
+                adsEnabled = adsManager.adsReady,
             )
         }
 
@@ -378,9 +434,11 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
+            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
             ModelsScreen(
                 viewModel = vm,
                 onEnsureStorageAccess = onEnsureStorageAccess,
+                onDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -406,6 +464,7 @@ private fun LocalAiApp(
                 wikipediaSummary = wikipediaSummary(wikipediaStates),
                 onOpenCompilers = { navController.navigate("compilers") },
                 onOpenWikipedia = { navController.navigate("wikipedia") },
+                adsEnabled = adsManager.adsReady,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -424,8 +483,10 @@ private fun LocalAiApp(
         }
 
         composable("wikipedia") {
+            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
             WikipediaScreen(
                 wikipedia = container.offlineWikipedia,
+                onDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }

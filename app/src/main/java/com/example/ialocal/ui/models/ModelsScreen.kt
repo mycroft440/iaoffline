@@ -74,7 +74,12 @@ import com.example.ialocal.ui.branding.catalogProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelsScreen(viewModel: ModelsViewModel, onEnsureStorageAccess: (() -> Unit) -> Unit, onBack: () -> Unit) {
+fun ModelsScreen(
+    viewModel: ModelsViewModel,
+    onEnsureStorageAccess: (() -> Unit) -> Unit,
+    onDownloadStarted: () -> Unit,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val models by viewModel.models.collectAsStateWithLifecycle()
     val server by viewModel.serverState.collectAsStateWithLifecycle()
@@ -178,7 +183,9 @@ fun ModelsScreen(viewModel: ModelsViewModel, onEnsureStorageAccess: (() -> Unit)
                         installed = models.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) },
                         anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
                         onDownload = {
-                            onEnsureStorageAccess { viewModel.downloadCatalogModel(catalogModel.id) }
+                            onEnsureStorageAccess {
+                                if (viewModel.downloadCatalogModel(catalogModel.id)) onDownloadStarted()
+                            }
                         },
                         onCancel = viewModel::cancelDownload,
                     )

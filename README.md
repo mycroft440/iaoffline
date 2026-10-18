@@ -40,6 +40,9 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - O gpt-oss 20B da OpenAI responde no formato "harmony"; o app converte o canal `analysis` em raciocínio expansível e o canal `final` em resposta.
 - Modelos cujo formato de conversa não está entre os embutidos no llama.cpp (como o Gemma 4) usam o template Jinja do próprio GGUF, em vez de derrubar o app. O raciocínio do Gemma 4 (`<|channel>thought … <channel|>`) aparece como raciocínio expansível.
 - Um modelo só vira `VERIFIED` e pode ser ativado após uma inferência real no dispositivo.
+- No chat, cada resposta mostra o logo da empresa do modelo que a escreveu (DeepSeek, Mistral, Google…), gravado junto com a resposta: trocar de modelo no meio da conversa não muda o logo das respostas anteriores. Empresas sem logo próprio no app e modelos desconhecidos aparecem com um ícone genérico.
+- **Canvas de código no chat**, como o do Gemini: o código que a IA escreve aparece na conversa como um card com título, linguagem, número de linhas e botão **Abrir** (blocos curtos que não rodam, como um comando de terminal, continuam no texto). **Abrir** mostra o código em tela cheia com duas abas: **Código**, com números de linha, e **Ver resultado**, que roda HTML (sites), SVG e JavaScript (com o console na tela) no navegador do próprio Android, sem internet, a não ser que a página carregue algo de fora. O título do card vem do `<title>` da página. Enquanto a IA escreve, o card mostra as linhas já escritas e o canvas aberto acompanha o código. O perfil **Programador** pede sites num único arquivo HTML, com CSS e JavaScript embutidos, para o resultado abrir completo.
+- A tela inicial usa o mesmo visual do catálogo **Baixar I.As offline** (cores, cards, rótulos e quadro de especificações), com os atalhos em grade, as IAs instaladas e a memória e o espaço livres do aparelho.
 - API autenticada com health/models/chat/SSE, escutando somente em `127.0.0.1`.
 - Servidor limitado a 8 conexões.
 - Teste end-to-end dentro do app.
@@ -50,13 +53,13 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
-Os banners de publicidade usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece.
+Os anúncios usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece e o anúncio de download não aparece.
 
 Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os perfis **Programador** e **Sem censura** aparecem no seletor de perfil do chat mesmo antes de haver um modelo e também são gerenciados em **Configurações**, acessível pelo menu das três barras no chat.
 
 As respostas da I.A continuam sendo geradas quando o app vai para segundo plano, quando a tela é desligada ou quando o usuário sai da conversa. No máximo duas conversas são respondidas ao mesmo tempo; uma mensagem enviada de uma terceira conversa aparece como **Na fila** e é respondida na ordem de chegada assim que uma das outras termina. Enquanto houver uma resposta ou mensagens na fila, um serviço em primeiro plano mostra a notificação **Gerando resposta…** (com a ação **Parar**) e mantém a CPU ativa; ele é encerrado automaticamente quando a geração termina.
 
-Modelos que raciocinam mostram o raciocínio enquanto ele é gerado, num bloco **Raciocínio** que pode ser expandido ou recolhido; ao terminar, o bloco se recolhe e exibe quanto tempo o modelo raciocinou, e cada resposta mostra o tempo total (**Respondeu em …**). O seletor **DeepThink** aparece nos modelos em que o raciocínio pode ser ligado e desligado. Desligado, a resposta sai bem mais rápido, o que pesa muito no celular:
+Modelos que raciocinam mostram o raciocínio enquanto ele é gerado, num bloco **Raciocínio** que exibe só as duas últimas linhas escritas (tocar em **Mostrar tudo** abre o raciocínio inteiro); ao terminar, o bloco se recolhe e exibe quanto tempo o modelo raciocinou, e cada resposta mostra o tempo total (**Respondeu em …**). O seletor **DeepThink** aparece nos modelos em que o raciocínio pode ser ligado e desligado. Desligado, a resposta sai bem mais rápido, o que pesa muito no celular:
   - Qwen3 e Nemotron Nano v2: o app envia `/no_think`; começam com o DeepThink desligado.
   - Qwen3.5, 3.6 e 3.8, Bonsai 2 e Bonsai 27B, Ornith, MiniCPM5 e Granite 4.2: a resposta é pré-preenchida com um bloco de raciocínio vazio, como os templates desses modelos fazem; começam com o DeepThink ligado, como o próprio modelo.
   - Gemma 4: o app desliga o `enable_thinking` do template; começa ligado.
@@ -120,18 +123,51 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 ## Build
 
-### Banners AdMob
+### Anúncios AdMob
 
-Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
+**Anúncio de download (intersticial em tela cheia, vídeo ou imagem).** Ao tocar em **Instalar I.A** no catálogo, ou ao confirmar o download de uma edição da **Wikipedia Offline**, o download começa e um anúncio em tela cheia aparece. O download continua em segundo plano enquanto o anúncio passa, então a pessoa não perde tempo esperando. É o formato que mais rende sem pedir nada ao usuário, e o início de um download é a pausa natural que as regras do AdMob pedem para intersticiais. Detalhes:
 
-Para habilitar anúncios reais em um build `release`, configure os dois valores abaixo no ambiente de build. Sem ambos, a release não solicita anúncios:
+- O anúncio é carregado quando o catálogo ou a tela da Wikipédia abre, para aparecer na hora; um anúncio carregado vale por uma hora e é trocado antes disso.
+- No máximo um a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`), somando IAs e Wikipédia: quem escolhe vários downloads seguidos vê um só anúncio. O limite sobrevive ao fechamento do app.
+- Só novos downloads mostram o anúncio; **Continuar** e **Tentar novamente** não.
+- Não aparece enquanto uma resposta está sendo gerada: o player de vídeo tiraria RAM do modelo e poderia fazer o Android encerrar o processo da IA no meio da resposta.
+- Sem conexão, sem consentimento ou sem anúncio carregado, o download começa normalmente, sem anúncio.
+
+Para ganhar o máximo com esse anúncio, crie no AdMob um bloco do tipo **Intersticial** com os dois tipos de anúncio ligados (**Display** e **Vídeo**): os dois competem no leilão e ganha o que paga mais. Mais redes disputando cada exibição aumentam o valor pago: a mediação com lances (bidding) do AdMob aceita redes como Meta Audience Network, AppLovin, Unity Ads e Liftoff, mas cada uma precisa do seu adaptador no app (uma dependência `com.google.ads.mediation:…` no `app/build.gradle.kts`), que ainda não foi adicionado.
+
+**Anúncio de abertura (tela cheia).** Aparece quando a pessoa volta ao app (pelo ícone ou pelos recentes), com estas regras (`AppOpenAdPacing`):
+
+- Nunca nas duas primeiras aberturas do app; a partir da terceira.
+- No máximo um a cada 4 horas, e nunca até 3 minutos depois do anúncio de download.
+- Só quando nenhuma IA está na memória (nem carregando, nem respondendo): o vídeo do anúncio tiraria RAM do modelo.
+- Voltar de uma tela que o próprio app abriu (seletor de arquivos, configurações do Android para a permissão de armazenamento, a página de um anúncio) não conta como abertura.
+- Na primeira abertura depois de o Android encerrar o app, o anúncio ainda não está carregado e não aparece. Ele é carregado só quando a próxima volta pode mostrá-lo, para não pedir anúncios que ninguém vê.
+
+**Anúncios nativos no catálogo.** Em **Baixar I.As offline**, um card de anúncio com o visual do catálogo (selo **Anúncio**, ícone, título, imagem ou vídeo e botão) aparece depois da 2ª empresa e a cada 4 empresas seguintes (`CatalogAdSlots`), nunca depois da última. Cada card é carregado uma vez por visita à tela: rolar para longe e voltar não pede outro anúncio. Com o filtro de uma empresa só, não há card.
+
+**Banners.** Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). O **Histórico de conversas** e as **Configurações** têm um banner fixo embaixo; no **Canvas de código** o banner fica no fim do conteúdo, para nunca ficar colado ao teclado. No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
+
+**IDs de teste (configuração atual).** Enquanto `ADMOB_APP_ID` não estiver configurado, a release também usa os IDs de teste do Google, então todos os anúncios já funcionam e mostram o selo "Test Ad". Anúncios de teste não geram receita e não pedem o formulário de consentimento. Os IDs usados:
+
+| Uso | ID de teste do Google |
+| --- | --- |
+| Aplicativo | `ca-app-pub-3940256099942544~3347511713` |
+| Banner adaptável | `ca-app-pub-3940256099942544/9214589741` |
+| Intersticial (vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
+| Nativo | `ca-app-pub-3940256099942544/2247696110` |
+| Abertura do app | `ca-app-pub-3940256099942544/9257395921` |
+
+Para trocar pelos anúncios reais (que geram receita) em um build `release`, configure os valores abaixo no ambiente de build. Os dois primeiros vão juntos e desligam os IDs de teste; cada um dos outros liga o formato correspondente (sem ele, a release real não mostra aquele formato):
 
 ```bash
 export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
 export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
+export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # anúncio de download
+export ADMOB_NATIVE_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN'         # cards do catálogo
+export ADMOB_APP_OPEN_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/AAAAAAAAAA'       # abertura do app
 ```
 
-Use os IDs da sua conta AdMob. No GitHub Actions, cadastre os mesmos valores como secrets `ADMOB_APP_ID` e `ADMOB_BANNER_AD_UNIT_ID`; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste os banners e o fluxo de consentimento em um aparelho antes de publicar o APK.
+Use os IDs da sua conta AdMob (no AdMob, crie blocos dos tipos **Intersticial**, **Nativo avançado** e **Abertura de app**). No GitHub Actions, cadastre os mesmos valores como secrets com os mesmos nomes; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste cada formato e o fluxo de consentimento em um aparelho antes de publicar o APK.
 
 Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 

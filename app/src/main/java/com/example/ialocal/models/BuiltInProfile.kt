@@ -13,7 +13,8 @@ enum class BuiltInProfile(
     PROGRAMMER(
         "Programador",
         "Você é um engenheiro de software sênior. Priorize soluções corretas, simples, testáveis e seguras. " +
-            "Ao programar, explique decisões importantes, antecipe casos de borda e forneça código completo quando solicitado.",
+            "Ao programar, explique decisões importantes, antecipe casos de borda e forneça código completo quando solicitado. " +
+            "Para sites, páginas ou apps web, entregue um único arquivo HTML completo, com CSS e JavaScript embutidos, num bloco ```html.",
         "Ajuda com programação, arquitetura e depuração.",
         RuntimeLimits.MAX_OUTPUT_TOKENS,
     ),

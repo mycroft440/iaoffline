@@ -22,13 +22,16 @@ class AdsManager(private val appContext: Context) {
 
     private val consentInformation by lazy { UserMessagingPlatform.getConsentInformation(appContext) }
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val downloadInterstitial = DownloadInterstitial(appContext)
+    private val appOpenAds = AppOpenAds(appContext)
     private var initializing = false
     private var initialized = false
 
     fun start(activity: Activity) {
         if (BuildConfig.BANNER_AD_UNIT_ID.isBlank()) return
 
-        if (BuildConfig.DEBUG) {
+        // Google's test ads need no consent form: there is no AdMob privacy message for test IDs.
+        if (BuildConfig.TEST_ADS) {
             initializeAds()
             return
         }
@@ -48,6 +51,26 @@ class AdsManager(private val appContext: Context) {
                 updateAdsAccess()
             },
         )
+    }
+
+    /** Loads the download ad ahead of time, when the catalog opens. */
+    fun preloadDownloadAd() {
+        if (adsReady) downloadInterstitial.preload()
+    }
+
+    /** Full-screen ad right after the user starts downloading an AI; the download goes on behind it. */
+    fun showDownloadAd(activity: Activity) {
+        if (adsReady) downloadInterstitial.show(activity)
+    }
+
+    /**
+     * The user came back to the app. [aiIdle] is false while an AI is loaded, loading or answering:
+     * the ad's video player would then take RAM the model needs.
+     */
+    fun onAppForeground(activity: Activity, aiIdle: Boolean) {
+        appOpenAds.countOpening()
+        if (!adsReady) return
+        if (aiIdle) appOpenAds.show(activity, downloadInterstitial.lastShownAtMs) else appOpenAds.preload()
     }
 
     fun showPrivacyOptions(activity: Activity) {
@@ -73,7 +96,7 @@ class AdsManager(private val appContext: Context) {
 
     private fun initializeAds() {
         if (initialized) {
-            adsReady = BuildConfig.DEBUG || consentInformation.canRequestAds()
+            refreshAdsReady()
             return
         }
         if (initializing) return
@@ -85,7 +108,7 @@ class AdsManager(private val appContext: Context) {
                         mainHandler.post {
                             initializing = false
                             initialized = true
-                            adsReady = BuildConfig.DEBUG || consentInformation.canRequestAds()
+                            refreshAdsReady()
                         }
                     }
                 }.onFailure {
@@ -94,5 +117,10 @@ class AdsManager(private val appContext: Context) {
             },
             "ia-offline-admob-init",
         ).start()
+    }
+
+    private fun refreshAdsReady() {
+        adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
+        if (adsReady) appOpenAds.preload()
     }
 }

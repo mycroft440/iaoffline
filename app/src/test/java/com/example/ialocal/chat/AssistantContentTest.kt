@@ -1,5 +1,6 @@
 package com.example.ialocal.chat
 
+import com.example.ialocal.models.ModelProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -56,5 +57,24 @@ class AssistantContentTest {
         assertEquals("Pensando", parsed.reasoning)
         assertEquals("Brasília.", parsed.answer)
         assertFalse(parsed.reasoningInProgress)
+    }
+
+    @Test
+    fun recordsTheCompanyOfTheModelThatAnswered() {
+        val stored = AssistantContent.withTimings("Oi", responseMs = 1, reasoningMs = null, provider = ModelProvider.DEEPSEEK)
+        val parsed = AssistantContent.parse(stored)
+        assertEquals(ModelProvider.DEEPSEEK, parsed.provider)
+        assertEquals("Oi", parsed.answer)
+        assertEquals("Oi", AssistantContent.answerForHistory(stored))
+        // A regenerated reply records the new model, not both.
+        val regenerated = AssistantContent.withTimings(stored, responseMs = 2, reasoningMs = null, provider = ModelProvider.MISTRAL)
+        assertEquals(ModelProvider.MISTRAL, AssistantContent.parse(regenerated).provider)
+        assertEquals(1, Regex("nexus_provider").findAll(regenerated).count())
+    }
+
+    @Test
+    fun repliesSavedBeforeHaveNoCompany() {
+        assertNull(AssistantContent.parse("Resposta\n\n<!--nexus_response_ms:10-->").provider)
+        assertNull(AssistantContent.parse("Resposta<!--nexus_provider:DESCONHECIDA-->").provider)
     }
 }

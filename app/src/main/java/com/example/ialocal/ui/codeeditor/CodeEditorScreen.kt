@@ -43,11 +43,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CodeEditorScreen(
     viewModel: CodeEditorViewModel,
+    adsEnabled: Boolean,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -211,6 +213,9 @@ fun CodeEditorScreen(
                     )
                 }
             }
+
+            // At the end of the content rather than pinned, so it never sits next to the keyboard.
+            item { InlineAdBanner(enabled = adsEnabled) }
 
             item { Spacer(Modifier.height(24.dp)) }
         }

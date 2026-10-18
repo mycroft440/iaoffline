@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.ConversationListItem
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,12 +60,20 @@ fun HomeScreen(
     onOpenConversation: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenModels: () -> Unit,
+    adsEnabled: Boolean,
 ) {
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     var renameTarget by remember { mutableStateOf<ConversationListItem?>(null) }
     var deleteTarget by remember { mutableStateOf<ConversationListItem?>(null) }
 
     Scaffold(
+        bottomBar = {
+            InlineAdBanner(
+                enabled = adsEnabled,
+                anchored = true,
+                modifier = Modifier.navigationBarsPadding().padding(horizontal = 12.dp),
+            )
+        },
         topBar = {
             TopAppBar(
                 title = { Text("I.A Off-line") },

@@ -1,8 +1,12 @@
 package com.example.ialocal.chat
 
+import com.example.ialocal.models.ModelProvider
+
 /**
- * A stored assistant message: optional reasoning, the answer, and the timings appended after
- * generation as HTML comments (`<!--nexus_response_ms:N-->`, `<!--nexus_reasoning_ms:N-->`).
+ * A stored assistant message: optional reasoning, the answer, and what is appended after
+ * generation as HTML comments: the timings (`<!--nexus_response_ms:N-->`,
+ * `<!--nexus_reasoning_ms:N-->`) and the company of the model that answered
+ * (`<!--nexus_provider:DEEPSEEK-->`).
  */
 data class AssistantContent(
     /** Null when the message has no reasoning block; may be blank while reasoning just started. */
@@ -12,9 +16,12 @@ data class AssistantContent(
     val reasoningInProgress: Boolean,
     val reasoningMs: Long?,
     val responseMs: Long?,
+    /** Null for replies saved before it was recorded, still being written or from an unknown model. */
+    val provider: ModelProvider? = null,
 ) {
     companion object {
         private val METADATA = Regex("(?is)<!--nexus_(reasoning|response)_ms:(\\d+)-->")
+        private val PROVIDER = Regex("(?is)<!--nexus_provider:(\\w+)-->")
         private val OPEN = Regex("(?is)<(?:think(?:ing)?|reasoning|analysis)>|\\[THINK]|<\\|channel>thought")
         private val CLOSE = Regex("(?is)</(?:think(?:ing)?|reasoning|analysis)>|\\[/THINK]|<channel\\|>")
 
@@ -25,10 +32,12 @@ data class AssistantContent(
                 val value = match.groupValues[2].toLongOrNull()
                 if (match.groupValues[1].equals("reasoning", true)) reasoningMs = value else responseMs = value
             }
-            val clean = METADATA.replace(raw, "").trim()
+            val providerName = PROVIDER.find(raw)?.groupValues?.get(1)
+            val provider = ModelProvider.entries.firstOrNull { it.name == providerName }
+            val clean = PROVIDER.replace(METADATA.replace(raw, ""), "").trim()
             val open = OPEN.find(clean)
             val close = CLOSE.find(clean)
-            return when {
+            val content = when {
                 open != null && close != null && close.range.first > open.range.first -> AssistantContent(
                     reasoning = clean.substring(open.range.last + 1, close.range.first).trim(),
                     answer = (clean.substring(0, open.range.first) + clean.substring(close.range.last + 1)).trim(),
@@ -53,13 +62,15 @@ data class AssistantContent(
                 )
                 else -> AssistantContent(null, clean, false, reasoningMs, responseMs)
             }
+            return content.copy(provider = provider)
         }
 
-        /** Appends timings to a finished message, replacing any earlier ones. */
-        fun withTimings(content: String, responseMs: Long, reasoningMs: Long?): String = buildString {
-            append(METADATA.replace(content, "").trimEnd())
+        /** Appends timings and the answering model's company to a finished message, replacing earlier ones. */
+        fun withTimings(content: String, responseMs: Long, reasoningMs: Long?, provider: ModelProvider? = null): String = buildString {
+            append(PROVIDER.replace(METADATA.replace(content, ""), "").trimEnd())
             append("\n\n<!--nexus_response_ms:").append(responseMs.coerceAtLeast(0L)).append("-->")
             if (reasoningMs != null) append("<!--nexus_reasoning_ms:").append(reasoningMs.coerceAtLeast(0L)).append("-->")
+            if (provider != null) append("<!--nexus_provider:").append(provider.name).append("-->")
         }
 
         /** The answer alone, as sent back to the model in later turns. */

@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -84,14 +86,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -111,6 +117,7 @@ import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.AttachmentType
 import com.example.ialocal.data.ConversationListItem
+import com.example.ialocal.data.MessageEntity
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
@@ -121,11 +128,14 @@ import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
+import com.example.ialocal.models.ModelProvider
+import com.example.ialocal.models.provider
 import com.example.ialocal.ui.formatMemoryGb
 import com.example.ialocal.ui.rememberLiveMemory
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
+import com.example.ialocal.ui.branding.logoRes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -660,6 +670,17 @@ private fun ExactChatBody(
     } else {
         null
     }
+    // The model answering now; also stands in for replies saved before their company was recorded.
+    val selectedProvider = remember(selectedModel) { selectedModel?.provider() }
+    // The code block open full screen; it is looked up again as the reply grows, so it follows the code being written.
+    var openCanvas by remember { mutableStateOf<CanvasRef?>(null) }
+    val canvas = remember(openCanvas, messages) {
+        openCanvas?.let { ref ->
+            messages.firstOrNull { it.message.id == ref.messageId }
+                ?.let { CodeCanvases.at(AssistantContent.parse(it.message.content).answer, ref.codeIndex) }
+        }
+    }
+    canvas?.let { CodeCanvasDialog(it, onDismiss = { openCanvas = null }) }
     val bannerMessageIds = remember(messages) {
         ChatAdSchedule.assistantIdsWithBanner(
             messages,
@@ -700,10 +721,12 @@ private fun ExactChatBody(
                 ) {
                     items(messages, key = { it.message.id }) { item ->
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
-                            ExactLoading(startedAt = item.message.createdAt)
+                            ExactLoading(provider = selectedProvider, startedAt = item.message.createdAt)
                         } else {
                             ExactMessage(
                                 item = item,
+                                fallbackProvider = selectedProvider,
+                                onOpenCanvas = { openCanvas = it },
                                 canRerun = !generating,
                                 showAd = adsEnabled &&
                                     item.message.id in bannerMessageIds &&
@@ -711,7 +734,9 @@ private fun ExactChatBody(
                             ) { onRerun(item.message.id) }
                         }
                     }
-                    if (generating && sendingAssistantId == null) item { ExactLoading(waitingForSlot = waitingForSlot) }
+                    if (generating && sendingAssistantId == null) {
+                        item { ExactLoading(provider = selectedProvider, waitingForSlot = waitingForSlot) }
+                    }
                 }
             }
         }
@@ -882,11 +907,18 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
 }
 
 @Composable
-private fun ExactMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
+private fun ExactMessage(
+    item: MessageWithAttachments,
+    fallbackProvider: ModelProvider?,
+    onOpenCanvas: (CanvasRef) -> Unit,
+    canRerun: Boolean,
+    showAd: Boolean,
+    onRerun: () -> Unit,
+) {
     if (item.message.role == MessageRole.USER.name) {
         ExactUserMessage(item)
     } else {
-        ExactAssistantMessage(item, canRerun, showAd, onRerun)
+        ExactAssistantMessage(item, fallbackProvider, onOpenCanvas, canRerun, showAd, onRerun)
     }
 }
 
@@ -950,12 +982,20 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 }
 
 @Composable
-private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolean, showAd: Boolean, onRerun: () -> Unit) {
+private fun ExactAssistantMessage(
+    item: MessageWithAttachments,
+    fallbackProvider: ModelProvider?,
+    onOpenCanvas: (CanvasRef) -> Unit,
+    canRerun: Boolean,
+    showAd: Boolean,
+    onRerun: () -> Unit,
+) {
     val parsed = remember(item.message.content) { AssistantContent.parse(item.message.content) }
     val sending = item.message.status == MessageStatus.SENDING.name
     val thinking = sending && parsed.reasoningInProgress
-    // Open while the model is thinking so the reasoning can be followed live; folded once done.
-    var reasoningOpen by remember(item.message.id) { mutableStateOf(thinking) }
+    // While the model thinks, only its last two lines show unless the user opens the whole
+    // reasoning; everything folds once it is done.
+    var reasoningOpen by remember(item.message.id) { mutableStateOf(false) }
     LaunchedEffect(thinking) { if (!thinking) reasoningOpen = false }
     val clipboard = LocalClipboardManager.current
 
@@ -964,16 +1004,7 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(32.dp).padding(top = 1.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF181C2D),
-            border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.SmartToy, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
-            }
-        }
+        AssistantAvatar(parsed.provider ?: fallbackProvider, Modifier.padding(top = 1.dp))
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (parsed.reasoning != null) {
@@ -1013,7 +1044,11 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    if (reasoningOpen) "Ocultar" else "Mostrar",
+                                    when {
+                                        reasoningOpen -> "Ocultar"
+                                        thinking -> "Mostrar tudo"
+                                        else -> "Mostrar"
+                                    },
                                     fontSize = 11.sp,
                                     color = accent.copy(alpha = 0.85f),
                                 )
@@ -1025,6 +1060,7 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
                                 )
                             }
                         }
+                        if (thinking && !reasoningOpen) ReasoningTail(parsed.reasoning)
                         AnimatedVisibility(reasoningOpen) {
                             Text(
                                 parsed.reasoning.ifBlank { "…" },
@@ -1042,11 +1078,12 @@ private fun ExactAssistantMessage(item: MessageWithAttachments, canRerun: Boolea
             if (parsed.answer.isNotBlank()) {
                 if (showAd) {
                     val (beforeAd, afterAd) = remember(parsed.answer) { ChatAdSchedule.splitForBanner(parsed.answer) }
-                    if (beforeAd.isNotBlank()) ExactAnswerBubble(beforeAd)
+                    // The banner goes before the first code block, so the code numbering of afterAd starts at 0.
+                    if (beforeAd.isNotBlank()) ExactAnswerContent(beforeAd, item.message, onOpenCanvas)
                     InlineAdBanner(enabled = true)
-                    if (afterAd.isNotBlank()) ExactAnswerBubble(afterAd)
+                    if (afterAd.isNotBlank()) ExactAnswerContent(afterAd, item.message, onOpenCanvas)
                 } else {
-                    ExactAnswerBubble(parsed.answer)
+                    ExactAnswerContent(parsed.answer, item.message, onOpenCanvas)
                 }
             } else if (!sending && parsed.reasoning != null) {
                 Text(
@@ -1097,6 +1134,27 @@ private fun rememberElapsedMs(startedAt: Long): Long {
     return (now - startedAt).coerceAtLeast(0L)
 }
 
+/** Prose in bubbles; long or runnable code as canvas cards that open full screen, short code inline. */
+@Composable
+private fun ExactAnswerContent(text: String, message: MessageEntity, onOpenCanvas: (CanvasRef) -> Unit) {
+    val parts = remember(text) { splitAnswer(text) }
+    var codeIndex = 0
+    parts.forEach { part ->
+        when (part) {
+            is AnswerPart.Prose -> ExactAnswerBubble(part.text)
+            is AnswerPart.Code -> {
+                val index = codeIndex++
+                if (CodeCanvases.isCanvas(part)) {
+                    val canvas = remember(part) { CodeCanvases.of(part) }
+                    CodeCanvasCard(canvas, message.createdAt) { onOpenCanvas(CanvasRef(message.id, index)) }
+                } else {
+                    InlineCodeBlock(part)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ExactAnswerBubble(text: String) {
     Surface(
@@ -1125,23 +1183,64 @@ private fun ExactInlineAction(label: String, enabled: Boolean = true, onClick: (
     )
 }
 
+/** The last two lines of the reasoning being written, the earlier ones scrolled out of view. */
 @Composable
-private fun ExactLoading(startedAt: Long? = null, waitingForSlot: Boolean = false) {
+private fun ReasoningTail(reasoning: String) {
+    val tail = remember(reasoning) { reasoningTail(reasoning).ifBlank { "…" } }
+    val lineHeight = 18.sp
+    val twoLines = with(LocalDensity.current) { (lineHeight * REASONING_PREVIEW_LINES).toDp() }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.20f))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .height(twoLines)
+            .clipToBounds(),
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        Text(
+            tail,
+            modifier = Modifier.fillMaxWidth().wrapContentHeight(align = Alignment.Bottom, unbounded = true),
+            fontSize = 12.sp,
+            lineHeight = lineHeight,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xFF94A3B8),
+        )
+    }
+}
+
+/** The logo of the company behind the model that answered; the robot when it is not known. */
+@Composable
+private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.size(32.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF181C2D),
+        border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (provider != null) {
+                Image(
+                    painter = painterResource(provider.logoRes()),
+                    contentDescription = provider.brandName(),
+                    modifier = Modifier.size(20.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Icon(Icons.Default.SmartToy, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExactLoading(provider: ModelProvider?, startedAt: Long? = null, waitingForSlot: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(0.96f),
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(32.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF181C2D),
-            border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.SmartToy, null, tint = Color(0xFF818CF8), modifier = Modifier.size(13.dp))
-            }
-        }
+        AssistantAvatar(provider)
         Surface(shape = RoundedCornerShape(12.dp), color = PCard, border = BorderStroke(1.dp, PBorder)) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Color(0xFFC084FC))
