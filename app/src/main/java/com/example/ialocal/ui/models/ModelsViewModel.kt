@@ -114,11 +114,12 @@ class ModelsViewModel(
         }
     }
 
-    /** Starts the download now, or queues it behind the one in progress. */
-    fun downloadCatalogModel(catalogId: String) {
+    /** Starts the download now, or queues it behind the one in progress; false when it could not. */
+    fun downloadCatalogModel(catalogId: String): Boolean {
         _error.value = null
-        runCatching { manager.enqueueDownload(catalogId) }
+        return runCatching { manager.enqueueDownload(catalogId) }
             .onFailure { _error.value = it.message ?: "Não foi possível iniciar o download em segundo plano." }
+            .isSuccess
     }
 
     /** Continues a paused download, or retries a failed one, from its saved partial file. */

@@ -50,7 +50,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 Depois que um modelo foi baixado e instalado, a inferência não depende da internet. Internet é necessária apenas para baixar um modelo do catálogo; modelos importados manualmente podem ser usados sem rede desde o início.
 
-Os banners de publicidade usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece.
+Os anúncios usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece e o anúncio de download não aparece.
 
 Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os perfis **Programador** e **Sem censura** aparecem no seletor de perfil do chat mesmo antes de haver um modelo e também são gerenciados em **Configurações**, acessível pelo menu das três barras no chat.
 
@@ -120,18 +120,29 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 ## Build
 
-### Banners AdMob
+### Anúncios AdMob
 
-Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
+**Anúncio de download (intersticial em tela cheia, vídeo ou imagem).** Ao tocar em **Instalar I.A** no catálogo, o download entra na fila e um anúncio em tela cheia aparece. O download continua em segundo plano enquanto o anúncio passa, então a pessoa não perde tempo esperando. É o formato que mais rende sem pedir nada ao usuário, e o início de um download é a pausa natural que as regras do AdMob pedem para intersticiais. Detalhes:
 
-Para habilitar anúncios reais em um build `release`, configure os dois valores abaixo no ambiente de build. Sem ambos, a release não solicita anúncios:
+- O anúncio é carregado quando o catálogo abre, para aparecer na hora; um anúncio carregado vale por uma hora e é trocado antes disso.
+- No máximo um a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`): quem escolhe várias IAs seguidas vê um só anúncio. O limite sobrevive ao fechamento do app.
+- Só novos downloads mostram o anúncio; **Continuar** e **Tentar novamente** não.
+- Não aparece enquanto uma resposta está sendo gerada: o player de vídeo tiraria RAM do modelo e poderia fazer o Android encerrar o processo da IA no meio da resposta.
+- Sem conexão, sem consentimento ou sem anúncio carregado, o download começa normalmente, sem anúncio.
+
+Para ganhar o máximo com esse anúncio, crie no AdMob um bloco do tipo **Intersticial** com os dois tipos de anúncio ligados (**Display** e **Vídeo**): os dois competem no leilão e ganha o que paga mais. Ligue também a mediação com lances (bidding) de outras redes (por exemplo Meta Audience Network, AppLovin, Unity Ads e Liftoff) para aumentar a concorrência por cada exibição.
+
+**Banners.** Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
+
+Para habilitar anúncios reais em um build `release`, configure os valores abaixo no ambiente de build. Sem os dois primeiros, a release não solicita anúncios; sem o terceiro, ela mostra os banners mas não o anúncio de download:
 
 ```bash
 export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
 export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
+export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'
 ```
 
-Use os IDs da sua conta AdMob. No GitHub Actions, cadastre os mesmos valores como secrets `ADMOB_APP_ID` e `ADMOB_BANNER_AD_UNIT_ID`; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste os banners e o fluxo de consentimento em um aparelho antes de publicar o APK.
+Use os IDs da sua conta AdMob. No GitHub Actions, cadastre os mesmos valores como secrets `ADMOB_APP_ID`, `ADMOB_BANNER_AD_UNIT_ID` e `ADMOB_INTERSTITIAL_AD_UNIT_ID`; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste os banners, o anúncio de download e o fluxo de consentimento em um aparelho antes de publicar o APK.
 
 Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 

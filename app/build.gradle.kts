@@ -9,8 +9,10 @@ val ciVersionName = providers.environmentVariable("IA_VERSION_NAME").orNull
 
 val testAdMobAppId = "ca-app-pub-3940256099942544~3347511713"
 val testBannerAdUnitId = "ca-app-pub-3940256099942544/9214589741"
+val testInterstitialAdUnitId = "ca-app-pub-3940256099942544/1033173712"
 val productionAdMobAppId = providers.environmentVariable("ADMOB_APP_ID").orNull?.trim().orEmpty()
 val productionBannerAdUnitId = providers.environmentVariable("ADMOB_BANNER_AD_UNIT_ID").orNull?.trim().orEmpty()
+val productionInterstitialAdUnitId = providers.environmentVariable("ADMOB_INTERSTITIAL_AD_UNIT_ID").orNull?.trim().orEmpty()
 require(productionAdMobAppId.isEmpty() == productionBannerAdUnitId.isEmpty()) {
     "Configure ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID juntos."
 }
@@ -20,6 +22,14 @@ if (productionAdMobAppId.isNotEmpty()) {
     }
     require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionBannerAdUnitId)) {
         "ADMOB_BANNER_AD_UNIT_ID não é um ID de banner AdMob válido."
+    }
+}
+if (productionInterstitialAdUnitId.isNotEmpty()) {
+    require(productionAdMobAppId.isNotEmpty()) {
+        "ADMOB_INTERSTITIAL_AD_UNIT_ID exige ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID."
+    }
+    require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionInterstitialAdUnitId)) {
+        "ADMOB_INTERSTITIAL_AD_UNIT_ID não é um ID de intersticial AdMob válido."
     }
 }
 
@@ -71,11 +81,13 @@ android {
     buildTypes {
         getByName("debug") {
             buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
+            buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$testInterstitialAdUnitId\"")
         }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
             manifestPlaceholders["admobAppId"] = productionAdMobAppId.ifEmpty { testAdMobAppId }
             buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$productionBannerAdUnitId\"")
+            buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$productionInterstitialAdUnitId\"")
         }
     }
 

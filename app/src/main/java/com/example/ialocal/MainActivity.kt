@@ -16,6 +16,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -99,6 +100,7 @@ class MainActivity : ComponentActivity() {
                     onScanStorage = { requestStorageScan(AutomaticModelScanMode.FULL) },
                     onEnsureStorageAccess = ::requestStorageAccess,
                     onPrivacyOptions = { adsManager.showPrivacyOptions(this) },
+                    onDownloadStarted = ::showDownloadAd,
                     onExitApp = { finish() },
                 )
                 lastExitReport?.let { report ->
@@ -158,6 +160,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Full-screen ad after a download starts. Skipped while an answer is being generated: the ad's
+     * video player would take RAM from the model and could get its process stopped mid-answer.
+     */
+    private fun showDownloadAd() {
+        if (container.chatGenerationManager.activeGenerations.value > 0) return
+        adsManager.showDownloadAd(this)
+    }
+
     private fun runInitialStorageScanOnce() {
         val preferences = getSharedPreferences(STORAGE_SCAN_PREFS, MODE_PRIVATE)
         if (preferences.getBoolean(KEY_INITIAL_STORAGE_SCAN_HANDLED, false)) return
@@ -203,6 +214,7 @@ private fun LocalAiApp(
     onScanStorage: () -> Unit,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
     onPrivacyOptions: () -> Unit,
+    onDownloadStarted: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -294,10 +306,12 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
+            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
             GroupedOfflineModelsScreen(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
                 onEnsureStorageAccess = onEnsureStorageAccess,
+                onDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -378,9 +392,11 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
+            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
             ModelsScreen(
                 viewModel = vm,
                 onEnsureStorageAccess = onEnsureStorageAccess,
+                onDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }

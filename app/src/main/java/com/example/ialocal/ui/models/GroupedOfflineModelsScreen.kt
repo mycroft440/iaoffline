@@ -112,6 +112,7 @@ fun GroupedOfflineModelsScreen(
     viewModel: ModelsViewModel,
     adsEnabled: Boolean,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
+    onDownloadStarted: () -> Unit,
     onBack: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
@@ -215,7 +216,9 @@ fun GroupedOfflineModelsScreen(
                         download = downloads.firstOrNull { it.model.id == catalogModel.id },
                         installedModel = installed,
                         onInstall = {
-                            onEnsureStorageAccess { viewModel.downloadCatalogModel(catalogModel.id) }
+                            onEnsureStorageAccess {
+                                if (viewModel.downloadCatalogModel(catalogModel.id)) onDownloadStarted()
+                            }
                         },
                         onPause = viewModel::cancelDownload,
                         onResume = {

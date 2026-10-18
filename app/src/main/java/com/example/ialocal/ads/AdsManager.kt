@@ -22,6 +22,7 @@ class AdsManager(private val appContext: Context) {
 
     private val consentInformation by lazy { UserMessagingPlatform.getConsentInformation(appContext) }
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val downloadInterstitial = DownloadInterstitial(appContext)
     private var initializing = false
     private var initialized = false
 
@@ -48,6 +49,16 @@ class AdsManager(private val appContext: Context) {
                 updateAdsAccess()
             },
         )
+    }
+
+    /** Loads the download ad ahead of time, when the catalog opens. */
+    fun preloadDownloadAd() {
+        if (adsReady) downloadInterstitial.preload()
+    }
+
+    /** Full-screen ad right after the user starts downloading an AI; the download goes on behind it. */
+    fun showDownloadAd(activity: Activity) {
+        if (adsReady) downloadInterstitial.show(activity)
     }
 
     fun showPrivacyOptions(activity: Activity) {
