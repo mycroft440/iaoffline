@@ -122,35 +122,49 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 ### Anúncios AdMob
 
-**Anúncio de download (intersticial em tela cheia, vídeo ou imagem).** Ao tocar em **Instalar I.A** no catálogo, o download entra na fila e um anúncio em tela cheia aparece. O download continua em segundo plano enquanto o anúncio passa, então a pessoa não perde tempo esperando. É o formato que mais rende sem pedir nada ao usuário, e o início de um download é a pausa natural que as regras do AdMob pedem para intersticiais. Detalhes:
+**Anúncio de download (intersticial em tela cheia, vídeo ou imagem).** Ao tocar em **Instalar I.A** no catálogo, ou ao confirmar o download de uma edição da **Wikipedia Offline**, o download começa e um anúncio em tela cheia aparece. O download continua em segundo plano enquanto o anúncio passa, então a pessoa não perde tempo esperando. É o formato que mais rende sem pedir nada ao usuário, e o início de um download é a pausa natural que as regras do AdMob pedem para intersticiais. Detalhes:
 
-- O anúncio é carregado quando o catálogo abre, para aparecer na hora; um anúncio carregado vale por uma hora e é trocado antes disso.
-- No máximo um a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`): quem escolhe várias IAs seguidas vê um só anúncio. O limite sobrevive ao fechamento do app.
+- O anúncio é carregado quando o catálogo ou a tela da Wikipédia abre, para aparecer na hora; um anúncio carregado vale por uma hora e é trocado antes disso.
+- No máximo um a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`), somando IAs e Wikipédia: quem escolhe vários downloads seguidos vê um só anúncio. O limite sobrevive ao fechamento do app.
 - Só novos downloads mostram o anúncio; **Continuar** e **Tentar novamente** não.
 - Não aparece enquanto uma resposta está sendo gerada: o player de vídeo tiraria RAM do modelo e poderia fazer o Android encerrar o processo da IA no meio da resposta.
 - Sem conexão, sem consentimento ou sem anúncio carregado, o download começa normalmente, sem anúncio.
 
 Para ganhar o máximo com esse anúncio, crie no AdMob um bloco do tipo **Intersticial** com os dois tipos de anúncio ligados (**Display** e **Vídeo**): os dois competem no leilão e ganha o que paga mais. Mais redes disputando cada exibição aumentam o valor pago: a mediação com lances (bidding) do AdMob aceita redes como Meta Audience Network, AppLovin, Unity Ads e Liftoff, mas cada uma precisa do seu adaptador no app (uma dependência `com.google.ads.mediation:…` no `app/build.gradle.kts`), que ainda não foi adicionado.
 
-**Banners.** Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
+**Anúncio de abertura (tela cheia).** Aparece quando a pessoa volta ao app (pelo ícone ou pelos recentes), com estas regras (`AppOpenAdPacing`):
 
-**IDs de teste (configuração atual).** Enquanto `ADMOB_APP_ID` não estiver configurado, a release também usa os IDs de teste do Google, então os banners e o anúncio de download já funcionam e mostram o selo "Test Ad". Anúncios de teste não geram receita e não pedem o formulário de consentimento. Os IDs usados:
+- Nunca nas duas primeiras aberturas do app; a partir da terceira.
+- No máximo um a cada 4 horas, e nunca até 3 minutos depois do anúncio de download.
+- Só quando nenhuma IA está na memória (nem carregando, nem respondendo): o vídeo do anúncio tiraria RAM do modelo.
+- Voltar de uma tela que o próprio app abriu (seletor de arquivos, configurações do Android para a permissão de armazenamento, a página de um anúncio) não conta como abertura.
+- Na primeira abertura depois de o Android encerrar o app, o anúncio ainda não está carregado e não aparece. Ele é carregado só quando a próxima volta pode mostrá-lo, para não pedir anúncios que ninguém vê.
+
+**Anúncios nativos no catálogo.** Em **Baixar I.As offline**, um card de anúncio com o visual do catálogo (selo **Anúncio**, ícone, título, imagem ou vídeo e botão) aparece depois da 2ª empresa e a cada 4 empresas seguintes (`CatalogAdSlots`), nunca depois da última. Cada card é carregado uma vez por visita à tela: rolar para longe e voltar não pede outro anúncio. Com o filtro de uma empresa só, não há card.
+
+**Banners.** Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e dois em **Minhas I.As** (antes e depois da lista, mesmo sem modelos instalados). O **Histórico de conversas** e as **Configurações** têm um banner fixo embaixo; no **Canvas de código** o banner fica no fim do conteúdo, para nunca ficar colado ao teclado. No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O build `debug` usa exclusivamente os IDs de teste do Google.
+
+**IDs de teste (configuração atual).** Enquanto `ADMOB_APP_ID` não estiver configurado, a release também usa os IDs de teste do Google, então todos os anúncios já funcionam e mostram o selo "Test Ad". Anúncios de teste não geram receita e não pedem o formulário de consentimento. Os IDs usados:
 
 | Uso | ID de teste do Google |
 | --- | --- |
 | Aplicativo | `ca-app-pub-3940256099942544~3347511713` |
 | Banner adaptável | `ca-app-pub-3940256099942544/9214589741` |
 | Intersticial (vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
+| Nativo | `ca-app-pub-3940256099942544/2247696110` |
+| Abertura do app | `ca-app-pub-3940256099942544/9257395921` |
 
-Para trocar pelos anúncios reais (que geram receita) em um build `release`, configure os valores abaixo no ambiente de build. Os dois primeiros vão juntos e desligam os IDs de teste; sem o terceiro, a release mostra os banners reais mas não o anúncio de download:
+Para trocar pelos anúncios reais (que geram receita) em um build `release`, configure os valores abaixo no ambiente de build. Os dois primeiros vão juntos e desligam os IDs de teste; cada um dos outros liga o formato correspondente (sem ele, a release real não mostra aquele formato):
 
 ```bash
 export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
 export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
-export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'
+export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # anúncio de download
+export ADMOB_NATIVE_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN'         # cards do catálogo
+export ADMOB_APP_OPEN_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/AAAAAAAAAA'       # abertura do app
 ```
 
-Use os IDs da sua conta AdMob. No GitHub Actions, cadastre os mesmos valores como secrets `ADMOB_APP_ID`, `ADMOB_BANNER_AD_UNIT_ID` e `ADMOB_INTERSTITIAL_AD_UNIT_ID`; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste os banners, o anúncio de download e o fluxo de consentimento em um aparelho antes de publicar o APK.
+Use os IDs da sua conta AdMob (no AdMob, crie blocos dos tipos **Intersticial**, **Nativo avançado** e **Abertura de app**). No GitHub Actions, cadastre os mesmos valores como secrets com os mesmos nomes; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste cada formato e o fluxo de consentimento em um aparelho antes de publicar o APK.
 
 Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 

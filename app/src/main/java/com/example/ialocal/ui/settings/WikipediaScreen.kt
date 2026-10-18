@@ -52,6 +52,7 @@ import com.example.ialocal.knowledge.WikipediaPackStatus
 @Composable
 fun WikipediaScreen(
     wikipedia: OfflineWikipedia,
+    onDownloadStarted: () -> Unit,
     onBack: () -> Unit,
 ) {
     val states by wikipedia.states.collectAsStateWithLifecycle()
@@ -167,6 +168,7 @@ fun WikipediaScreen(
                 TextButton(onClick = {
                     wikipedia.install(state.pack.id, wifiOnly)
                     confirmDownload = null
+                    onDownloadStarted()
                 }) { Text("Baixar") }
             },
             dismissButton = {

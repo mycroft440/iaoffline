@@ -9,10 +9,8 @@ val ciVersionName = providers.environmentVariable("IA_VERSION_NAME").orNull
 
 val testAdMobAppId = "ca-app-pub-3940256099942544~3347511713"
 val testBannerAdUnitId = "ca-app-pub-3940256099942544/9214589741"
-val testInterstitialAdUnitId = "ca-app-pub-3940256099942544/1033173712"
 val productionAdMobAppId = providers.environmentVariable("ADMOB_APP_ID").orNull?.trim().orEmpty()
 val productionBannerAdUnitId = providers.environmentVariable("ADMOB_BANNER_AD_UNIT_ID").orNull?.trim().orEmpty()
-val productionInterstitialAdUnitId = providers.environmentVariable("ADMOB_INTERSTITIAL_AD_UNIT_ID").orNull?.trim().orEmpty()
 // Until the production IDs are configured, the release uses Google's test IDs so the ads can be tried.
 val useTestAds = productionAdMobAppId.isEmpty()
 require(productionAdMobAppId.isEmpty() == productionBannerAdUnitId.isEmpty()) {
@@ -26,14 +24,26 @@ if (productionAdMobAppId.isNotEmpty()) {
         "ADMOB_BANNER_AD_UNIT_ID não é um ID de banner AdMob válido."
     }
 }
-if (productionInterstitialAdUnitId.isNotEmpty()) {
-    require(productionAdMobAppId.isNotEmpty()) {
-        "ADMOB_INTERSTITIAL_AD_UNIT_ID exige ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID."
+
+/** Formats beyond the banner. A production release shows each only when its variable is set. */
+data class OptionalAdUnit(val buildConfigField: String, val productionId: String, val testId: String)
+
+fun optionalAdUnit(buildConfigField: String, variable: String, testId: String): OptionalAdUnit {
+    val productionId = providers.environmentVariable(variable).orNull?.trim().orEmpty()
+    if (productionId.isNotEmpty()) {
+        require(productionAdMobAppId.isNotEmpty()) { "$variable exige ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID." }
+        require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionId)) {
+            "$variable não é um ID de bloco de anúncios AdMob válido."
+        }
     }
-    require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionInterstitialAdUnitId)) {
-        "ADMOB_INTERSTITIAL_AD_UNIT_ID não é um ID de intersticial AdMob válido."
-    }
+    return OptionalAdUnit(buildConfigField, productionId, testId)
 }
+
+val optionalAdUnits = listOf(
+    optionalAdUnit("INTERSTITIAL_AD_UNIT_ID", "ADMOB_INTERSTITIAL_AD_UNIT_ID", "ca-app-pub-3940256099942544/1033173712"),
+    optionalAdUnit("NATIVE_AD_UNIT_ID", "ADMOB_NATIVE_AD_UNIT_ID", "ca-app-pub-3940256099942544/2247696110"),
+    optionalAdUnit("APP_OPEN_AD_UNIT_ID", "ADMOB_APP_OPEN_AD_UNIT_ID", "ca-app-pub-3940256099942544/9257395921"),
+)
 
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
@@ -83,19 +93,15 @@ android {
     buildTypes {
         getByName("debug") {
             buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
-            buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$testInterstitialAdUnitId\"")
+            optionalAdUnits.forEach { buildConfigField("String", it.buildConfigField, "\"${it.testId}\"") }
             buildConfigField("boolean", "TEST_ADS", "true")
         }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
-            if (useTestAds) {
-                manifestPlaceholders["admobAppId"] = testAdMobAppId
-                buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
-                buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$testInterstitialAdUnitId\"")
-            } else {
-                manifestPlaceholders["admobAppId"] = productionAdMobAppId
-                buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$productionBannerAdUnitId\"")
-                buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"$productionInterstitialAdUnitId\"")
+            manifestPlaceholders["admobAppId"] = if (useTestAds) testAdMobAppId else productionAdMobAppId
+            buildConfigField("String", "BANNER_AD_UNIT_ID", "\"${if (useTestAds) testBannerAdUnitId else productionBannerAdUnitId}\"")
+            optionalAdUnits.forEach {
+                buildConfigField("String", it.buildConfigField, "\"${if (useTestAds) it.testId else it.productionId}\"")
             }
             buildConfigField("boolean", "TEST_ADS", "$useTestAds")
         }
@@ -133,6 +139,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-process:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
     implementation("androidx.navigation:navigation-compose:2.10.0")

@@ -58,7 +58,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.CatalogAdSlots
 import com.example.ialocal.ads.InlineAdBanner
+import com.example.ialocal.ads.NativeAdCard
+import com.example.ialocal.ads.rememberNativeAdSlots
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.DownloadEntryStatus
@@ -124,6 +127,7 @@ fun GroupedOfflineModelsScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
+    val nativeAds = rememberNativeAdSlots(enabled = adsEnabled)
 
     val groups = remember(viewModel.catalog) {
         CATALOG_PROVIDER_ORDER.mapNotNull { provider ->
@@ -195,7 +199,7 @@ fun GroupedOfflineModelsScreen(
                 )
             }
 
-            visibleGroups.forEach { (provider, providerModels) ->
+            visibleGroups.forEachIndexed { groupIndex, (provider, providerModels) ->
                 item(key = "provider-${provider.name}") {
                     ProviderCatalogHeader(
                         provider = provider,
@@ -227,6 +231,12 @@ fun GroupedOfflineModelsScreen(
                         onRemove = { viewModel.removeDownload(catalogModel.id) },
                         onDelete = { installed?.let { viewModel.delete(it.id) } },
                     )
+                }
+
+                if (nativeAds != null && CatalogAdSlots.showsAfterGroup(groupIndex, visibleGroups.size)) {
+                    item(key = "catalog-native-ad-$groupIndex") {
+                        NativeAdCard(slots = nativeAds, slot = groupIndex)
+                    }
                 }
             }
 

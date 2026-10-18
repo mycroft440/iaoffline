@@ -1,6 +1,7 @@
 package com.example.ialocal
 
 import android.content.Context
+import com.example.ialocal.ads.AdsManager
 import com.example.ialocal.agent.AiOrchestrator
 import com.example.ialocal.agent.AnswerGuidance
 import com.example.ialocal.agent.tools.AgentToolRegistry
@@ -88,6 +89,9 @@ class AppContainer(context: Context) {
         modelRepository,
         modelManager,
     )
+
+    // App-wide, so a loaded ad and the ads' consent state outlive a recreated activity.
+    val adsManager = AdsManager(appContext)
 
     init {
         apiServer.start()

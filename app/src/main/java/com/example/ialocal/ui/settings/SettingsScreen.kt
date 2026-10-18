@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.data.ThemeMode
 import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.BuiltInProfile
@@ -58,6 +60,7 @@ fun SettingsScreen(
     wikipediaSummary: String,
     onOpenCompilers: () -> Unit,
     onOpenWikipedia: () -> Unit,
+    adsEnabled: Boolean,
     onBack: () -> Unit,
 ) {
     val selected by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -74,6 +77,13 @@ fun SettingsScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
+        bottomBar = {
+            InlineAdBanner(
+                enabled = adsEnabled,
+                anchored = true,
+                modifier = Modifier.navigationBarsPadding().padding(horizontal = 12.dp),
+            )
+        },
         topBar = {
             TopAppBar(
                 title = { Text("Configurações") },

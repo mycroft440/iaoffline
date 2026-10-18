@@ -23,6 +23,7 @@ class AdsManager(private val appContext: Context) {
     private val consentInformation by lazy { UserMessagingPlatform.getConsentInformation(appContext) }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloadInterstitial = DownloadInterstitial(appContext)
+    private val appOpenAds = AppOpenAds(appContext)
     private var initializing = false
     private var initialized = false
 
@@ -62,6 +63,16 @@ class AdsManager(private val appContext: Context) {
         if (adsReady) downloadInterstitial.show(activity)
     }
 
+    /**
+     * The user came back to the app. [aiIdle] is false while an AI is loaded, loading or answering:
+     * the ad's video player would then take RAM the model needs.
+     */
+    fun onAppForeground(activity: Activity, aiIdle: Boolean) {
+        appOpenAds.countOpening()
+        if (!adsReady) return
+        if (aiIdle) appOpenAds.show(activity, downloadInterstitial.lastShownAtMs) else appOpenAds.preload()
+    }
+
     fun showPrivacyOptions(activity: Activity) {
         if (!privacyOptionsRequired) return
         UserMessagingPlatform.showPrivacyOptionsForm(activity) {
@@ -85,7 +96,7 @@ class AdsManager(private val appContext: Context) {
 
     private fun initializeAds() {
         if (initialized) {
-            adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
+            refreshAdsReady()
             return
         }
         if (initializing) return
@@ -97,7 +108,7 @@ class AdsManager(private val appContext: Context) {
                         mainHandler.post {
                             initializing = false
                             initialized = true
-                            adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
+                            refreshAdsReady()
                         }
                     }
                 }.onFailure {
@@ -106,5 +117,10 @@ class AdsManager(private val appContext: Context) {
             },
             "ia-offline-admob-init",
         ).start()
+    }
+
+    private fun refreshAdsReady() {
+        adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
+        if (adsReady) appOpenAds.preload()
     }
 }

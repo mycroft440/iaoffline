@@ -22,6 +22,8 @@ class DownloadInterstitial(appContext: Context) {
     private var loadedAtMs = 0L
     private var loading = false
 
+    val lastShownAtMs: Long get() = preferences.getLong(KEY_LAST_SHOWN_AT, 0L)
+
     fun preload() {
         val adUnitId = BuildConfig.INTERSTITIAL_AD_UNIT_ID
         if (adUnitId.isBlank() || loading) return
@@ -49,7 +51,7 @@ class DownloadInterstitial(appContext: Context) {
     /** Shows the ad unless one was shown in the last few minutes; without a ready ad, loads one for next time. */
     fun show(activity: Activity) {
         val now = System.currentTimeMillis()
-        if (!DownloadAdPacing.canShow(now, preferences.getLong(KEY_LAST_SHOWN_AT, 0L))) return
+        if (!DownloadAdPacing.canShow(now, lastShownAtMs)) return
         val ready = ad?.takeIf { DownloadAdPacing.isFresh(now, loadedAtMs) }
         if (ready == null) {
             preload()
