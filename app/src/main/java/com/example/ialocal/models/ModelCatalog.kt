@@ -1024,6 +1024,21 @@ object ModelCatalog {
             description = "Ornith 1.5 MoE (agosto de 2026) com 35B no total e 3B ativos: raciocínio, código e agentes. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
             strengths = "Segundo a Ornith AI, 79 no SWE-bench Verified (Qwen3.6 35B-A3B: 73,4) e 89,2 no GPQA Diamond.",
         ),
+        CatalogModel(
+            id = "nemotron3.5-lightning-30b-a3b-q4-0",
+            displayName = "Nemotron 3.5 Lightning 30B-A3B",
+            provider = ModelProvider.NVIDIA,
+            repository = "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            fileName = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf",
+            quantization = "Q4_0",
+            approximateSizeBytes = 18_898_091_584L,
+            sha256 = "61f87e75974e4b535dcdf9aad056541a9514f1dfa4538b463b081d19b7a00e3c",
+            recommendedRamBytes = 24_000_000_000L,
+            totalParametersBillions = 31.6,
+            activeParametersBillions = 3.6,
+            description = "Sucessor do Nemotron 3 Nano 30B-A3B (agosto de 2026): MoE híbrido Mamba-Transformer com 31,6B no total e 3,6B ativos. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Na Artificial Analysis, índice de inteligência 24, contra 15 do Nemotron 3 Nano 30B-A3B. Idiomas principais: inglês, espanhol, francês, alemão, italiano e japonês.",
+        ),
     )
 
     fun requireById(id: String): CatalogModel =
