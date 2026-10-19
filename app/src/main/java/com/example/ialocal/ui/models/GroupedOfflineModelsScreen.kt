@@ -105,20 +105,11 @@ fun GroupedOfflineModelsScreen(
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
     val nativeAds = rememberNativeAdSlots(enabled = adsEnabled)
 
-    val groups = remember(viewModel.catalog) {
-        CATALOG_PROVIDER_ORDER.mapNotNull { provider ->
-            viewModel.catalog
-                .filter { it.provider == provider }
-                .takeIf { it.isNotEmpty() }
-                ?.let { provider to it }
-        }
+    val visibleGroups = remember(viewModel.catalog, selectedProvider) {
+        catalogGroups(viewModel.catalog, onlyProvider = selectedProvider)
     }
-    val visibleGroups = if (selectedProvider == null) {
-        groups
-    } else {
-        groups.filter { it.first == selectedProvider }
-    }
-    val visibleCount = visibleGroups.sumOf { it.second.size }
+    val visibleCount = visibleGroups.sumOf { it.models.size }
+    val moeCount = visibleGroups.filter { it.moe }.sumOf { it.models.size }
 
     LaunchedEffect(error) {
         error?.let {
@@ -175,16 +166,25 @@ fun GroupedOfflineModelsScreen(
                 )
             }
 
-            visibleGroups.forEachIndexed { groupIndex, (provider, providerModels) ->
-                item(key = "provider-${provider.name}") {
+            visibleGroups.forEachIndexed { groupIndex, group ->
+                val provider = group.provider
+                // The MoE section comes first; the dense one gets a heading only when it follows it.
+                if (group.moe && groupIndex == 0) {
+                    item(key = "section-moe") { MoeSectionHeader(modelCount = moeCount) }
+                } else if (!group.moe && groupIndex > 0 && visibleGroups[groupIndex - 1].moe) {
+                    item(key = "section-dense") { DenseSectionHeader() }
+                }
+
+                item(key = "provider-${if (group.moe) "moe-" else ""}${provider.name}") {
                     ProviderCatalogHeader(
                         provider = provider,
-                        modelCount = providerModels.size,
+                        modelCount = group.models.size,
+                        moe = group.moe,
                     )
                 }
 
                 items(
-                    items = providerModels,
+                    items = group.models,
                     key = { it.id },
                 ) { catalogModel ->
                     val installed = installedModels.firstOrNull {
@@ -380,10 +380,88 @@ private fun CompanyFilterCard(
     }
 }
 
+/** Opens the MoE section: what a mixture-of-experts model is and what it costs on a phone. */
+@Composable
+private fun MoeSectionHeader(modelCount: Int) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CatalogViolet.copy(alpha = 0.08f), shape)
+            .border(1.dp, CatalogViolet.copy(alpha = 0.45f), shape)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Modelos MoE",
+                    color = CatalogText,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    text = "Mixture of Experts · mistura de especialistas",
+                    color = CatalogViolet,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            CatalogPill(
+                text = "$modelCount ${if (modelCount == 1) "modelo" else "modelos"}",
+                foreground = CatalogViolet,
+                background = CatalogViolet.copy(alpha = 0.12f),
+                border = CatalogViolet.copy(alpha = 0.4f),
+            )
+        }
+        Text(
+            text = "Em vez de usar todos os parâmetros a cada palavra, o modelo é dividido em vários " +
+                "especialistas, e só alguns deles trabalham em cada palavra. No nome, 30B-A3B quer dizer " +
+                "30 bilhões de parâmetros no total e 3 bilhões ativos: ele escreve quase na velocidade de um " +
+                "modelo de 3B e sabe mais, porque o conhecimento fica espalhado pelos 30B.",
+            color = Color(0xFFCBD5E1),
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+        Text(
+            text = "Em troca, o arquivo é grande. Os maiores que a RAM do celular rodam lendo os pesos " +
+                "do armazenamento e aparecem como Experimental – lento.",
+            color = CatalogMuted,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+    }
+}
+
+/** Separates the dense models, listed by company after the MoE section. */
+@Composable
+private fun DenseSectionHeader() {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Text(
+            text = "Modelos densos",
+            color = CatalogText,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Text(
+            text = "Usam todos os parâmetros a cada palavra: quanto maior o modelo, mais devagar ele escreve.",
+            color = CatalogMuted,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+}
+
 @Composable
 private fun ProviderCatalogHeader(
     provider: ModelProvider,
     modelCount: Int,
+    moe: Boolean,
 ) {
     val meta = providerUiMeta(provider)
 
@@ -423,12 +501,21 @@ private fun ProviderCatalogHeader(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        CatalogPill(
-                            text = meta.badge,
-                            foreground = Color(0xFFCBD5E1),
-                            background = Color(0xFF1E293B),
-                            border = CatalogBorderLight.copy(alpha = 0.7f),
-                        )
+                        if (moe) {
+                            CatalogPill(
+                                text = "MoE",
+                                foreground = CatalogViolet,
+                                background = CatalogViolet.copy(alpha = 0.12f),
+                                border = CatalogViolet.copy(alpha = 0.4f),
+                            )
+                        } else {
+                            CatalogPill(
+                                text = meta.badge,
+                                foreground = Color(0xFFCBD5E1),
+                                background = Color(0xFF1E293B),
+                                border = CatalogBorderLight.copy(alpha = 0.7f),
+                            )
+                        }
                     }
                     Text(
                         text = meta.tagline,
@@ -542,8 +629,8 @@ private fun HtmlCatalogInstallCard(
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             CatalogTag(model.quantization)
             CatalogTag("GGUF")
-            if (model.activeParametersBillions != null) {
-                CatalogTag("MoE")
+            if (model.isMoe) {
+                CatalogTag("MoE", accent = CatalogViolet)
             }
             if (model.isExperimental) {
                 CatalogTag("Experimental – lento", accent = CatalogAmber)
@@ -963,21 +1050,3 @@ internal fun groupedFormatBytes(bytes: Long): String {
         "%.0f MB".format(bytes / (1024.0 * 1024.0))
     }
 }
-
-private val CATALOG_PROVIDER_ORDER = listOf(
-    ModelProvider.PRISMML,
-    ModelProvider.DEEPSEEK,
-    ModelProvider.ALIBABA,
-    ModelProvider.MISTRAL,
-    ModelProvider.META,
-    ModelProvider.GOOGLE,
-    ModelProvider.MICROSOFT,
-    ModelProvider.IBM,
-    ModelProvider.LIQUID,
-    ModelProvider.AI2,
-    ModelProvider.NVIDIA,
-    ModelProvider.OPENAI,
-    ModelProvider.OPENBMB,
-    ModelProvider.JETBRAINS,
-    ModelProvider.ORNITH,
-)

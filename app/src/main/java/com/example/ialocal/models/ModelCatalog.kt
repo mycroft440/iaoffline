@@ -46,12 +46,16 @@ data class CatalogModel(
     val apiIdPrefix: String
         get() = "local-catalog-$id-"
 
+    /** Mixture of experts: each word uses only [activeParametersBillions] of the total. */
+    val isMoe: Boolean
+        get() = activeParametersBillions != null
+
     /**
      * Large mixture-of-experts models: too big for a phone's RAM, but each word only uses a few
      * billion parameters, so they can run slowly by reading weights from storage.
      */
     val isExperimental: Boolean
-        get() = activeParametersBillions != null && totalParametersBillions >= EXPERIMENTAL_MIN_TOTAL_BILLIONS
+        get() = isMoe && totalParametersBillions >= EXPERIMENTAL_MIN_TOTAL_BILLIONS
 
     companion object {
         const val EXPERIMENTAL_MIN_TOTAL_BILLIONS = 15.0

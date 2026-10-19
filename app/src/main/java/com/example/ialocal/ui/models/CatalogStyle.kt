@@ -40,6 +40,8 @@ internal val CatalogCyanLight = Color(0xFF67E8F9)
 internal val CatalogEmerald = Color(0xFF34D399)
 internal val CatalogAmber = Color(0xFFFBBF24)
 internal val CatalogRose = Color(0xFFFB7185)
+/** Mixture-of-experts models: their section, headers and tags. */
+internal val CatalogViolet = Color(0xFFA78BFA)
 
 internal data class ProviderUiMeta(
     val selectorName: String,

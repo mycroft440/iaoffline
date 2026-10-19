@@ -7,6 +7,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 - Android 13+; arm64-v8a/x86_64.
 - Runtime local baseado no binding Android do llama.cpp.
 - Catálogo integrado para baixar modelos em GGUF diretamente no app, organizado por empresa (PrismML/Bonsai, DeepSeek, Qwen, Mistral, Meta, Google, Microsoft, IBM, Liquid AI, Ai2, NVIDIA, OpenAI, OpenBMB e JetBrains).
+- Os modelos MoE (*mixture of experts*, que usam só uma parte dos parâmetros a cada palavra) ficam numa seção própria em destaque no topo do catálogo, com uma explicação do que é MoE e do custo em tamanho, ainda separados por empresa; os demais aparecem depois, em **Modelos densos**, também por empresa. O filtro por empresa vale para as duas seções.
 - **Bonsai (PrismML)**: modelos com todos os pesos em 1 bit (Q1_0) ou ternários (Q2_0), que levam a capacidade de modelos grandes para pouca memória:
   - Bonsai 1.7B, 4B e 8B (1 bit, baseados no Qwen3): 250 MB, 570 MB e 1,2 GB.
   - Bonsai 8B Ternário: 2,3 GB, mais preciso que o 1 bit.
