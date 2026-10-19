@@ -88,9 +88,13 @@ fun ProviderLogo(
                 painter = painterResource(provider.logoRes()),
                 contentDescription = null,
                 // Rounded like the frame: most logos are square pictures with their own background.
-                modifier = Modifier.padding(6.dp).clip(RoundedCornerShape(5.dp)),
+                // The margin follows the size, so small logos (in chips and filters) stay legible.
+                modifier = Modifier.padding(size * LOGO_MARGIN_FRACTION).clip(RoundedCornerShape(5.dp)),
                 contentScale = ContentScale.Fit,
             )
         }
     }
 }
+
+/** Margin around a logo in its frame: 6 dp in the usual 38 dp frame. */
+private const val LOGO_MARGIN_FRACTION = 0.16f

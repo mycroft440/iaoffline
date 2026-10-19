@@ -4,12 +4,14 @@ import android.content.Context
 import android.os.BatteryManager
 import android.os.StatFs
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,13 +19,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Api
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
@@ -47,12 +49,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -61,13 +68,16 @@ import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.api.ApiServerStatus
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
+import com.example.ialocal.models.ModelCatalog
+import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.models.provider
 import com.example.ialocal.runtime.DeviceMemory
-import com.example.ialocal.ui.branding.ProviderLogo
+import com.example.ialocal.ui.branding.brandName
+import com.example.ialocal.ui.branding.logoRes
 import com.example.ialocal.ui.rememberLiveMemory
 
-/** At most this many installed AIs are listed on the home screen; Minhas I.As has them all. */
-private const val HOME_MODEL_LIMIT = 4
+/** Installed AIs listed one per row on the home screen; the others share the box side by side. */
+private const val HOME_MODEL_ROWS = 3
 
 private data class HomeDeviceSnapshot(
     val freeStorageBytes: Long,
@@ -88,6 +98,8 @@ fun HtmlAiHomeScreen(
     viewModel: ModelsViewModel,
     adsEnabled: Boolean,
     onStartChat: () -> Unit,
+    /** A new conversation with this installed AI. */
+    onStartChatWith: (modelId: String) -> Unit,
     onOpenChats: () -> Unit,
     onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
@@ -147,17 +159,18 @@ fun HtmlAiHomeScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 HomeActionsSection(
-                    installedCount = installedModels.size,
-                    catalogCount = viewModel.catalog.size,
                     apiRunning = server.status == ApiServerStatus.RUNNING,
                     onStartChat = onStartChat,
-                    onOpenChats = onOpenChats,
-                    onOpenOfflineModels = onOpenOfflineModels,
                     onOpenApi = onOpenApi,
                 )
                 HomeMyAisSection(
                     models = installedModels,
                     onOpenMyAis = onOpenChats,
+                    // An AI whose test failed opens Minhas I.As, where it can be tested again or removed.
+                    onOpenModel = { model ->
+                        if (model.verificationStatus == ModelVerificationStatus.ERROR.name) onOpenChats()
+                        else onStartChatWith(model.id)
+                    },
                     onOpenOfflineModels = onOpenOfflineModels,
                 )
                 HomeDeviceSection(hardware)
@@ -203,15 +216,11 @@ private fun HomeIconButton(icon: ImageVector, description: String, tint: Color, 
     }
 }
 
-/** What to do, laid out like the catalog's grid of companies. */
+/** The app in one line, then its two ways in: the chat, centered, and the local API. */
 @Composable
 private fun HomeActionsSection(
-    installedCount: Int,
-    catalogCount: Int,
     apiRunning: Boolean,
     onStartChat: () -> Unit,
-    onOpenChats: () -> Unit,
-    onOpenOfflineModels: () -> Unit,
     onOpenApi: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -263,110 +272,98 @@ private fun HomeActionsSection(
             }
         }
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HomeShortcutCard(
-                title = "Chat com I.A",
-                subtitle = "Nova conversa",
-                icon = Icons.Default.SmartToy,
-                accent = CatalogCyan,
-                badge = "Novo",
-                highlighted = true,
-                modifier = Modifier.weight(1f),
-                onClick = onStartChat,
-            )
-            HomeShortcutCard(
-                title = "Minhas I.As",
-                subtitle = "No aparelho",
-                icon = Icons.Default.Memory,
-                accent = CatalogEmerald,
-                badge = installedCount.toString(),
-                modifier = Modifier.weight(1f),
-                onClick = onOpenChats,
-            )
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HomeShortcutCard(
-                title = "Baixar I.As",
-                subtitle = "Catálogo por empresa",
-                icon = Icons.Default.Download,
-                accent = Color(0xFF60A5FA),
-                badge = catalogCount.toString(),
-                modifier = Modifier.weight(1f),
-                onClick = onOpenOfflineModels,
-            )
-            HomeShortcutCard(
-                title = "Utilizar API",
-                subtitle = "API local do aparelho",
-                icon = Icons.Default.Api,
-                accent = if (apiRunning) CatalogAmber else CatalogMuted,
-                badge = if (apiRunning) "ON" else "OFF",
-                modifier = Modifier.weight(1f),
-                onClick = onOpenApi,
-            )
-        }
+        HomeStartChatButton(onClick = onStartChat)
+        HomeApiButton(running = apiRunning, onClick = onOpenApi)
     }
 }
 
-/** A card like the catalog's company filter: icon, title, subtitle and a colored badge. */
+/** The main action, centered: a new conversation with the selected AI. */
 @Composable
-private fun HomeShortcutCard(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    accent: Color,
-    badge: String,
-    modifier: Modifier = Modifier,
-    highlighted: Boolean = false,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(12.dp)
-    val background = if (highlighted) Color(0x2622D3EE) else Color(0xE60F172A)
-    val border = if (highlighted) CatalogCyan.copy(alpha = 0.55f) else CatalogBorder
-
-    Row(
-        modifier = modifier
-            .background(background, shape)
-            .border(1.dp, border, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+private fun HomeStartChatButton(onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Brush.horizontalGradient(listOf(CatalogCyan, Color(0xFF3B82F6))), shape)
+            .border(1.dp, CatalogCyanLight.copy(alpha = 0.55f), shape)
+            .clickable(onClickLabel = "Iniciar chat com I.A", onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(
-            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(28.dp)
-                    .background(accent.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                    .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
+                    .size(32.dp)
+                    .background(Color(0x33041014), RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.SmartToy, contentDescription = null, tint = Color(0xFF041014), modifier = Modifier.size(20.dp))
             }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = if (highlighted) CatalogCyanLight else CatalogText,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = subtitle,
-                    color = if (highlighted) CatalogCyanLight.copy(alpha = 0.8f) else CatalogMuted,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                text = "Iniciar chat com I.A",
+                color = Color(0xFF041014),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+        Text(
+            text = "Nova conversa, sem internet",
+            color = Color(0xCC041014),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
 
+/** The local API, under the chat: shows whether it is running. */
+@Composable
+private fun HomeApiButton(running: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    val accent = if (running) CatalogAmber else CatalogMuted
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xE60F172A), shape)
+            .border(1.dp, CatalogBorder, shape)
+            .clickable(onClickLabel = "Utilizar API", onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .background(accent.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.Api, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Utilizar API",
+                color = CatalogText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Text(
+                text = if (running) "API local ligada neste aparelho" else "API local do aparelho, para outros apps",
+                color = CatalogMuted,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         CatalogPill(
-            text = badge,
+            text = if (running) "ON" else "OFF",
             foreground = accent,
             background = accent.copy(alpha = 0.12f),
             border = accent.copy(alpha = 0.35f),
@@ -374,7 +371,7 @@ private fun HomeShortcutCard(
     }
 }
 
-/** A section heading like the catalog's company headers. */
+/** A section heading like the catalog's company headers, with [trailing] on the right. */
 @Composable
 private fun HomeSectionHeader(
     title: String,
@@ -382,8 +379,8 @@ private fun HomeSectionHeader(
     tagline: String,
     icon: ImageVector,
     accent: Color,
-    trailing: String,
     modifier: Modifier = Modifier,
+    trailing: @Composable () -> Unit,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         HorizontalDivider(color = CatalogBorder.copy(alpha = 0.8f))
@@ -392,7 +389,7 @@ private fun HomeSectionHeader(
                 .fillMaxWidth()
                 .padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
                 modifier = Modifier.weight(1f),
@@ -420,6 +417,7 @@ private fun HomeSectionHeader(
                             fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
                         CatalogPill(
                             text = badge,
@@ -438,13 +436,30 @@ private fun HomeSectionHeader(
                 }
             }
 
-            CatalogPill(
-                text = trailing,
-                foreground = CatalogMuted,
-                background = Color(0xFF0F172A),
-                border = CatalogBorder,
-            )
+            trailing()
         }
+    }
+}
+
+/** A small text button for a section header, like the catalog's "Topo". */
+@Composable
+private fun HomeHeaderButton(text: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = Modifier
+            .background(Color(0xCC1E293B), shape)
+            .border(1.dp, CatalogEmerald.copy(alpha = 0.45f), shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = CatalogEmerald,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
     }
 }
 
@@ -452,141 +467,169 @@ private fun HomeSectionHeader(
 private fun HomeMyAisSection(
     models: List<AiModelEntity>,
     onOpenMyAis: () -> Unit,
+    onOpenModel: (AiModelEntity) -> Unit,
     onOpenOfflineModels: () -> Unit,
 ) {
-    val visible = remember(models) { models.sortedBy { it.importedAt }.take(HOME_MODEL_LIMIT) }
+    // The AI in use first, then the newest; past the first rows, the rest share the box side by side.
+    val ordered = remember(models) {
+        models.sortedWith(compareByDescending<AiModelEntity> { it.isActive }.thenByDescending { it.importedAt })
+    }
+    val rows = ordered.take(HOME_MODEL_ROWS)
+    val compact = ordered.drop(HOME_MODEL_ROWS)
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         HomeSectionHeader(
             title = "Minhas I.As",
             badge = "Offline",
-            tagline = "Baixadas e prontas para usar sem internet",
+            tagline = when (models.size) {
+                0 -> "Baixe uma IA para usar sem internet"
+                1 -> "1 IA no aparelho"
+                else -> "${models.size} IAs no aparelho"
+            },
             icon = Icons.Default.Memory,
             accent = CatalogEmerald,
-            trailing = "${models.size} ${if (models.size == 1) "instalada" else "instaladas"}",
-            modifier = Modifier.clickable(onClick = onOpenMyAis),
-        )
+        ) {
+            if (models.isNotEmpty()) HomeHeaderButton("Ver todas baixadas", onClick = onOpenMyAis)
+        }
 
-        if (visible.isEmpty()) {
-            val shape = RoundedCornerShape(16.dp)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(CatalogCard, shape)
-                    .border(1.dp, CatalogBorder.copy(alpha = 0.9f), shape)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("Nenhuma IA baixada", color = CatalogText, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        val shape = RoundedCornerShape(12.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(CatalogCard, shape)
+                .border(1.dp, CatalogBorder.copy(alpha = 0.9f), shape)
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+        ) {
+            if (ordered.isEmpty()) {
                 Text(
-                    text = "Baixe uma IA do catálogo para conversar sem internet. Ela aparece aqui assim que for instalada.",
+                    text = "Nenhuma IA baixada ainda. Ela aparece aqui assim que for instalada.",
                     color = CatalogMuted,
                     fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                )
-                CatalogActionButton(
-                    text = "↓  Baixar I.As offline",
-                    modifier = Modifier.fillMaxWidth(),
-                    background = Brush.horizontalGradient(listOf(CatalogCyan, Color(0xFF3B82F6))),
-                    foreground = Color(0xFF041014),
-                    border = CatalogCyan.copy(alpha = 0.45f),
-                    onClick = onOpenOfflineModels,
+                    lineHeight = 15.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                 )
             }
-        } else {
-            visible.forEach { model -> HomeModelCard(model, onClick = onOpenMyAis) }
-            if (models.size > visible.size) {
-                CatalogActionButton(
-                    text = "Ver todas as ${models.size} IAs",
-                    modifier = Modifier.fillMaxWidth(),
-                    background = Brush.horizontalGradient(listOf(Color(0xE61E293B), Color(0xE61E293B))),
-                    foreground = Color(0xFFCBD5E1),
-                    border = CatalogBorderLight.copy(alpha = 0.55f),
-                    onClick = onOpenMyAis,
-                )
+            rows.forEachIndexed { index, model ->
+                if (index > 0) HorizontalDivider(color = CatalogBorder.copy(alpha = 0.7f), modifier = Modifier.padding(horizontal = 8.dp))
+                HomeModelRow(model, onClick = { onOpenModel(model) })
+            }
+            if (compact.isNotEmpty()) {
+                HorizontalDivider(color = CatalogBorder.copy(alpha = 0.7f), modifier = Modifier.padding(horizontal = 8.dp))
+                HomeCompactModels(compact, onOpenModel)
             }
         }
+
+        CatalogActionButton(
+            text = "↓  Baixar modelos offline",
+            modifier = Modifier.fillMaxWidth(),
+            background = Brush.horizontalGradient(listOf(Color(0xFF60A5FA), Color(0xFF3B82F6))),
+            foreground = Color(0xFF041014),
+            border = Color(0xFF60A5FA).copy(alpha = 0.45f),
+            onClick = onOpenOfflineModels,
+        )
     }
 }
 
-/** An installed AI, like the top of a catalog card. */
+/** An installed AI in one slim row: logo, name, size and, once tested, whether it is ready. */
 @Composable
-private fun HomeModelCard(model: AiModelEntity, onClick: () -> Unit) {
+private fun HomeModelRow(model: AiModelEntity, onClick: () -> Unit) {
     val provider = remember(model.id, model.name) { model.provider() }
-    val meta = provider?.let(::providerUiMeta)
-    val shape = RoundedCornerShape(16.dp)
+    // An AI not tested yet is tested on its first message; it gets no label until then.
     val status = when (model.verificationStatus) {
         ModelVerificationStatus.VERIFIED.name -> "Pronta" to CatalogEmerald
         ModelVerificationStatus.VERIFYING.name -> "Testando" to CatalogAmber
         ModelVerificationStatus.ERROR.name -> "Erro" to CatalogRose
-        else -> "Não testada" to CatalogAmber
+        else -> null
     }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CatalogCard, shape)
-            .border(1.dp, CatalogBorder.copy(alpha = 0.9f), shape)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(14.dp),
+            .padding(horizontal = 8.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(42.dp)
-                .background(CatalogSurface.copy(alpha = 0.95f), RoundedCornerShape(12.dp))
-                .border(1.dp, CatalogBorderLight.copy(alpha = 0.65f), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (provider != null) {
-                ProviderLogo(provider = provider, size = 30.dp)
-            } else {
-                Icon(Icons.Default.SmartToy, contentDescription = null, tint = CatalogMuted, modifier = Modifier.size(20.dp))
-            }
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = model.name,
-                color = CatalogText,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        HomeModelLogo(provider, size = 20.dp)
+        Text(
+            text = compactModelName(model),
+            color = CatalogText,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = groupedFormatBytes(model.sizeBytes),
+            color = CatalogMuted,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        if (status != null) {
+            CatalogPill(
+                text = status.first,
+                foreground = status.second,
+                background = status.second.copy(alpha = 0.10f),
+                border = status.second.copy(alpha = 0.32f),
+                leadingDot = true,
             )
+        }
+    }
+}
+
+/** A company logo without a frame, small enough for a row or a chip; the robot when unknown. */
+@Composable
+private fun HomeModelLogo(provider: ModelProvider?, size: Dp) {
+    if (provider != null) {
+        Image(
+            painter = painterResource(provider.logoRes()),
+            contentDescription = provider.brandName(),
+            modifier = Modifier.size(size).clip(RoundedCornerShape(5.dp)),
+            contentScale = ContentScale.Fit,
+        )
+    } else {
+        Icon(Icons.Default.SmartToy, contentDescription = null, tint = CatalogMuted, modifier = Modifier.size(size))
+    }
+}
+
+/** The AIs past the first rows, side by side: logo and name with its size in parameters. */
+@Composable
+private fun HomeCompactModels(models: List<AiModelEntity>, onOpenModel: (AiModelEntity) -> Unit) {
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        models.forEach { model ->
+            val provider = remember(model.id, model.name) { model.provider() }
+            val chipShape = RoundedCornerShape(8.dp)
+            val failed = model.verificationStatus == ModelVerificationStatus.ERROR.name
             Row(
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier
+                    .background(CatalogSurface.copy(alpha = 0.95f), chipShape)
+                    .border(1.dp, if (failed) CatalogRose.copy(alpha = 0.45f) else CatalogBorderLight.copy(alpha = 0.6f), chipShape)
+                    .clip(chipShape)
+                    .clickable { onOpenModel(model) }
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
+                HomeModelLogo(provider, size = 13.dp)
                 Text(
-                    text = meta?.sectionName ?: "Importada",
-                    color = meta?.accent ?: CatalogMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
+                    text = compactModelName(model),
+                    color = if (failed) CatalogRose else CatalogText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Text("•", color = CatalogMutedDark, fontSize = 11.sp)
-                Text(
-                    text = groupedFormatBytes(model.sizeBytes),
-                    color = CatalogMuted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
+                    modifier = Modifier.widthIn(max = 170.dp),
                 )
             }
         }
-
-        CatalogPill(
-            text = status.first,
-            foreground = status.second,
-            background = status.second.copy(alpha = 0.10f),
-            border = status.second.copy(alpha = 0.32f),
-            leadingDot = true,
-        )
     }
 }
 
@@ -600,8 +643,14 @@ private fun HomeDeviceSection(snapshot: HomeDeviceSnapshot) {
             tagline = "Espaço e memória disponíveis para as IAs",
             icon = Icons.Default.PhoneAndroid,
             accent = CatalogCyan,
-            trailing = "Bateria ${snapshot.batteryPercent}%",
-        )
+        ) {
+            CatalogPill(
+                text = "Bateria ${snapshot.batteryPercent}%",
+                foreground = CatalogMuted,
+                background = Color(0xFF0F172A),
+                border = CatalogBorder,
+            )
+        }
 
         Column(
             modifier = Modifier
@@ -665,6 +714,19 @@ private fun readHomeDeviceSnapshot(context: Context): HomeDeviceSnapshot {
         batteryPercent = battery,
     )
 }
+
+/**
+ * The name of an installed AI without its file details: a catalog AI by its catalog name
+ * ("Gemma 4 26B-A4B"), an imported file without ".gguf" and its quantization ("Qwen3-4B").
+ */
+internal fun compactModelName(model: AiModelEntity): String {
+    ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }?.let { return it.displayName }
+    val name = model.name.trim().removeSuffix(".gguf").removeSuffix(".GGUF")
+    return name.replace(QUANTIZATION_SUFFIX, "").ifBlank { name }
+}
+
+/** "-Q4_K_M", ".IQ2_XXS", "_F16", "-UD-Q2_K_XL", "-BF16" at the end of a GGUF file name. */
+private val QUANTIZATION_SUFFIX = Regex("""[-_. ](UD[-_])?(I?Q\d\w*|BF16|F16|F32)$""", RegexOption.IGNORE_CASE)
 
 private fun formatDeviceGb(bytes: Long): String =
     "%.1f".format(bytes / (1024.0 * 1024.0 * 1024.0))

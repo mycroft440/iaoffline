@@ -281,6 +281,12 @@ private fun LocalAiApp(
                         navController.navigate("chat/$conversationId")
                     }
                 },
+                onStartChatWith = { modelId ->
+                    scope.launch {
+                        val conversationId = container.chatRepository.createConversation()
+                        navController.navigate("chat/$conversationId?modelId=$modelId")
+                    }
+                },
                 onOpenChats = { navController.navigate("my-ais") },
                 onOpenOfflineModels = { navController.navigate("offline-models") },
                 onOpenApi = { navController.navigate("models") },
