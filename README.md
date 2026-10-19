@@ -62,7 +62,7 @@ Depois que um modelo foi baixado e instalado, a inferência não depende da inte
 
 Os anúncios usam a rede quando há conexão, mas não interferem na inferência local. Sem conexão ou sem anúncio disponível, o espaço do banner desaparece e o anúncio de download não aparece.
 
-Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os perfis **Programador** e **Sem censura** aparecem no seletor de perfil do chat mesmo antes de haver um modelo e também são gerenciados em **Configurações**, acessível pelo menu das três barras no chat.
+Os modelos baixados pelo catálogo ficam também em `IAs Offline` fora de Downloads. Se o aplicativo for desinstalado, o Android apaga o banco e a cópia privada usada pelo runtime, mas o GGUF dessa pasta pública permanece. Após reinstalar, conceda acesso aos arquivos do aparelho e toque em **Buscar** em **Minhas I.As**. A busca inclui essa pasta e os diretórios antigos em Downloads, importa GGUFs válidos e não baixa os arquivos novamente. Os pré-perfis **Programador** e **Sem censura**, e os perfis criados pelo usuário, aparecem no seletor de perfil do chat mesmo antes de haver um modelo e são gerenciados em **Configurações → Perfis de I.A**, acessível pelo menu das três barras no chat.
 
 As respostas da I.A continuam sendo geradas quando o app vai para segundo plano, quando a tela é desligada ou quando o usuário sai da conversa. No máximo duas conversas são respondidas ao mesmo tempo; uma mensagem enviada de uma terceira conversa aparece como **Na fila** e é respondida na ordem de chegada assim que uma das outras termina. Enquanto houver uma resposta ou mensagens na fila, um serviço em primeiro plano mostra a notificação **Gerando resposta…** (com a ação **Parar**) e mantém a CPU ativa; ele é encerrado automaticamente quando a geração termina.
 
@@ -84,12 +84,15 @@ Além da amostragem recomendada pelo modelo, cada conversa recebe técnicas que 
 - **Calculadora** (`calculate`): contas exatas com precedência, potências, funções e constantes, em vez de aritmética "de cabeça".
 - **Wikipedia Offline**: quando instalada, os agentes podem procurar (`wikipedia_search`) e ler (`wikipedia_read`) artigos, e, com a consulta automática ligada, perguntas que citam uma pessoa, lugar ou assunto recebem o começo do artigo correspondente (no máximo dois artigos, ~650 caracteres cada).
 
-## Ferramentas offline
+## Configurações e ferramentas offline
 
-Em **Configurações → Ferramentas offline** há duas entradas:
+As **Configurações** são um menu de botões, e cada um abre a própria tela com as opções daquela parte:
 
+- **Aparência**: o tema do app (seguir o sistema, claro ou escuro).
+- **Perfis de I.A**: os pré-perfis **Programador** e **Sem censura** e os perfis criados pelo usuário, com as instruções de cada um. Em **Criar novo perfil** o usuário dá um nome, uma descrição opcional e as instruções que a IA deve seguir; o perfil ganha um agente em cada IA instalada e pode ser editado ou excluído depois. Ao excluir um perfil, as conversas que o usavam continuam com o Programador.
+- **Achar I.As no armazenamento**: busca GGUFs já salvos no aparelho e mostra a lista das I.As encontradas antes de importá-las. Cada uma mostra o que está acontecendo com ela (na fila, verificando, importando com a porcentagem copiada, importada, já instalada, inválida ou com falha). **Cancelar** interrompe a busca: a cópia em andamento é apagada e as I.As já importadas continuam instaladas.
 - **Baixar compiladores**: os pacotes de linguagem do editor de código (veja abaixo).
-- **Wikipedia Offline**: edições da Wikipédia publicadas pelo [Kiwix](https://kiwix.org) no formato ZIM, para os agentes consultarem sem internet. Há resumos dos 50 mil artigos essenciais em português (~150 MB), resumos de todos os artigos em português (~1,7 GB), os artigos essenciais completos (~1 GB), a Wikipédia em português completa sem imagens (~7 GB) e resumos em inglês. Quem escolhe o que baixar é o usuário: nada é baixado sem tocar em **Baixar** numa edição e confirmar o diálogo (que mostra o tamanho, o espaço livre e a opção de baixar apenas pelo Wi-Fi), o app não atualiza as edições sozinho e os agentes só leem as edições já instaladas. Ao confirmar, o app baixa a edição mais recente, usando o gerenciador de downloads do Android (continua em segundo plano e retoma após quedas de rede), confere o arquivo com o SHA-256 publicado pelo Kiwix e o guarda na pasta do app em `Android/data`.
+- **Baixar Wikipedia Offline**: edições da Wikipédia publicadas pelo [Kiwix](https://kiwix.org) no formato ZIM, para os agentes consultarem sem internet. Há resumos dos 50 mil artigos essenciais em português (~150 MB), resumos de todos os artigos em português (~1,7 GB), os artigos essenciais completos (~1 GB), a Wikipédia em português completa sem imagens (~7 GB) e resumos em inglês. Quem escolhe o que baixar é o usuário: nada é baixado sem tocar em **Baixar** numa edição e confirmar o diálogo (que mostra o tamanho, o espaço livre e a opção de baixar apenas pelo Wi-Fi), o app não atualiza as edições sozinho e os agentes só leem as edições já instaladas. Ao confirmar, o app baixa a edição mais recente, usando o gerenciador de downloads do Android (continua em segundo plano e retoma após quedas de rede), confere o arquivo com o SHA-256 publicado pelo Kiwix e o guarda na pasta do app em `Android/data`.
 
 O leitor de ZIM é do próprio app: ele procura artigos por título com buscas binárias nos índices do arquivo e descomprime (zstd) só o trecho necessário, então consultar a Wikipédia completa usa quase nada de RAM. Não há busca de texto completo: os artigos são encontrados pelo título, a partir do assunto da pergunta.
 
@@ -112,6 +115,8 @@ A distribuição para aparelhos deve ser feita pelo APK assinado publicado em **
 Quando a assinatura de release estiver configurada, o APK mais recente ficará disponível diretamente em:
 
 `https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
+
+Enquanto a assinatura não estiver configurada, o APK de teste fica no ZIP **IA-Local-debug-APK** de cada execução do GitHub Actions. O workflow envia esse ZIP comprimido (`compression-level` acima de 0). Um ZIP sem compressão gerado pelo Actions abre no computador, mas o leitor de ZIP do Android e a maioria dos gerenciadores de arquivos do celular o recusam como corrompido.
 
 Requisitos do APK atual:
 

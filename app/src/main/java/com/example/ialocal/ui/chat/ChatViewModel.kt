@@ -20,7 +20,7 @@ import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
 import com.example.ialocal.models.ModelRepository
-import com.example.ialocal.models.BuiltInProfile
+import com.example.ialocal.models.AiProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -64,7 +64,8 @@ class ChatViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val agentUsageCounts: StateFlow<Map<String, Int>> = modelRepository.agentUsageCounts
-    val selectedProfile: StateFlow<BuiltInProfile> = modelRepository.selectedProfile
+    val profiles: StateFlow<List<AiProfile>> = modelRepository.profiles
+    val selectedProfile: StateFlow<AiProfile> = modelRepository.selectedProfile
 
     private val _draft = MutableStateFlow(""); val draft: StateFlow<String> = _draft.asStateFlow()
     private val _pendingAttachments = MutableStateFlow<List<PendingAttachment>>(emptyList()); val pendingAttachments = _pendingAttachments.asStateFlow()
@@ -126,8 +127,9 @@ class ChatViewModel(
     fun clearError() { _error.value = null }
 
     /** Works without an installed model; the matching agent is picked once a model exists. */
-    fun selectProfile(profile: BuiltInProfile) {
-        modelRepository.setSelectedProfile(profile)
+    fun selectProfile(profile: AiProfile) {
+        runCatching { modelRepository.setSelectedProfile(profile) }
+            .onFailure { _error.value = it.message ?: "Não foi possível selecionar este perfil." }
     }
 
     fun selectAgent(agentId: String?) {
@@ -139,8 +141,8 @@ class ChatViewModel(
             }
             runCatching {
                 val agent = requireNotNull(modelRepository.getAgent(agentId)) { "Perfil não encontrado." }
-                val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
-                    "Somente Programador e Sem censura estão disponíveis."
+                val profile = requireNotNull(modelRepository.profileNamed(agent.name)) {
+                    "Este perfil não existe mais."
                 }
                 modelRepository.setSelectedProfile(profile)
                 _selectedModelId.value = agent.modelId

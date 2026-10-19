@@ -71,7 +71,10 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
-          compression-level: 0
+          # Never 0: the artifact ZIP is streamed with data descriptors, and a stored (level 0)
+          # entry with a data descriptor is rejected by java.util.zip.ZipInputStream, which
+          # Android and most Android file managers use, so the ZIP opened on a phone as corrupted.
+          compression-level: 6
 
       - name: Check persistent release signing
         id: signing
@@ -151,7 +154,8 @@ jobs:
             dist/IA-Local.apk.sha256
           if-no-files-found: error
           retention-days: 14
-          compression-level: 0
+          # Never 0; see Upload Debug APK.
+          compression-level: 6
 
       - name: Publish direct-download GitHub Release
         if: steps.signing.outputs.ready == 'true'

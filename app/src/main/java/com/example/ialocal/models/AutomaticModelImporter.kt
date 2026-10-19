@@ -8,9 +8,13 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import java.io.File
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,6 +43,8 @@ enum class AutomaticModelImportPhase {
     COMPLETED,
     PERMISSION_REQUIRED,
     FAILED,
+    /** The user stopped the search; what was imported before that stays installed. */
+    CANCELLED,
 }
 
 /** What is happening to the file currently being processed. */
@@ -70,6 +76,8 @@ data class AutomaticModelImportProgress(
     val currentStep: AutomaticModelImportStep? = null,
     /** Friendly name of the AI in [currentFileName], when one was found. */
     val currentModelName: String? = null,
+    /** Every GGUF file found so far, in the order they are imported, with what happened to each. */
+    val found: List<FoundStorageModel> = emptyList(),
 ) {
     val isRunning: Boolean
         get() = phase == AutomaticModelImportPhase.DISCOVERING ||
@@ -105,6 +113,7 @@ class AutomaticModelImporter(
     val progress: StateFlow<AutomaticModelImportProgress> = _progress.asStateFlow()
     private val _events = MutableSharedFlow<AutomaticModelImportEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<AutomaticModelImportEvent> = _events.asSharedFlow()
+    private var scanJob: Job? = null
 
     fun startScan(mode: AutomaticModelScanMode = AutomaticModelScanMode.FULL) {
         if (_progress.value.isRunning) return
@@ -112,16 +121,35 @@ class AutomaticModelImporter(
         _progress.value = AutomaticModelImportProgress(
             phase = AutomaticModelImportPhase.DISCOVERING,
         )
-        scanScope.launch {
+        scanJob = scanScope.launch {
             runCatching { scanAndImport(mode) }
                 .onFailure { error ->
+                    if (error is CancellationException) return@onFailure
                     logger?.error(
                         "AUTO_MODEL_SCAN",
                         "Falha na varredura do armazenamento compartilhado.",
                         error,
                     )
                 }
+        }.also { job ->
+            // Cancelled before the search itself started, so nothing moved the progress on.
+            job.invokeOnCompletion { cause ->
+                if (cause is CancellationException && _progress.value.isRunning) {
+                    _progress.value = AutomaticModelImportProgress(
+                        phase = AutomaticModelImportPhase.CANCELLED,
+                        found = _progress.value.found.cancelPending(),
+                    )
+                }
+            }
         }
+    }
+
+    /**
+     * Stops the search started by [startScan]. A copy in progress is stopped and removed; AIs
+     * imported before it stay installed.
+     */
+    fun cancelScan() {
+        scanJob?.cancel()
     }
 
     suspend fun scanAndImport(
@@ -140,18 +168,22 @@ class AutomaticModelImporter(
             phase = AutomaticModelImportPhase.DISCOVERING,
         )
 
+        var processed = 0
+        var imported = 0
+        var alreadyInstalled = 0
+        var invalid = 0
+        var failures = 0
         try {
             val summary = withContext(Dispatchers.IO) {
-                val candidates = discoverGgufFiles(mode)
+                val candidates = discoverGgufFiles(mode) { file ->
+                    _progress.value = _progress.value.copy(found = _progress.value.found + foundModel(file))
+                }
                 var installed = repository.getModels().toMutableList()
-                var imported = 0
-                var alreadyInstalled = 0
-                var invalid = 0
-                var failures = 0
 
                 _progress.value = AutomaticModelImportProgress(
                     phase = AutomaticModelImportPhase.IMPORTING,
                     total = candidates.size,
+                    found = candidates.map(::foundModel),
                 )
 
                 candidates.forEachIndexed { index, file ->
@@ -160,11 +192,20 @@ class AutomaticModelImporter(
                         total = candidates.size,
                         currentFileName = file.name,
                     )
+                    fun mark(status: FoundModelStatus, detail: String? = null) {
+                        _progress.value = _progress.value.copy(
+                            found = _progress.value.found.update(index) {
+                                it.copy(status = status, detail = detail, copiedBytes = 0L)
+                            },
+                        )
+                    }
+                    mark(FoundModelStatus.CHECKING)
 
                     try {
                         val fingerprint = fingerprint(file)
                         // A manual search must find a file again after its app-private copy was removed.
                         if (mode == AutomaticModelScanMode.QUICK && preferences.getBoolean(fingerprint, false)) {
+                            mark(FoundModelStatus.SEEN_BEFORE)
                             return@forEachIndexed
                         }
 
@@ -172,6 +213,7 @@ class AutomaticModelImporter(
                         if (catalogModel != null && installed.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) }) {
                             markProcessed(fingerprint)
                             alreadyInstalled += 1
+                            mark(FoundModelStatus.ALREADY_INSTALLED)
                             return@forEachIndexed
                         }
 
@@ -184,14 +226,17 @@ class AutomaticModelImporter(
 
                         if (catalogModel != null) {
                             val checksum = runCatching { fileSha256(file) }.getOrElse { error ->
+                                if (error is CancellationException) throw error
                                 failures += 1
                                 logger?.error("AUTO_MODEL_SCAN", "Falha ao ler ${file.name}.", error)
+                                mark(FoundModelStatus.FAILED, "Não foi possível ler o arquivo.")
                                 return@forEachIndexed
                             }
                             if (!checksum.equals(catalogModel.sha256, true)) {
                                 markProcessed(fingerprint)
                                 invalid += 1
                                 logger?.info("AUTO_MODEL_SCAN", "O GGUF ${file.name} não corresponde ao SHA-256 do catálogo.")
+                                mark(FoundModelStatus.INVALID, "O arquivo não corresponde ao do catálogo.")
                                 return@forEachIndexed
                             }
                         }
@@ -203,6 +248,7 @@ class AutomaticModelImporter(
                             markProcessed(fingerprint)
                             invalid += 1
                             logger?.error("AUTO_MODEL_SCAN", "GGUF inválido ignorado: ${file.absolutePath}", t)
+                            mark(FoundModelStatus.INVALID)
                             return@forEachIndexed
                         }
 
@@ -213,31 +259,44 @@ class AutomaticModelImporter(
                                 "AUTO_MODEL_SCAN",
                                 "Sem espaço para importar ${file.name}; tente novamente em Configurações depois de liberar espaço.",
                             )
+                            mark(FoundModelStatus.FAILED, "Sem espaço livre no aparelho.")
                             return@forEachIndexed
                         }
 
                         if (installed.any { sameInstalledModel(it, preview) }) {
                             markProcessed(fingerprint)
                             alreadyInstalled += 1
+                            mark(FoundModelStatus.ALREADY_INSTALLED)
                             return@forEachIndexed
                         }
 
                         _progress.value = _progress.value.copy(currentStep = AutomaticModelImportStep.IMPORTING)
+                        mark(FoundModelStatus.IMPORTING)
                         _events.tryEmit(AutomaticModelImportEvent.Importing(modelName))
                         try {
-                            repository.importGguf(preview, catalogModel)
-                            installed = repository.getModels().toMutableList()
-                            markProcessed(fingerprint)
+                            repository.importGguf(preview, catalogModel) { copied ->
+                                _progress.value = _progress.value.copy(
+                                    found = _progress.value.found.update(index) { it.copy(copiedBytes = copied) },
+                                )
+                            }
+                            // Counted before the next suspension, so a cancel from here on keeps it as imported.
                             imported += 1
+                            markProcessed(fingerprint)
+                            mark(FoundModelStatus.IMPORTED)
+                            installed = repository.getModels().toMutableList()
                             logger?.info(
                                 "AUTO_MODEL_SCAN",
                                 "Modelo importado automaticamente sem carregar o runtime: ${file.absolutePath}",
                             )
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (t: Throwable) {
                             failures += 1
                             logger?.error("AUTO_MODEL_SCAN", "Falha ao importar automaticamente ${file.absolutePath}", t)
+                            mark(FoundModelStatus.FAILED, t.message)
                         }
                     } finally {
+                        processed = index + 1
                         _progress.value = _progress.value.copy(
                             processed = index + 1,
                             total = candidates.size,
@@ -262,15 +321,41 @@ class AutomaticModelImporter(
                 processed = summary.scanned,
                 total = summary.scanned,
                 summary = summary,
+                found = _progress.value.found,
             )
             summary
+        } catch (e: CancellationException) {
+            val found = _progress.value.found
+            logger?.info("AUTO_MODEL_SCAN", "Busca cancelada pelo usuário depois de $imported importação(ões).")
+            _progress.value = AutomaticModelImportProgress(
+                phase = AutomaticModelImportPhase.CANCELLED,
+                processed = processed,
+                total = found.size,
+                summary = AutomaticModelImportSummary(
+                    scanned = processed,
+                    imported = imported,
+                    alreadyInstalled = alreadyInstalled,
+                    invalid = invalid,
+                    failures = failures,
+                ),
+                found = found.cancelPending(),
+            )
+            throw e
         } catch (t: Throwable) {
             _progress.value = AutomaticModelImportProgress(
                 phase = AutomaticModelImportPhase.FAILED,
+                found = _progress.value.found,
             )
             throw t
         }
     }
+
+    private fun foundModel(file: File) = FoundStorageModel(
+        path = file.absolutePath,
+        fileName = file.name,
+        name = catalogModelForFileName(file.name)?.displayName ?: file.nameWithoutExtension,
+        sizeBytes = file.length(),
+    )
 
     private fun inspectFile(file: File): ModelImportPreview {
         require(file.isFile && file.length() > 0L) { "Arquivo GGUF vazio ou indisponível." }
@@ -295,24 +380,29 @@ class AutomaticModelImporter(
             model.name.equals(preview.suggestedName, ignoreCase = true)
     }
 
-    private fun discoverGgufFiles(mode: AutomaticModelScanMode): List<File> {
+    /** The GGUF files in storage, in import order; [onFound] hears of each as the walk finds it. */
+    private suspend fun discoverGgufFiles(mode: AutomaticModelScanMode, onFound: (File) -> Unit): List<File> {
         val root = Environment.getExternalStorageDirectory()
         if (!root.isDirectory || !root.canRead()) return emptyList()
 
         val result = mutableListOf<File>()
         if (mode == AutomaticModelScanMode.QUICK) {
             runCatching { root.listFiles() }.getOrNull().orEmpty()
-                .filterTo(result) { file ->
+                .filter { file ->
                     file.isFile && file.extension.equals("gguf", ignoreCase = true) && file.length() > 0L
+                }
+                .forEach { file ->
+                    result += file
+                    onFound(file)
                 }
             val quickRoots = listOf(
                 File(root, PublicModelDownloads.FOLDER_NAME),
                 File(root, Environment.DIRECTORY_DOWNLOADS),
                 File(root, Environment.DIRECTORY_DOCUMENTS),
             ).filter { it.isDirectory && it.canRead() }
-            result += discoverRecursively(quickRoots)
+            result += discoverRecursively(quickRoots, onFound)
         } else {
-            result += discoverRecursively(listOf(root))
+            result += discoverRecursively(listOf(root), onFound)
         }
 
         return result
@@ -326,13 +416,14 @@ class AutomaticModelImporter(
             )
     }
 
-    private fun discoverRecursively(roots: List<File>): List<File> {
+    private suspend fun discoverRecursively(roots: List<File>, onFound: (File) -> Unit): List<File> {
         val result = mutableListOf<File>()
         val pending = ArrayDeque<File>()
         val visited = hashSetOf<String>()
         roots.forEach { root -> if (root.isDirectory && root.canRead()) pending.add(root) }
 
         while (pending.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
             val directory = pending.removeFirst()
             val canonical = runCatching { directory.canonicalPath }.getOrElse { directory.absolutePath }
             if (!visited.add(canonical)) continue
@@ -341,7 +432,10 @@ class AutomaticModelImporter(
             children.forEach { child ->
                 when {
                     child.isDirectory && shouldEnter(child) -> pending.addLast(child)
-                    child.isFile && child.extension.equals("gguf", ignoreCase = true) && child.length() > 0L -> result += child
+                    child.isFile && child.extension.equals("gguf", ignoreCase = true) && child.length() > 0L -> {
+                        result += child
+                        onFound(child)
+                    }
                 }
             }
         }
@@ -365,11 +459,12 @@ class AutomaticModelImporter(
         return KEY_PREFIX + digest.joinToString("") { "%02x".format(it) }
     }
 
-    private fun fileSha256(file: File): String {
+    private suspend fun fileSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().buffered().use { input ->
             val buffer = ByteArray(1024 * 1024)
             while (true) {
+                currentCoroutineContext().ensureActive()
                 val count = input.read(buffer)
                 if (count < 0) break
                 digest.update(buffer, 0, count)
