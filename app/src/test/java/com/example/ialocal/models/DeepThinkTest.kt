@@ -220,6 +220,33 @@ class DeepThinkTest {
         )
     }
 
+    @Test
+    fun addedInstructMoeModelsHaveNoReasoningMode() {
+        listOf(
+            model("SmallThinker 4B-A0.6B", "local-catalog-smallthinker-4b-a0.6b-q4-k-m-1", "smallthinker"),
+            model("Ling mini 2.0 16B-A1.4B", "local-catalog-ling-mini-2.0-q3-k-m-1", "bailingmoe2"),
+            // Like Nemotron 3 Nano, it opens <think> itself when it reasons.
+            model("Nemotron 3.5 Lightning 30B-A3B", "local-catalog-nemotron3.5-lightning-30b-a3b-q4-0-1", "nemotron_h_moe"),
+        ).forEach { assertEquals(DeepThinkControlMode.NONE, DeepThinkSupport.capability(it).mode) }
+        // Laguna's template ends the prompt with <think> (or </think> when reasoning is off).
+        val laguna = model("Laguna XS 2.1 33B-A3B", "local-catalog-laguna-xs-2.1-q3-k-m-1", "laguna")
+        assertEquals(DeepThinkControlMode.HYBRID_THINKING, DeepThinkSupport.capability(laguna).mode)
+        assertFalse(DeepThinkSupport.plan(laguna, 8192, false, DeepThinkLevel.HIGH).templateThinking)
+        // Ornith 1.5 35B-A3B is Qwen3.5 underneath, with the same prefilled switch.
+        assertEquals(
+            "<think>\n\n</think>\n\n",
+            DeepThinkSupport.plan(
+                model("Ornith 1.5 35B-A3B", "local-catalog-ornith1.5-35b-a3b-q3-k-m-1", "qwen35moe"),
+                8192, false, DeepThinkLevel.HIGH,
+            ).assistantPrefix,
+        )
+        // Gemma 4's QAT MoE keeps the family's reasoning switch.
+        assertEquals(
+            DeepThinkControlMode.HYBRID_THINKING,
+            DeepThinkSupport.capability(model("Gemma 4 26B-A4B QAT", "local-catalog-gemma4-26b-a4b-it-qat-q4-0-1", "gemma4")).mode,
+        )
+    }
+
     private fun model(name: String, apiModelId: String, architecture: String? = null) = AiModelEntity(
         id = "model-id",
         name = name,

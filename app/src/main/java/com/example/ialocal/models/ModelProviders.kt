@@ -17,6 +17,13 @@ fun AiModelEntity.provider(): ModelProvider? =
 fun providerFromName(name: String): ModelProvider? {
     val text = name.lowercase()
     return when {
+        Regex("(^|[^a-z])(ling|ring)[- ](mini|lite|flash)").containsMatchIn(text) || "inclusionai" in text -> ModelProvider.INCLUSION_AI
+        "smallthinker" in text || "powerinfer" in text -> ModelProvider.POWERINFER
+        // GigaChat 3 and GLM-4.7-Flash use DeepSeek's "deepseek2" architecture, so they come first.
+        Regex("(^|[^a-z])glm[- ]?\\d").containsMatchIn(text) || "zhipu" in text -> ModelProvider.ZAI
+        "north mini" in text || "north-mini" in text || "cohere" in text -> ModelProvider.COHERE
+        "laguna" in text || "poolside" in text -> ModelProvider.POOLSIDE
+        "gigachat" in text -> ModelProvider.SBER
         "deepseek" in text -> ModelProvider.DEEPSEEK
         // Bonsai is built on Qwen, so it must be recognized before the Qwen check.
         "bonsai" in text || "prism" in text -> ModelProvider.PRISMML

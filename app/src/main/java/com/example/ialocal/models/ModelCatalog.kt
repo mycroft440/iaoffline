@@ -16,6 +16,12 @@ enum class ModelProvider(val sectionLabel: String) {
     OPENBMB("Modelos da OpenBMB / MiniCPM"),
     JETBRAINS("Modelos da JetBrains / Mellum"),
     ORNITH("Modelos da Ornith AI"),
+    INCLUSION_AI("Modelos da inclusionAI / Ling"),
+    POWERINFER("Modelos da PowerInfer / SmallThinker"),
+    ZAI("Modelos da Z.ai / GLM"),
+    COHERE("Modelos da Cohere"),
+    POOLSIDE("Modelos da Poolside / Laguna"),
+    SBER("Modelos da Sber / GigaChat"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -46,12 +52,16 @@ data class CatalogModel(
     val apiIdPrefix: String
         get() = "local-catalog-$id-"
 
+    /** Mixture of experts: each word uses only [activeParametersBillions] of the total. */
+    val isMoe: Boolean
+        get() = activeParametersBillions != null
+
     /**
      * Large mixture-of-experts models: too big for a phone's RAM, but each word only uses a few
      * billion parameters, so they can run slowly by reading weights from storage.
      */
     val isExperimental: Boolean
-        get() = activeParametersBillions != null && totalParametersBillions >= EXPERIMENTAL_MIN_TOTAL_BILLIONS
+        get() = isMoe && totalParametersBillions >= EXPERIMENTAL_MIN_TOTAL_BILLIONS
 
     companion object {
         const val EXPERIMENTAL_MIN_TOTAL_BILLIONS = 15.0
@@ -907,6 +917,143 @@ object ModelCatalog {
             totalParametersBillions = 9.0,
             description = "Ornith 1.5 9B (agosto de 2026), construído sobre o Qwen3.5 9B com treino de autoaperfeiçoamento: raciocínio, código e agentes muito acima do tamanho. Em 4 bits para manter a qualidade.",
             strengths = "Segundo a Ornith AI, perto do Qwen3.6 35B-A3B: 86,4 no GPQA Diamond (Qwen3.5 9B: 81,7) e 70,6 no SWE-bench Verified (Qwen3.5 9B: 53,2).",
+        ),
+
+        // More mixture-of-experts models. Their architectures, chat templates and SHA-256 were
+        // checked against the pinned llama.cpp before they were added.
+        CatalogModel(
+            id = "smallthinker-4b-a0.6b-q4-k-m",
+            displayName = "SmallThinker 4B-A0.6B",
+            provider = ModelProvider.POWERINFER,
+            repository = "bartowski/PowerInfer_SmallThinker-4BA0.6B-Instruct-GGUF",
+            fileName = "PowerInfer_SmallThinker-4BA0.6B-Instruct-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 2_645_941_888L,
+            sha256 = "f1ee3defe19e937f3d4994aefe22b835cecf61f15ad16b9f00f28c3f64ed7b0a",
+            recommendedRamBytes = 4_500_000_000L,
+            totalParametersBillions = 4.0,
+            activeParametersBillions = 0.6,
+            description = "MoE da PowerInfer feito para rodar no próprio aparelho: 4B no total e só 0,6B ativos por palavra, rápido até em celulares simples. Treinado principalmente em inglês.",
+            strengths = "Segundo a PowerInfer, média de 61,8 em sete testes (MMLU, GPQA, GSM8K, MATH-500, IFEval, LiveBench e HumanEval) e mais de 20 tokens por segundo em processadores comuns.",
+        ),
+        CatalogModel(
+            id = "ling-mini-2.0-q3-k-m",
+            displayName = "Ling mini 2.0 16B-A1.4B",
+            provider = ModelProvider.INCLUSION_AI,
+            repository = "bartowski/inclusionAI_Ling-mini-2.0-GGUF",
+            fileName = "inclusionAI_Ling-mini-2.0-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 7_540_925_632L,
+            sha256 = "52b7221105c03efb0b807993e96f4afda85b05d00647d33a3032ad80826761a8",
+            recommendedRamBytes = 10_000_000_000L,
+            totalParametersBillions = 16.26,
+            activeParametersBillions = 1.43,
+            description = "MoE da inclusionAI (Ant Group) com 16B no total e só 1,4B ativos por palavra. Experimental no celular: roda lendo os pesos do armazenamento, mas escreve na velocidade de um modelo de 1 a 2B.",
+            strengths = "Segundo a inclusionAI, rende como um modelo denso de 7 a 8B e escreve mais que o dobro da velocidade de um denso de 8B.",
+        ),
+        CatalogModel(
+            id = "gemma4-26b-a4b-it-qat-q4-0",
+            displayName = "Gemma 4 26B-A4B QAT",
+            provider = ModelProvider.GOOGLE,
+            repository = "google/gemma-4-26B-A4B-it-qat-q4_0-gguf",
+            fileName = "gemma-4-26B_q4_0-it.gguf",
+            quantization = "Q4_0 (QAT)",
+            approximateSizeBytes = 14_439_363_584L,
+            sha256 = "3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d",
+            recommendedRamBytes = 19_000_000_000L,
+            totalParametersBillions = 25.2,
+            activeParametersBillions = 3.8,
+            description = "Gemma 4 26B-A4B oficial do Google treinado para 4 bits (QAT), no formato mais rápido para processadores ARM. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "QAT: segundo o Google, qualidade parecida com a do modelo original em 16 bits, com suporte a mais de 35 idiomas.",
+        ),
+        CatalogModel(
+            id = "glm4.7-flash-ud-q3-k-xl",
+            displayName = "GLM-4.7-Flash 30B-A3B",
+            provider = ModelProvider.ZAI,
+            repository = "unsloth/GLM-4.7-Flash-GGUF",
+            fileName = "GLM-4.7-Flash-UD-Q3_K_XL.gguf",
+            quantization = "Q3_K_XL",
+            approximateSizeBytes = 13_782_004_064L,
+            sha256 = "582728c0f6931a1cf734d5a7cf60ec73522fb79811e004cbc12476dd69b033bf",
+            recommendedRamBytes = 18_000_000_000L,
+            totalParametersBillions = 30.0,
+            activeParametersBillions = 3.0,
+            description = "MoE da Z.ai (Zhipu) com 30B no total e 3B ativos, forte em código, agentes e matemática. Treinado sobretudo em inglês e chinês. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Segundo a Z.ai, 59,2 no SWE-bench Verified (gpt-oss 20B: 34,0) e 79,5 no τ²-Bench (gpt-oss 20B: 47,7).",
+        ),
+        CatalogModel(
+            id = "north-mini-code-1.0-ud-q3-k-m",
+            displayName = "North Mini Code 30B-A3B",
+            provider = ModelProvider.COHERE,
+            repository = "unsloth/North-Mini-Code-1.0-GGUF",
+            fileName = "North-Mini-Code-1.0-UD-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 14_213_013_600L,
+            sha256 = "145e185430e31c43221995ac52aed7efbd91f043dbfcdcf297a986f06f7dcee7",
+            recommendedRamBytes = 19_000_000_000L,
+            totalParametersBillions = 30.0,
+            activeParametersBillions = 3.0,
+            description = "MoE da Cohere com 30B no total e 3B ativos, feito para programação, engenharia de software com agentes e terminal; contexto de 256K. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+        ),
+        CatalogModel(
+            id = "laguna-xs-2.1-q3-k-m",
+            displayName = "Laguna XS 2.1 33B-A3B",
+            provider = ModelProvider.POOLSIDE,
+            repository = "bartowski/Laguna-XS-2.1-GGUF",
+            fileName = "Laguna-XS-2.1-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 15_575_904_128L,
+            sha256 = "00dda85ab74afccafa99b66e4d564a6ef76278a8c633d358cad630e7622cf618",
+            recommendedRamBytes = 20_000_000_000L,
+            totalParametersBillions = 33.0,
+            activeParametersBillions = 3.0,
+            description = "MoE da Poolside com 33B no total e 3B ativos, feito para programar com agentes; contexto de 256K. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Segundo a Poolside, 70,9% no SWE-bench Verified e 63,1% no SWE-bench Multilingual.",
+        ),
+        CatalogModel(
+            id = "ornith1.5-35b-a3b-q3-k-m",
+            displayName = "Ornith 1.5 35B-A3B",
+            provider = ModelProvider.ORNITH,
+            repository = "bartowski/Ornith-1.5-35B-A3B-GGUF",
+            fileName = "Ornith-1.5-35B-A3B-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 16_696_952_480L,
+            sha256 = "5aa203a8c0b9998aa41a625ef1a6241c7ffb26b99acce9965a4986d3c3dc2943",
+            recommendedRamBytes = 22_000_000_000L,
+            totalParametersBillions = 35.0,
+            activeParametersBillions = 3.0,
+            description = "Ornith 1.5 MoE (agosto de 2026) com 35B no total e 3B ativos: raciocínio, código e agentes. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Segundo a Ornith AI, 79 no SWE-bench Verified (Qwen3.6 35B-A3B: 73,4) e 89,2 no GPQA Diamond.",
+        ),
+        CatalogModel(
+            id = "nemotron3.5-lightning-30b-a3b-q4-0",
+            displayName = "Nemotron 3.5 Lightning 30B-A3B",
+            provider = ModelProvider.NVIDIA,
+            repository = "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            fileName = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf",
+            quantization = "Q4_0",
+            approximateSizeBytes = 18_898_091_584L,
+            sha256 = "61f87e75974e4b535dcdf9aad056541a9514f1dfa4538b463b081d19b7a00e3c",
+            recommendedRamBytes = 24_000_000_000L,
+            totalParametersBillions = 31.6,
+            activeParametersBillions = 3.6,
+            description = "Sucessor do Nemotron 3 Nano 30B-A3B (agosto de 2026): MoE híbrido Mamba-Transformer com 31,6B no total e 3,6B ativos. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Na Artificial Analysis, índice de inteligência 24, contra 15 do Nemotron 3 Nano 30B-A3B. Idiomas principais: inglês, espanhol, francês, alemão, italiano e japonês.",
+        ),
+        CatalogModel(
+            id = "gigachat3.1-10b-a1.8b-q4-k-m",
+            displayName = "GigaChat 3.1 10B-A1.8B",
+            provider = ModelProvider.SBER,
+            repository = "ai-sage/GigaChat3.1-10B-A1.8B-GGUF",
+            fileName = "GigaChat3.1-10B-A1.8B-q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 6_474_702_976L,
+            sha256 = "68a8732fb5cee04f83ebffd7924e15c534d4442c5a43d2ba9e2041fe310b8deb",
+            recommendedRamBytes = 10_000_000_000L,
+            totalParametersBillions = 10.0,
+            activeParametersBillions = 1.8,
+            description = "MoE compacto da Sber, da família GigaChat 3.1: 10B no total e 1,8B ativos por palavra. Forte em russo e inglês, treinado em 10 idiomas.",
+            strengths = "Segundo a Sber, foi de 14,3 (GigaChat 3 Lightning) para 46,7 no Arena Hard.",
         ),
     )
 
