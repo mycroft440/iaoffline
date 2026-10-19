@@ -1223,7 +1223,7 @@ private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modif
                 Image(
                     painter = painterResource(provider.logoRes()),
                     contentDescription = provider.brandName(),
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)),
                     contentScale = ContentScale.Fit,
                 )
             } else {

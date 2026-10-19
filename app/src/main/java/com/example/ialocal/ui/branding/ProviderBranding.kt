@@ -10,6 +10,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
@@ -36,9 +37,10 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.JETBRAINS -> "JetBrains"
     ModelProvider.ORNITH -> "Ornith AI"
     ModelProvider.INCLUSION_AI -> "inclusionAI / Ling"
-    ModelProvider.POWERINFER -> "PowerInfer"
+    ModelProvider.POWERINFER -> "PowerInfer (Tiiny)"
 }
 
+/** Every company has its own logo, shown in the catalog and next to its model's replies in the chat. */
 fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.GOOGLE -> R.drawable.provider_google
     ModelProvider.ALIBABA -> R.drawable.provider_alibaba
@@ -46,17 +48,17 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.MISTRAL -> R.drawable.provider_mistral
     ModelProvider.DEEPSEEK -> R.drawable.provider_deepseek
     ModelProvider.MICROSOFT -> R.drawable.provider_microsoft
-    ModelProvider.PRISMML,
-    ModelProvider.IBM,
-    ModelProvider.LIQUID,
-    ModelProvider.AI2,
-    ModelProvider.NVIDIA,
-    ModelProvider.OPENAI,
-    ModelProvider.OPENBMB,
-    ModelProvider.JETBRAINS,
-    ModelProvider.ORNITH,
-    ModelProvider.INCLUSION_AI,
-    ModelProvider.POWERINFER -> R.drawable.provider_generic
+    ModelProvider.PRISMML -> R.drawable.provider_prismml
+    ModelProvider.IBM -> R.drawable.provider_ibm
+    ModelProvider.LIQUID -> R.drawable.provider_liquid
+    ModelProvider.AI2 -> R.drawable.provider_ai2
+    ModelProvider.NVIDIA -> R.drawable.provider_nvidia
+    ModelProvider.OPENAI -> R.drawable.provider_openai
+    ModelProvider.OPENBMB -> R.drawable.provider_openbmb
+    ModelProvider.JETBRAINS -> R.drawable.provider_jetbrains
+    ModelProvider.ORNITH -> R.drawable.provider_ornith
+    ModelProvider.INCLUSION_AI -> R.drawable.provider_inclusionai
+    ModelProvider.POWERINFER -> R.drawable.provider_powerinfer
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =
@@ -77,7 +79,8 @@ fun ProviderLogo(
             Image(
                 painter = painterResource(provider.logoRes()),
                 contentDescription = null,
-                modifier = Modifier.padding(6.dp),
+                // Rounded like the frame: most logos are square pictures with their own background.
+                modifier = Modifier.padding(6.dp).clip(RoundedCornerShape(5.dp)),
                 contentScale = ContentScale.Fit,
             )
         }
