@@ -13,7 +13,8 @@ data class ToolRoundResult(val name: String, val output: String)
  * Reasoning is re-emitted inside one canonical `<think>…</think>` block across rounds so the chat
  * can show it live. An answer that starts like a tool call (`{` or a code fence) is held back until
  * the round ends; [toolRound] then decides whether it was a tool call, in which case its result is
- * fed back to the model and another round runs.
+ * fed back to the model and another round runs. While nothing is visible yet, [onHiddenTokens]
+ * gets the number of tokens the round has written, so the chat can say the answer is being written.
  */
 internal fun agentStream(
     expectReasoning: Boolean,
@@ -21,6 +22,7 @@ internal fun agentStream(
     messages: List<AiChatMessage>,
     generate: (List<AiChatMessage>) -> Flow<String>,
     toolRound: suspend (answer: String) -> ToolRoundResult?,
+    onHiddenTokens: (Int) -> Unit = {},
 ): Flow<String> = flow {
     val working = messages.toMutableList()
     var thinkOpen = false
@@ -80,9 +82,12 @@ internal fun agentStream(
             }
         }
 
+        var tokens = 0
         generate(working).collect { chunk ->
             raw.append(chunk)
             handle(splitter.push(chunk))
+            tokens++
+            if (!answerStarted && !thinkOpen) onHiddenTokens(tokens)
         }
         handle(splitter.finish())
         if (splitter.unclosedImplicitReasoning && answer.isBlank()) {

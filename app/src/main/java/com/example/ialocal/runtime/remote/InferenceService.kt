@@ -77,6 +77,7 @@ class InferenceService : Service() {
                         temperature = request.temperature,
                         maxTokens = request.maxTokens,
                         turn = request.turn,
+                        onStage = { stage -> runCatching { callback.onStage(stage.encode()) } },
                     ).collect { callback.onToken(it) }
                     callback.onDone()
                 } catch (cancel: CancellationException) {

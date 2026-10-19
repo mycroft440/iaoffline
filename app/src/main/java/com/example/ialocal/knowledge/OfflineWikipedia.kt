@@ -169,8 +169,10 @@ class OfflineWikipedia(
 
     // --- Lookups used by the agents ---
 
-    suspend fun contextFor(question: String): String? = withContext(Dispatchers.IO) {
+    /** Excerpts for [question] when the automatic lookup is on; [onLookup] runs when it searches. */
+    suspend fun contextFor(question: String, onLookup: () -> Unit = {}): String? = withContext(Dispatchers.IO) {
         if (!_autoContext.value || !isInstalled()) return@withContext null
+        onLookup()
         runCatching { lookup.contextFor(question) }
             .onFailure { logger?.error("WIKIPEDIA", "Falha ao consultar a Wikipedia offline", it) }
             .getOrNull()

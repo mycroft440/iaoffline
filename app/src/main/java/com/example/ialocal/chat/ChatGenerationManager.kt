@@ -15,6 +15,7 @@ import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.models.provider
+import com.example.ialocal.runtime.GenerationStage
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -27,9 +28,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 data class QueuedChatMessage(
@@ -84,8 +85,17 @@ class ChatGenerationManager(
         internal val _waitingForSlot = MutableStateFlow(false)
         /** True while this conversation's message waits for other conversations to be answered. */
         val waitingForSlot: StateFlow<Boolean> = _waitingForSlot.asStateFlow()
+        internal val _progress = MutableStateFlow<GenerationProgress?>(null)
+        /** What the answer being prepared is doing, step by step; null when nothing is generating. */
+        val progress: StateFlow<GenerationProgress?> = _progress.asStateFlow()
         internal var job: Job? = null
         internal var queuedTarget: GenerationTarget? = null
+
+        /** Called from the AI's threads too, so the update is atomic. */
+        internal fun report(stage: GenerationStage) {
+            val now = System.currentTimeMillis()
+            _progress.update { (it ?: GenerationProgress()).advance(stage, now) }
+        }
     }
 
     fun session(conversationId: String): Session = sessions.getOrPut(conversationId) { Session() }
@@ -196,6 +206,7 @@ class ChatGenerationManager(
         block: suspend () -> Unit,
     ) {
         session._isGenerating.value = true
+        session._progress.value = null
         // Only the first concurrent generation starts the service; later ones (including queued turns
         // started while the app is in the background) run under the service that is already active.
         if (_activeGenerations.value == 0) ChatGenerationService.start(appContext)
@@ -210,6 +221,7 @@ class ChatGenerationManager(
             } finally {
                 session.job = null
                 session._isGenerating.value = false
+                session._progress.value = null
                 // Start the next queued turn before releasing this one so the count never drops to
                 // zero in between and the foreground service is not stopped mid-queue.
                 startNextQueued(conversationId, session, target)
@@ -219,14 +231,19 @@ class ChatGenerationManager(
     }
 
     private suspend fun awaitAnswerSlot(session: Session, block: suspend () -> Unit) {
-        session._waitingForSlot.value = true
-        try {
-            answerSlots.withPermit {
+        if (!answerSlots.tryAcquire()) {
+            session._waitingForSlot.value = true
+            session.report(GenerationStage(GenerationStage.Kind.QUEUED))
+            try {
+                answerSlots.acquire()
+            } finally {
                 session._waitingForSlot.value = false
-                block()
             }
+        }
+        try {
+            block()
         } finally {
-            session._waitingForSlot.value = false
+            answerSlots.release()
         }
     }
 
@@ -240,7 +257,12 @@ class ChatGenerationManager(
      * The profile, and so the model, that answers a message sent now. With [verify], a model not
      * yet tested is tested first and stays loaded for the answer; without it, such a model gives null.
      */
-    private suspend fun resolveAgent(conversationId: String, target: GenerationTarget, verify: Boolean): AgentEntity? {
+    private suspend fun resolveAgent(
+        conversationId: String,
+        target: GenerationTarget,
+        verify: Boolean,
+        onStage: (GenerationStage) -> Unit = {},
+    ): AgentEntity? {
         val profileName = modelRepository.selectedProfile.value.displayName
         val conversation = repository.getConversation(conversationId)
         val preferredAgentId = target.preferredAgentId ?: conversation?.agentId
@@ -259,6 +281,7 @@ class ChatGenerationManager(
             }
             if (selectedModel.verificationStatus != ModelVerificationStatus.VERIFIED.name) {
                 if (!verify) return null
+                onStage(GenerationStage(GenerationStage.Kind.VERIFYING, selectedModel.name))
                 modelManager.retryVerification(selectedModel.id, keepLoaded = true)
             }
         }
@@ -273,7 +296,7 @@ class ChatGenerationManager(
         attachments: List<PendingAttachment>,
     ) {
         val conversation = repository.getConversation(conversationId)
-        val agent = resolveAgent(conversationId, target, verify = true)
+        val agent = resolveAgent(conversationId, target, verify = true, onStage = session::report)
             ?: throw IllegalStateException("Nenhum perfil com modelo local disponível pôde ser preparado para uso.")
         session._resolvedAgentId.value = agent.id
         if (conversation?.agentId != agent.id) {
@@ -314,6 +337,7 @@ class ChatGenerationManager(
                             messages = history,
                             attachments = attachments,
                             agentId = agent.id,
+                            onStage = session::report,
                         )
                     ).collect { chunk ->
                         accumulated.append(chunk)
@@ -321,6 +345,7 @@ class ChatGenerationManager(
                         val tail = accumulated.substring(maxOf(0, accumulated.length - chunk.length - TAG_WINDOW))
                         if (reasoningStartedAt == null && AssistantContent.hasReasoningStarted(tail)) {
                             reasoningStartedAt = System.currentTimeMillis()
+                            session.report(GenerationStage(GenerationStage.Kind.REASONING))
                         }
                         if (reasoningStartedAt != null && reasoningEndedAt == null && AssistantContent.hasReasoningEnded(tail)) {
                             reasoningEndedAt = System.currentTimeMillis()
