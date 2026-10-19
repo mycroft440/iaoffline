@@ -230,6 +230,14 @@ class DeepThinkTest {
         val laguna = model("Laguna XS 2.1 33B-A3B", "local-catalog-laguna-xs-2.1-q3-k-m-1", "laguna")
         assertEquals(DeepThinkControlMode.HYBRID_THINKING, DeepThinkSupport.capability(laguna).mode)
         assertFalse(DeepThinkSupport.plan(laguna, 8192, false, DeepThinkLevel.HIGH).templateThinking)
+        // Ornith 1.5 35B-A3B is Qwen3.5 underneath, with the same prefilled switch.
+        assertEquals(
+            "<think>\n\n</think>\n\n",
+            DeepThinkSupport.plan(
+                model("Ornith 1.5 35B-A3B", "local-catalog-ornith1.5-35b-a3b-q3-k-m-1", "qwen35moe"),
+                8192, false, DeepThinkLevel.HIGH,
+            ).assistantPrefix,
+        )
         // Gemma 4's QAT MoE keeps the family's reasoning switch.
         assertEquals(
             DeepThinkControlMode.HYBRID_THINKING,

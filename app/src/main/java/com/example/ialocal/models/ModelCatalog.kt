@@ -1009,6 +1009,21 @@ object ModelCatalog {
             description = "MoE da Poolside com 33B no total e 3B ativos, feito para programar com agentes; contexto de 256K. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
             strengths = "Segundo a Poolside, 70,9% no SWE-bench Verified e 63,1% no SWE-bench Multilingual.",
         ),
+        CatalogModel(
+            id = "ornith1.5-35b-a3b-q3-k-m",
+            displayName = "Ornith 1.5 35B-A3B",
+            provider = ModelProvider.ORNITH,
+            repository = "bartowski/Ornith-1.5-35B-A3B-GGUF",
+            fileName = "Ornith-1.5-35B-A3B-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 16_696_952_480L,
+            sha256 = "5aa203a8c0b9998aa41a625ef1a6241c7ffb26b99acce9965a4986d3c3dc2943",
+            recommendedRamBytes = 22_000_000_000L,
+            totalParametersBillions = 35.0,
+            activeParametersBillions = 3.0,
+            description = "Ornith 1.5 MoE (agosto de 2026) com 35B no total e 3B ativos: raciocínio, código e agentes. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Segundo a Ornith AI, 79 no SWE-bench Verified (Qwen3.6 35B-A3B: 73,4) e 89,2 no GPQA Diamond.",
+        ),
     )
 
     fun requireById(id: String): CatalogModel =
