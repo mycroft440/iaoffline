@@ -220,6 +220,14 @@ class DeepThinkTest {
         )
     }
 
+    @Test
+    fun addedInstructMoeModelsHaveNoReasoningMode() {
+        listOf(
+            model("SmallThinker 4B-A0.6B", "local-catalog-smallthinker-4b-a0.6b-q4-k-m-1", "smallthinker"),
+            model("Ling mini 2.0 16B-A1.4B", "local-catalog-ling-mini-2.0-q3-k-m-1", "bailingmoe2"),
+        ).forEach { assertEquals(DeepThinkControlMode.NONE, DeepThinkSupport.capability(it).mode) }
+    }
+
     private fun model(name: String, apiModelId: String, architecture: String? = null) = AiModelEntity(
         id = "model-id",
         name = name,

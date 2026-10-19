@@ -16,6 +16,14 @@ class ModelProvidersTest {
     }
 
     @Test
+    fun recognizesTheAddedMoeCompanies() {
+        assertEquals(ModelProvider.INCLUSION_AI, providerFromName("Ling-mini-2.0 bailingmoe2"))
+        assertEquals(ModelProvider.POWERINFER, providerFromName("SmallThinker-4BA0.6B-Instruct"))
+        // Words that merely contain these names stay unknown.
+        assertNull(providerFromName("darling-7b"))
+    }
+
+    @Test
     fun unknownNamesHaveNoCompany() {
         assertNull(providerFromName("meu-modelo-q4"))
     }

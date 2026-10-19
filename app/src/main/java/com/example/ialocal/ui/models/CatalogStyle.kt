@@ -304,4 +304,22 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         tagline = "Modelos com treino de autoaperfeiçoamento, fortes em raciocínio e código",
         accent = Color(0xFFF97316),
     )
+
+    ModelProvider.INCLUSION_AI -> ProviderUiMeta(
+        selectorName = "Ling",
+        selectorSubtitle = "inclusionAI",
+        sectionName = "inclusionAI (Ling)",
+        badge = "Ant Group",
+        tagline = "MoE muito esparsos: poucos parâmetros ativos e respostas rápidas",
+        accent = Color(0xFF60A5FA),
+    )
+
+    ModelProvider.POWERINFER -> ProviderUiMeta(
+        selectorName = "SmallThinker",
+        selectorSubtitle = "PowerInfer",
+        sectionName = "PowerInfer (SmallThinker)",
+        badge = "No aparelho",
+        tagline = "MoE pensados para rodar no próprio aparelho",
+        accent = Color(0xFFA3E635),
+    )
 }

@@ -16,6 +16,8 @@ enum class ModelProvider(val sectionLabel: String) {
     OPENBMB("Modelos da OpenBMB / MiniCPM"),
     JETBRAINS("Modelos da JetBrains / Mellum"),
     ORNITH("Modelos da Ornith AI"),
+    INCLUSION_AI("Modelos da inclusionAI / Ling"),
+    POWERINFER("Modelos da PowerInfer / SmallThinker"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -911,6 +913,39 @@ object ModelCatalog {
             totalParametersBillions = 9.0,
             description = "Ornith 1.5 9B (agosto de 2026), construído sobre o Qwen3.5 9B com treino de autoaperfeiçoamento: raciocínio, código e agentes muito acima do tamanho. Em 4 bits para manter a qualidade.",
             strengths = "Segundo a Ornith AI, perto do Qwen3.6 35B-A3B: 86,4 no GPQA Diamond (Qwen3.5 9B: 81,7) e 70,6 no SWE-bench Verified (Qwen3.5 9B: 53,2).",
+        ),
+
+        // More mixture-of-experts models. Their architectures, chat templates and SHA-256 were
+        // checked against the pinned llama.cpp before they were added.
+        CatalogModel(
+            id = "smallthinker-4b-a0.6b-q4-k-m",
+            displayName = "SmallThinker 4B-A0.6B",
+            provider = ModelProvider.POWERINFER,
+            repository = "bartowski/PowerInfer_SmallThinker-4BA0.6B-Instruct-GGUF",
+            fileName = "PowerInfer_SmallThinker-4BA0.6B-Instruct-Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 2_645_941_888L,
+            sha256 = "f1ee3defe19e937f3d4994aefe22b835cecf61f15ad16b9f00f28c3f64ed7b0a",
+            recommendedRamBytes = 4_500_000_000L,
+            totalParametersBillions = 4.0,
+            activeParametersBillions = 0.6,
+            description = "MoE da PowerInfer feito para rodar no próprio aparelho: 4B no total e só 0,6B ativos por palavra, rápido até em celulares simples. Treinado principalmente em inglês.",
+            strengths = "Segundo a PowerInfer, média de 61,8 em sete testes (MMLU, GPQA, GSM8K, MATH-500, IFEval, LiveBench e HumanEval) e mais de 20 tokens por segundo em processadores comuns.",
+        ),
+        CatalogModel(
+            id = "ling-mini-2.0-q3-k-m",
+            displayName = "Ling mini 2.0 16B-A1.4B",
+            provider = ModelProvider.INCLUSION_AI,
+            repository = "bartowski/inclusionAI_Ling-mini-2.0-GGUF",
+            fileName = "inclusionAI_Ling-mini-2.0-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 7_540_925_632L,
+            sha256 = "52b7221105c03efb0b807993e96f4afda85b05d00647d33a3032ad80826761a8",
+            recommendedRamBytes = 10_000_000_000L,
+            totalParametersBillions = 16.26,
+            activeParametersBillions = 1.43,
+            description = "MoE da inclusionAI (Ant Group) com 16B no total e só 1,4B ativos por palavra. Experimental no celular: roda lendo os pesos do armazenamento, mas escreve na velocidade de um modelo de 1 a 2B.",
+            strengths = "Segundo a inclusionAI, rende como um modelo denso de 7 a 8B e escreve mais que o dobro da velocidade de um denso de 8B.",
         ),
     )
 

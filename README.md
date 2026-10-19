@@ -6,7 +6,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
 
 - Android 13+; arm64-v8a/x86_64.
 - Runtime local baseado no binding Android do llama.cpp.
-- Catálogo integrado para baixar modelos em GGUF diretamente no app, organizado por empresa (PrismML/Bonsai, DeepSeek, Qwen, Mistral, Meta, Google, Microsoft, IBM, Liquid AI, Ai2, NVIDIA, OpenAI, OpenBMB e JetBrains).
+- Catálogo integrado para baixar modelos em GGUF diretamente no app, organizado por empresa (PrismML/Bonsai, DeepSeek, Qwen, Mistral, Meta, Google, Microsoft, IBM, Liquid AI, Ai2, NVIDIA, OpenAI, OpenBMB, JetBrains, Ornith AI, inclusionAI e PowerInfer).
 - Os modelos MoE (*mixture of experts*, que usam só uma parte dos parâmetros a cada palavra) ficam numa seção própria em destaque no topo do catálogo, com uma explicação do que é MoE e do custo em tamanho, ainda separados por empresa; os demais aparecem depois, em **Modelos densos**, também por empresa. O filtro por empresa vale para as duas seções.
 - **Bonsai (PrismML)**: modelos com todos os pesos em 1 bit (Q1_0) ou ternários (Q2_0), que levam a capacidade de modelos grandes para pouca memória:
   - Bonsai 1.7B, 4B e 8B (1 bit, baseados no Qwen3): 250 MB, 570 MB e 1,2 GB.
@@ -15,7 +15,7 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
   - Bonsai 2 Ternário 2B, 4B e 9B (baseados no Qwen3.5, com raciocínio): 550 MB, 1,2 GB e 2,6 GB.
   - Bonsai 2 Ternário 27B (baseado no Qwen3.8 27B): 7,6 GB, para celulares de 12 GB; denso e lento, mas muito forte.
 - **Gemma 4 QAT** (E2B, E4B e 12B): versões oficiais do Google treinadas para 4 bits, com qualidade próxima da versão completa, no formato Q4_0, o mais rápido nos processadores ARM.
-- Outros modelos novos que rodam no celular: Ornith 1.5 9B (sobre o Qwen3.5 9B, perto do Qwen3.6 35B-A3B nos testes do autor), Granite 4.2 3B e 8B (IBM, com raciocínio), MiniCPM5 2B (OpenBMB), Mellum 2.1 12B-A2.5B (JetBrains, especialista em código; MoE com 2,5B ativos) e LFM2.5 24B-A2B (Liquid AI, experimental; MoE com 2,45B ativos, quantizado com destilação).
+- Outros modelos novos que rodam no celular: Ornith 1.5 9B (sobre o Qwen3.5 9B, perto do Qwen3.6 35B-A3B nos testes do autor), Granite 4.2 3B e 8B (IBM, com raciocínio), MiniCPM5 2B (OpenBMB), Mellum 2.1 12B-A2.5B (JetBrains, especialista em código; MoE com 2,5B ativos) e LFM2.5 24B-A2B (Liquid AI, experimental; MoE com 2,45B ativos, quantizado com destilação), SmallThinker 4B-A0.6B (PowerInfer, MoE feito para rodar no aparelho, 0,6B ativos) e Ling mini 2.0 (inclusionAI/Ant Group, 16B no total e 1,4B ativos; experimental).
 - Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
 - Fila de downloads: é possível escolher várias IAs enquanto outra baixa; elas baixam uma de cada vez e a próxima começa assim que a anterior é instalada (ou falha). **Minhas I.As** mostra cada download com o progresso e as ações Pausar, Continuar, Tentar novamente e Remover; a fila sobrevive ao fechamento do app e retoma dos arquivos parciais.
 - Modelos concluídos do catálogo são mantidos na pasta `IAs Offline` na raiz do armazenamento compartilhado do telefone para sobreviver à desinstalação.

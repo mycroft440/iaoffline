@@ -35,6 +35,8 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.OPENBMB -> "OpenBMB / MiniCPM"
     ModelProvider.JETBRAINS -> "JetBrains"
     ModelProvider.ORNITH -> "Ornith AI"
+    ModelProvider.INCLUSION_AI -> "inclusionAI / Ling"
+    ModelProvider.POWERINFER -> "PowerInfer"
 }
 
 fun ModelProvider.logoRes(): Int = when (this) {
@@ -52,7 +54,9 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.OPENAI,
     ModelProvider.OPENBMB,
     ModelProvider.JETBRAINS,
-    ModelProvider.ORNITH -> R.drawable.provider_generic
+    ModelProvider.ORNITH,
+    ModelProvider.INCLUSION_AI,
+    ModelProvider.POWERINFER -> R.drawable.provider_generic
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =

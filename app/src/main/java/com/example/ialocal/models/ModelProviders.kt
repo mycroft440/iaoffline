@@ -17,6 +17,8 @@ fun AiModelEntity.provider(): ModelProvider? =
 fun providerFromName(name: String): ModelProvider? {
     val text = name.lowercase()
     return when {
+        Regex("(^|[^a-z])(ling|ring)[- ](mini|lite|flash)").containsMatchIn(text) || "inclusionai" in text -> ModelProvider.INCLUSION_AI
+        "smallthinker" in text || "powerinfer" in text -> ModelProvider.POWERINFER
         "deepseek" in text -> ModelProvider.DEEPSEEK
         // Bonsai is built on Qwen, so it must be recognized before the Qwen check.
         "bonsai" in text || "prism" in text -> ModelProvider.PRISMML

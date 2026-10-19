@@ -27,6 +27,8 @@ internal val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.OPENBMB,
     ModelProvider.JETBRAINS,
     ModelProvider.ORNITH,
+    ModelProvider.INCLUSION_AI,
+    ModelProvider.POWERINFER,
 )
 
 /**
