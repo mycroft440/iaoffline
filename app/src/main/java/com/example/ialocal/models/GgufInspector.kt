@@ -23,6 +23,12 @@ class GgufInspector {
          * RAM (per-layer embeddings, about half of a Gemma 4 E2B/E4B file).
          */
         val onDemandBytes: Long = 0L,
+        /**
+         * Bytes of mixture-of-experts expert weights (0 for a dense model). Each token uses only a
+         * few experts, so a model larger than the RAM can keep these in the file and read them as
+         * the router picks them; the rest is read for every token.
+         */
+        val expertBytes: Long = 0L,
     )
 
     fun inspect(file: File): Metadata =
@@ -79,7 +85,7 @@ class GgufInspector {
         }
 
         // Only sizes memory use: a header read without its tensor table still describes the model.
-        val onDemandBytes = runCatching { readOnDemandBytes(input, tensorCount, alignment, totalBytes) }.getOrDefault(0L)
+        val tensorBytes = runCatching { readTensorBytes(input, tensorCount, alignment, totalBytes) }.getOrDefault(TensorBytes())
 
         return Metadata(
             version = version,
@@ -90,18 +96,22 @@ class GgufInspector {
             sizeLabel = sizeLabel,
             contextLength = contextLength,
             hasChatTemplate = hasChatTemplate,
-            onDemandBytes = onDemandBytes,
+            onDemandBytes = tensorBytes.onDemand,
+            expertBytes = tensorBytes.experts,
         )
     }
+
+    private data class TensorBytes(val onDemand: Long = 0L, val experts: Long = 0L)
 
     /**
      * Reads the tensor table that follows the metadata. A tensor's size is the distance to the next
      * tensor's data (the last one ends at the file end), which needs no table of quantization types.
      */
-    private fun readOnDemandBytes(input: CountingInputStream, tensorCount: Long, alignment: Long, totalBytes: Long?): Long {
+    private fun readTensorBytes(input: CountingInputStream, tensorCount: Long, alignment: Long, totalBytes: Long?): TensorBytes {
         if (tensorCount < 0 || tensorCount > MAX_TENSORS) throw IOException("Cabeçalho GGUF inválido.")
         val offsets = LongArray(tensorCount.toInt())
         val onDemand = ArrayList<Int>()
+        val experts = ArrayList<Int>()
         for (index in 0 until tensorCount.toInt()) {
             val name = readString(input, 64 * 1024)
             val dimensions = readU32(input)
@@ -110,16 +120,18 @@ class GgufInspector {
             readU32(input) // quantization type
             offsets[index] = readU64(input)
             if (name in ON_DEMAND_TENSORS) onDemand += index
+            if (EXPERT_TENSOR.containsMatchIn(name)) experts += index
         }
-        if (onDemand.isEmpty()) return 0L
+        if (onDemand.isEmpty() && experts.isEmpty()) return TensorBytes()
         val dataStart = (input.count + alignment - 1) / alignment * alignment
         val dataEnd = totalBytes?.minus(dataStart)
         val sorted = offsets.sortedArray()
-        return onDemand.sumOf { index ->
+        fun sizeOf(index: Int): Long {
             val start = offsets[index]
             val next = sorted.firstOrNull { it > start } ?: dataEnd ?: start
-            (next - start).coerceAtLeast(0L)
+            return (next - start).coerceAtLeast(0L)
         }
+        return TensorBytes(onDemand = onDemand.sumOf { sizeOf(it) }, experts = experts.sumOf { sizeOf(it) })
     }
 
     private fun readValue(input: InputStream, type: Int, materialize: Boolean): Any? = when (type) {
@@ -225,6 +237,8 @@ class GgufInspector {
         const val MAX_DIMENSIONS = 8L
         /** Tensors llama.cpp reads row by row from the file when lazy mode is on, as the app sets it. */
         val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
+        /** Expert weights, named as llama.cpp's --cpu-moe matches them ("blk.3.ffn_down_exps.weight"). */
+        val EXPERT_TENSOR = Regex("\\.ffn_(up|down|gate|gate_up)_(ch|)exps")
     }
 
     private fun skipFully(input: InputStream, count: Long) {
