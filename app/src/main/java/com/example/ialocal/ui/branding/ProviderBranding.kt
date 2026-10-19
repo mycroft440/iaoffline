@@ -40,6 +40,7 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.POWERINFER -> "PowerInfer (Tiiny)"
     ModelProvider.ZAI -> "Z.ai / GLM"
     ModelProvider.COHERE -> "Cohere"
+    ModelProvider.POOLSIDE -> "Poolside"
 }
 
 /** Every company has its own logo, shown in the catalog and next to its model's replies in the chat. */
@@ -63,6 +64,7 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.POWERINFER -> R.drawable.provider_powerinfer
     ModelProvider.ZAI -> R.drawable.provider_zai
     ModelProvider.COHERE -> R.drawable.provider_cohere
+    ModelProvider.POOLSIDE -> R.drawable.provider_poolside
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =

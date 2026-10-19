@@ -128,7 +128,7 @@ class ModelCatalogTest {
         assertTrue("qwen3.6-35b-a3b-q3-k-m" in experimental)
         assertTrue("nemotron3-nano-30b-a3b-q3-k-m" in experimental)
         assertTrue("gpt-oss-20b-q3-k-m" in experimental)
-        listOf("ling-mini-2.0-q3-k-m", "gemma4-26b-a4b-it-qat-q4-0", "glm4.7-flash-ud-q3-k-xl", "north-mini-code-1.0-ud-q3-k-m")
+        listOf("ling-mini-2.0-q3-k-m", "gemma4-26b-a4b-it-qat-q4-0", "glm4.7-flash-ud-q3-k-xl", "north-mini-code-1.0-ud-q3-k-m", "laguna-xs-2.1-q3-k-m")
             .forEach { assertTrue(it, it in experimental) }
         assertFalse("smallthinker-4b-a0.6b-q4-k-m" in experimental)
         // Small MoE fit in RAM and dense large models cannot run from storage at a usable speed.

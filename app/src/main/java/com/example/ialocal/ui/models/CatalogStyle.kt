@@ -340,4 +340,13 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         tagline = "Modelos da Cohere para programação e agentes",
         accent = Color(0xFFFB923C),
     )
+
+    ModelProvider.POOLSIDE -> ProviderUiMeta(
+        selectorName = "Laguna",
+        selectorSubtitle = "Poolside",
+        sectionName = "Poolside (Laguna)",
+        badge = "Código",
+        tagline = "Modelos da Poolside para programar com agentes",
+        accent = Color(0xFF2DD4BF),
+    )
 }

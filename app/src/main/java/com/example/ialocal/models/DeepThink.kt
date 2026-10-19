@@ -86,7 +86,9 @@ object DeepThinkSupport {
             QWEN35_FAMILY.containsMatchIn(identity) || MINICPM5.containsMatchIn(identity) ->
                 switchable(ThinkingSwitch.THINK_PREFILL, defaultEnabled = true)
             GRANITE_42.containsMatchIn(identity) -> switchable(ThinkingSwitch.GRANITE_PREFILL, defaultEnabled = true)
-            GEMMA_4.containsMatchIn(identity) -> switchable(ThinkingSwitch.TEMPLATE_FLAG, defaultEnabled = true)
+            // Laguna's template opens (<think>) or closes (</think>) the reasoning from its flag.
+            GEMMA_4.containsMatchIn(identity) || LAGUNA.containsMatchIn(identity) ->
+                switchable(ThinkingSwitch.TEMPLATE_FLAG, defaultEnabled = true)
             // Qwen3 and Nemotron Nano v2 accept the /think and /no_think switches.
             QWEN3_HYBRID.containsMatchIn(identity) -> switchable(ThinkingSwitch.QWEN3_SLASH, defaultEnabled = false)
             NEMOTRON_V2.containsMatchIn(identity) -> switchable(ThinkingSwitch.NEMOTRON_SLASH, defaultEnabled = false)
@@ -147,6 +149,7 @@ object DeepThinkSupport {
     private val MINICPM5 = Regex("minicpm[- ]?5")
     private val GRANITE_42 = Regex("granite[- ]?4[.]2")
     private val GEMMA_4 = Regex("gemma[- ]?4")
+    private val LAGUNA = Regex("laguna")
     private val QWEN3_HYBRID = Regex("qwen-?3(?![.\\d])")
     private val NEMOTRON_V2 = Regex("nemotron[\\w .-]*nano[\\w .-]*v2")
 

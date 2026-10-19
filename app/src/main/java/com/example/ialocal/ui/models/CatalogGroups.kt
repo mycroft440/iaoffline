@@ -31,6 +31,7 @@ internal val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.POWERINFER,
     ModelProvider.ZAI,
     ModelProvider.COHERE,
+    ModelProvider.POOLSIDE,
 )
 
 /**

@@ -22,6 +22,7 @@ class ModelProvidersTest {
         // GLM-4.7-Flash uses DeepSeek's architecture name.
         assertEquals(ModelProvider.ZAI, providerFromName("GLM-4.7-Flash deepseek2"))
         assertEquals(ModelProvider.COHERE, providerFromName("North-Mini-Code-1.0 cohere2moe"))
+        assertEquals(ModelProvider.POOLSIDE, providerFromName("Laguna-XS-2.1 laguna"))
         // Words that merely contain these names stay unknown.
         assertNull(providerFromName("darling-7b"))
     }

@@ -20,6 +20,7 @@ enum class ModelProvider(val sectionLabel: String) {
     POWERINFER("Modelos da PowerInfer / SmallThinker"),
     ZAI("Modelos da Z.ai / GLM"),
     COHERE("Modelos da Cohere"),
+    POOLSIDE("Modelos da Poolside / Laguna"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -992,6 +993,21 @@ object ModelCatalog {
             totalParametersBillions = 30.0,
             activeParametersBillions = 3.0,
             description = "MoE da Cohere com 30B no total e 3B ativos, feito para programação, engenharia de software com agentes e terminal; contexto de 256K. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+        ),
+        CatalogModel(
+            id = "laguna-xs-2.1-q3-k-m",
+            displayName = "Laguna XS 2.1 33B-A3B",
+            provider = ModelProvider.POOLSIDE,
+            repository = "bartowski/Laguna-XS-2.1-GGUF",
+            fileName = "Laguna-XS-2.1-Q3_K_M.gguf",
+            quantization = "Q3_K_M",
+            approximateSizeBytes = 15_575_904_128L,
+            sha256 = "00dda85ab74afccafa99b66e4d564a6ef76278a8c633d358cad630e7622cf618",
+            recommendedRamBytes = 20_000_000_000L,
+            totalParametersBillions = 33.0,
+            activeParametersBillions = 3.0,
+            description = "MoE da Poolside com 33B no total e 3B ativos, feito para programar com agentes; contexto de 256K. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
+            strengths = "Segundo a Poolside, 70,9% no SWE-bench Verified e 63,1% no SWE-bench Multilingual.",
         ),
     )
 
