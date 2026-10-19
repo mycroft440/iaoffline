@@ -4,10 +4,20 @@ import android.content.Context
 import android.os.BatteryManager
 import android.os.StatFs
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,14 +26,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Api
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Memory
@@ -41,6 +55,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,13 +64,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -277,50 +298,138 @@ private fun HomeActionsSection(
     }
 }
 
-/** The main action, centered: a new conversation with the selected AI. */
+/**
+ * The main action, centered: a new conversation with the selected AI. A deep cyan, blue and violet
+ * gradient (dark enough for white text) with a soft glow that breathes behind it, a light sheen
+ * crossing it every few seconds, the sparkles of AI in a frosted badge and an arrow that invites
+ * the tap; it sinks a little while pressed.
+ */
 @Composable
 private fun HomeStartChatButton(onClick: () -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(
+    val shape = RoundedCornerShape(20.dp)
+    val gradient = Brush.linearGradient(listOf(ChatCtaCyan, ChatCtaBlue, ChatCtaViolet))
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, label = "chat-cta-press")
+    val motion = rememberInfiniteTransition(label = "chat-cta")
+    // Read only while drawing, so the animations redraw the button without recomposing it.
+    val glow = motion.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(tween(1_800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "chat-cta-glow",
+    )
+    // Off the button (below 0 and above 1) most of the time, so the sheen passes now and then.
+    val sheen = motion.animateFloat(
+        initialValue = -0.5f,
+        targetValue = 2.5f,
+        animationSpec = infiniteRepeatable(tween(4_200, easing = LinearEasing)),
+        label = "chat-cta-sheen",
+    )
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Brush.horizontalGradient(listOf(CatalogCyan, Color(0xFF3B82F6))), shape)
-            .border(1.dp, CatalogCyanLight.copy(alpha = 0.55f), shape)
-            .clickable(onClickLabel = "Iniciar chat com I.A", onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+        contentAlignment = Alignment.Center,
     ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(horizontal = 14.dp, vertical = 4.dp)
+                .offset(y = 6.dp)
+                .graphicsLayer { alpha = if (pressed) 0.9f else glow.value }
+                .blur(20.dp, BlurredEdgeTreatment.Unbounded)
+                .background(gradient, shape),
+        )
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(gradient)
+                .drawWithContent {
+                    drawContent()
+                    // Light from the top left, then the passing sheen.
+                    drawRect(
+                        Brush.radialGradient(
+                            listOf(Color.White.copy(alpha = 0.22f), Color.Transparent),
+                            center = Offset(size.width * 0.15f, 0f),
+                            radius = size.width * 0.6f,
+                        ),
+                    )
+                    val x = size.width * sheen.value
+                    drawRect(
+                        Brush.linearGradient(
+                            listOf(Color.Transparent, Color.White.copy(alpha = 0.20f), Color.Transparent),
+                            start = Offset(x - size.height, 0f),
+                            end = Offset(x, size.height),
+                        ),
+                    )
+                }
+                .border(1.dp, Color.White.copy(alpha = 0.22f), shape)
+                .clickable(
+                    interactionSource = interaction,
+                    indication = ripple(color = Color.White),
+                    role = Role.Button,
+                    onClickLabel = "Iniciar chat com I.A",
+                    onClick = onClick,
+                )
+                .padding(horizontal = 14.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .background(Color(0x33041014), RoundedCornerShape(10.dp)),
+                    .size(44.dp)
+                    .background(Color.White.copy(alpha = 0.18f), CircleShape)
+                    .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Default.SmartToy, contentDescription = null, tint = Color(0xFF041014), modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
             }
-            Text(
-                text = "Iniciar chat com I.A",
-                color = Color(0xFF041014),
-                fontSize = 17.sp,
-                fontWeight = FontWeight.ExtraBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Iniciar chat com I.A",
+                    color = Color.White,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.2.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Nova conversa · sem internet",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(Color.White, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = ChatCtaBlue,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
-        Text(
-            text = "Nova conversa, sem internet",
-            color = Color(0xCC041014),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-        )
     }
 }
+
+// The chat button's gradient: Tailwind's cyan-700, blue-600 and violet-600, deep enough for white text.
+private val ChatCtaCyan = Color(0xFF0E7490)
+private val ChatCtaBlue = Color(0xFF2563EB)
+private val ChatCtaViolet = Color(0xFF7C3AED)
 
 /** The local API, under the chat: shows whether it is running. */
 @Composable
