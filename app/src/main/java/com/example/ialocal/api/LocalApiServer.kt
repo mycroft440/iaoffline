@@ -5,6 +5,7 @@ import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.runtime.GenerationStage
 import com.example.ialocal.runtime.RuntimeLimits
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -27,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -289,6 +291,7 @@ class LocalApiServer(
             writeSseHeaders(out)
             headersSent = true
             val writeLock = Mutex()
+            suspend fun send(data: String) = writeLock.withLock { writeSse(out, data) }
             coroutineScope {
                 val keepAlive = launch {
                     while (true) {
@@ -296,28 +299,42 @@ class LocalApiServer(
                         writeLock.withLock { writeSseComment(out) }
                     }
                 }
+                // Steps arrive from the AI process's threads; one writer keeps them in order.
+                val stages = Channel<GenerationStage>(Channel.UNLIMITED)
+                val stageWriter = launch {
+                    for (stage in stages) send(JSONObject().put("ia_stage", JSONObject(stage.encode())).toString())
+                }
+                val onStage: (GenerationStage) -> Unit = if (p.reportStages) {
+                    { stage -> stages.trySend(stage) }
+                } else {
+                    {}
+                }
                 try {
                     val (model, chunks) = if (p.agentId != null) {
-                        orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature)
+                        orchestrator.streamAgent(p.agentId, p.messages, p.maxTokens, p.temperature, onStage)
                     } else {
                         val stream = orchestrator.streamChatCompletion(
                             p.model,
                             p.messages,
                             p.maxTokens ?: DEFAULT_MAX_TOKENS,
                             p.temperature,
+                            onStage = onStage,
                         )
                         stream.model to stream.chunks
                     }
                     val id = "chatcmpl-${UUID.randomUUID()}"
                     val created = System.currentTimeMillis() / 1000
-                    suspend fun send(data: String) = writeLock.withLock { writeSse(out, data) }
                     send(chunkJson(id, created, model.apiModelId, JSONObject().put("role", "assistant"), JSONObject.NULL))
                     chunks.collect { token ->
                         send(chunkJson(id, created, model.apiModelId, JSONObject().put("content", token), JSONObject.NULL))
                     }
                     send(chunkJson(id, created, model.apiModelId, JSONObject(), "stop"))
+                    stages.close()
+                    stageWriter.join()
                     send("[DONE]")
                 } finally {
+                    stages.close()
+                    stageWriter.cancelAndJoin()
                     keepAlive.cancelAndJoin()
                 }
             }
@@ -376,6 +393,7 @@ class LocalApiServer(
             // Absent means "use the profile budget" for agent runs.
             maxTokens = if (json.has("max_tokens")) json.getInt("max_tokens").coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS) else null,
             temperature = requestedTemperature,
+            reportStages = json.optBoolean(STAGES_FIELD, false),
         )
     }
 
@@ -526,9 +544,13 @@ class LocalApiServer(
         val messages: List<AiChatMessage>,
         val maxTokens: Int?,
         val temperature: Float,
+        /** The app's own chat asks for the steps before the first word; other clients get plain chunks. */
+        val reportStages: Boolean = false,
     )
 
     companion object {
+        /** Request field that turns on `{"ia_stage": …}` events in the stream ([GenerationStage]). */
+        const val STAGES_FIELD = "ia_stages"
         private const val MAX_HEADER_BYTES = 64 * 1024
         private const val MAX_BODY_BYTES = 4 * 1024 * 1024
         private const val MAX_ACTIVE_CLIENTS = 8

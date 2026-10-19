@@ -55,20 +55,28 @@ class LlamaCppRuntime(
     private var primed: Primed? = null
     /** Counts requests, so a prefill still running stops at the next turn when one arrives. */
     private val requests = AtomicInteger()
+    /** What holds [mutex], told to an answer that has to wait for it ([GenerationStage.BUSY_ANSWER]…). */
+    @Volatile private var busyWith: String? = null
 
     private data class Primed(val modelId: String, val key: String, val history: List<AiChatMessage>)
 
     override suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill?) = withContext(nativeDispatcher) {
         val ticket = requests.incrementAndGet()
         mutex.withLock {
-            ensureLoaded(model)
-            if (prefill != null) prime(model, prefill, ticket)
+            busyWith = if (prefill != null) GenerationStage.BUSY_PREFILL else GenerationStage.BUSY_LOAD
+            try {
+                ensureLoaded(model)
+                if (prefill != null) prime(model, prefill, ticket)
+            } finally {
+                busyWith = null
+            }
         }
     }
 
     override suspend fun verify(model: AiModelEntity, keepLoaded: Boolean): VerificationResult = withContext(nativeDispatcher) {
         requests.incrementAndGet()
         mutex.withLock {
+            busyWith = GenerationStage.BUSY_VERIFY
             var finalState = RuntimeState()
             var passed = false
             try {
@@ -103,6 +111,7 @@ class LlamaCppRuntime(
                 } else {
                     unloadLocked(finalState)
                 }
+                busyWith = null
             }
         }
     }
@@ -114,15 +123,22 @@ class LlamaCppRuntime(
         temperature: Float,
         maxTokens: Int,
         turn: TurnOptions,
+        onStage: (GenerationStage) -> Unit,
     ): Flow<String> = flow {
         require(kotlin.math.abs(temperature - FIXED_TEMPERATURE) < 0.0001f) {
             "O binding llama.cpp Android não aceita temperature por requisição; ele usa a recomendada pelo modelo ou $FIXED_TEMPERATURE."
         }
         // A prefill still running for another message stops at its next turn.
         requests.incrementAndGet()
-        mutex.lock()
+        if (!mutex.tryLock()) {
+            // Another answer, a test or the preparation started while the user wrote holds the
+            // model; a native call in progress (reading a long prompt) only ends on its own.
+            onStage(GenerationStage(GenerationStage.Kind.WAITING_FOR_AI, busyWith ?: GenerationStage.BUSY_ANSWER))
+            mutex.lock()
+        }
+        busyWith = GenerationStage.BUSY_ANSWER
         try {
-            ensureLoaded(model)
+            ensureLoaded(model, onStage)
             val outputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
             val prepared = promptBuilder.prepare(
                 baseSystemPrompt = systemPrompt,
@@ -146,13 +162,18 @@ class LlamaCppRuntime(
                 previous.continuesWith(model.id, sessionKey, prepared.conversation) &&
                 previous.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)
             if (continuing) {
+                onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_SESSION))
                 logger?.info("PROMPT_TEMPLATE", "Continuando a conversa no contexto carregado (${previous?.tokens} tokens)")
             } else if (ready == Primed(model.id, sessionKey, prepared.history)) {
+                onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_PREFILL))
                 logger?.info("PROMPT_TEMPLATE", "Instruções e ${prepared.history.size} turnos já processados antes do envio")
             } else {
                 if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
-                setSystemPrompt(model, prepared.systemPrompt, turn)
-                prepared.history.forEach { engine.addHistoryMessage(it.role, it.content) }
+                setSystemPrompt(model, prepared.systemPrompt, turn, onStage)
+                prepared.history.forEachIndexed { index, message ->
+                    onStage(GenerationStage(GenerationStage.Kind.READING_HISTORY, done = index + 1, total = prepared.history.size))
+                    engine.addHistoryMessage(message.role, message.content)
+                }
                 logger?.info("PROMPT_TEMPLATE", "Conversa montada com ${prepared.history.size} turnos anteriores")
             }
 
@@ -163,6 +184,8 @@ class LlamaCppRuntime(
             val reply = StringBuilder()
             // gpt-oss answers in the harmony format; everything else passes through unchanged.
             val harmony = HarmonyNormalizer()
+            // The native side reads the message before it writes the first word.
+            onStage(GenerationStage(GenerationStage.Kind.READING_MESSAGE))
             engine.sendUserPrompt(message = latestUser, predictLength = outputTokens).collect { chunk ->
                 val text = harmony.push(chunk)
                 if (text.isNotEmpty()) {
@@ -200,6 +223,7 @@ class LlamaCppRuntime(
             logger?.error("INFERENCE", "Falha durante geração", t)
             throw t
         } finally {
+            busyWith = null
             mutex.unlock()
         }
     }.flowOn(nativeDispatcher)
@@ -272,15 +296,26 @@ class LlamaCppRuntime(
      * prompt, up to the part that changes daily ([TurnOptions.systemPromptTail]), and saves it
      * again when it had to process it.
      */
-    private suspend fun setSystemPrompt(model: AiModelEntity, systemPrompt: String, turn: TurnOptions) {
+    private suspend fun setSystemPrompt(
+        model: AiModelEntity,
+        systemPrompt: String,
+        turn: TurnOptions,
+        onStage: (GenerationStage) -> Unit = {},
+    ) {
         val tail = turn.systemPromptTail.trimEnd()
+        val file = PromptCache.file(appContext, model.id, turn.templateThinking)
         runCatching {
-            val file = PromptCache.file(appContext, model.id, turn.templateThinking)
             file.parentFile?.mkdirs()
             Os.setenv(PROMPT_CACHE_ENV, file.path, true)
             if (tail.isNotEmpty() && systemPrompt.endsWith(tail)) Os.setenv(SYSTEM_PROMPT_TAIL_ENV, tail, true)
             else Os.unsetenv(SYSTEM_PROMPT_TAIL_ENV)
         }
+        val saved = runCatching { file.length() > 0L }.getOrDefault(false)
+        onStage(
+            GenerationStage(
+                if (saved) GenerationStage.Kind.RESTORING_INSTRUCTIONS else GenerationStage.Kind.READING_INSTRUCTIONS,
+            ),
+        )
         engine.setSystemPrompt(systemPrompt)
     }
 
@@ -303,8 +338,8 @@ class LlamaCppRuntime(
      * Loads [model] unless it is already loaded and healthy. The model stays loaded between
      * messages, so a conversation does not pay for a reload (and its weight repacking) each turn.
      */
-    private suspend fun ensureLoaded(model: AiModelEntity) {
-        awaitEngineInitialized()
+    private suspend fun ensureLoaded(model: AiModelEntity, onStage: (GenerationStage) -> Unit = {}) {
+        awaitEngineInitialized(onStage)
         if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
@@ -332,7 +367,7 @@ class LlamaCppRuntime(
             logger?.error("MODEL_LOAD", message)
             throw IllegalStateException(message)
         }
-        val lowMemory = plan.lowMemory
+        val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, experts read from storage for a mixture of experts that does not fit
@@ -361,6 +396,7 @@ class LlamaCppRuntime(
                 (if (lowMemory) " em modo de pouca memória" else "") +
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
+        onStage(GenerationStage(GenerationStage.Kind.LOADING_MODEL, model.name, total = (fileBytes / MB).toInt()))
         try {
             engine.loadModel(model.filePath)
             loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
@@ -385,9 +421,10 @@ class LlamaCppRuntime(
     private fun gigabytes(bytes: Long): String =
         String.format(java.util.Locale.forLanguageTag("pt-BR"), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 
-    private suspend fun awaitEngineInitialized() {
+    private suspend fun awaitEngineInitialized(onStage: (GenerationStage) -> Unit = {}) {
         val current = engine.state.value
         if (current is InferenceEngine.State.Initialized || current is InferenceEngine.State.ModelReady) return
+        onStage(GenerationStage(GenerationStage.Kind.STARTING_AI))
         _state.value = RuntimeState(RuntimeStatus.INITIALIZING)
         val ready = engine.state.first {
             it is InferenceEngine.State.Initialized ||

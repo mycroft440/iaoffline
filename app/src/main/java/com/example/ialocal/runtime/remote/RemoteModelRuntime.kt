@@ -10,6 +10,7 @@ import android.os.RemoteException
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
+import com.example.ialocal.runtime.GenerationStage
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.PromptPrefill
@@ -97,14 +98,19 @@ class RemoteModelRuntime(
         temperature: Float,
         maxTokens: Int,
         turn: TurnOptions,
+        onStage: (GenerationStage) -> Unit,
     ): Flow<String> = callbackFlow {
-        val remote = connected()
+        val remote = connected(onStage)
         val requestId = UUID.randomUUID().toString()
         val run = Run(model, ModelCrashGuard.Phase.GENERATION) { message -> close(IllegalStateException(message)) }
         val finished = AtomicBoolean(false)
         runs[requestId] = run
         crashGuard?.begin(model.id, model.name, ModelCrashGuard.Phase.GENERATION)
         val callback = object : IInferenceCallback.Stub() {
+            override fun onStage(stageJson: String) {
+                GenerationStage.decode(stageJson)?.let(onStage)
+            }
+
             override fun onToken(text: String) {
                 trySend(text)
             }
@@ -184,8 +190,9 @@ class RemoteModelRuntime(
     }
 
     /** The AI process, started and bound on first use and again after it was stopped. */
-    private suspend fun connected(): IInferenceService {
+    private suspend fun connected(onStage: (GenerationStage) -> Unit = {}): IInferenceService {
         service?.takeIf { it.asBinder().isBinderAlive }?.let { return it }
+        onStage(GenerationStage(GenerationStage.Kind.STARTING_AI))
         return bindLock.withLock {
             service?.takeIf { it.asBinder().isBinderAlive }?.let { return@withLock it }
             // A binding whose process died is dropped before binding again.

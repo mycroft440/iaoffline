@@ -46,6 +46,16 @@ object RuntimeLimits {
     fun needsLowMemoryMode(modelBytes: Long, deviceTotalMemory: Long): Boolean =
         deviceTotalMemory > 0 && modelBytes > deviceTotalMemory * LOW_MEMORY_MODEL_FRACTION
 
+    /**
+     * Architectures whose weights must stay as they are in the file (low-memory mode). The pinned
+     * llama.cpp repacks a tensor of DeepSeek's latent attention ("deepseek2": DeepSeek V2, GigaChat
+     * 3, GLM-4.7-Flash) into a CPU buffer that no backend can then run: loading aborts the AI
+     * process, or with flash attention off the answer is garbage. Unrepacked, they run correctly.
+     */
+    private val PLAIN_WEIGHT_ARCHITECTURES = setOf("deepseek2")
+
+    fun needsPlainWeights(architecture: String?): Boolean = architecture?.lowercase() in PLAIN_WEIGHT_ARCHITECTURES
+
     /** Kept free for Android and the app's own screens when the AI takes its share. */
     const val AI_MARGIN_BYTES = 512L * 1024 * 1024
     /** Compute buffers (about 290 MB with 256-token micro-batches) and native overhead. */

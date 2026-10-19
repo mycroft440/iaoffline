@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.ialocal.chat.ChatGenerationManager
+import com.example.ialocal.chat.GenerationProgress
 import com.example.ialocal.chat.GenerationTarget
 import com.example.ialocal.chat.QueuedChatMessage
 import com.example.ialocal.data.AgentEntity
@@ -72,6 +73,8 @@ class ChatViewModel(
     val isGenerating: StateFlow<Boolean> = generation.isGenerating
     /** The message is waiting while other conversations are being answered. */
     val waitingForSlot: StateFlow<Boolean> = generation.waitingForSlot
+    /** The steps of the answer being prepared (loading the model, reading the prompt…). */
+    val progress: StateFlow<GenerationProgress?> = generation.progress
     private val _isProcessingAttachments = MutableStateFlow(false); val isProcessingAttachments = _isProcessingAttachments.asStateFlow()
     val queuedMessages: StateFlow<List<QueuedChatMessage>> = generation.queued
     private val _error = MutableStateFlow<String?>(null); val error = _error.asStateFlow()

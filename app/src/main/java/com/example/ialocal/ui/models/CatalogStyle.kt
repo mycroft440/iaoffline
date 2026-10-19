@@ -40,6 +40,8 @@ internal val CatalogCyanLight = Color(0xFF67E8F9)
 internal val CatalogEmerald = Color(0xFF34D399)
 internal val CatalogAmber = Color(0xFFFBBF24)
 internal val CatalogRose = Color(0xFFFB7185)
+/** Mixture-of-experts models: their section, headers and tags. */
+internal val CatalogViolet = Color(0xFFA78BFA)
 
 internal data class ProviderUiMeta(
     val selectorName: String,
@@ -301,5 +303,59 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         badge = "Ornith",
         tagline = "Modelos com treino de autoaperfeiçoamento, fortes em raciocínio e código",
         accent = Color(0xFFF97316),
+    )
+
+    ModelProvider.INCLUSION_AI -> ProviderUiMeta(
+        selectorName = "Ling",
+        selectorSubtitle = "inclusionAI",
+        sectionName = "inclusionAI (Ling)",
+        badge = "Ant Group",
+        tagline = "MoE muito esparsos: poucos parâmetros ativos e respostas rápidas",
+        accent = Color(0xFF60A5FA),
+    )
+
+    ModelProvider.POWERINFER -> ProviderUiMeta(
+        selectorName = "SmallThinker",
+        selectorSubtitle = "PowerInfer",
+        sectionName = "PowerInfer (SmallThinker)",
+        badge = "No aparelho",
+        tagline = "MoE pensados para rodar no próprio aparelho",
+        accent = Color(0xFFA3E635),
+    )
+
+    ModelProvider.ZAI -> ProviderUiMeta(
+        selectorName = "GLM",
+        selectorSubtitle = "Z.ai",
+        sectionName = "Z.ai (GLM)",
+        badge = "GLM",
+        tagline = "Modelos da Zhipu fortes em código, agentes e raciocínio",
+        accent = Color(0xFF818CF8),
+    )
+
+    ModelProvider.COHERE -> ProviderUiMeta(
+        selectorName = "North",
+        selectorSubtitle = "Cohere",
+        sectionName = "Cohere (North)",
+        badge = "Código",
+        tagline = "Modelos da Cohere para programação e agentes",
+        accent = Color(0xFFFB923C),
+    )
+
+    ModelProvider.POOLSIDE -> ProviderUiMeta(
+        selectorName = "Laguna",
+        selectorSubtitle = "Poolside",
+        sectionName = "Poolside (Laguna)",
+        badge = "Código",
+        tagline = "Modelos da Poolside para programar com agentes",
+        accent = Color(0xFF2DD4BF),
+    )
+
+    ModelProvider.SBER -> ProviderUiMeta(
+        selectorName = "GigaChat",
+        selectorSubtitle = "Sber",
+        sectionName = "Sber (GigaChat)",
+        badge = "GigaChat",
+        tagline = "Modelos da Sber, fortes em russo e inglês",
+        accent = Color(0xFF22C55E),
     )
 }

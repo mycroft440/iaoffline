@@ -55,17 +55,36 @@ class AgentStreamTest {
         assertEquals("<think>Resposta sem tags</think>\n\nResposta sem tags", output)
     }
 
+    @Test
+    fun hiddenTokensAreCountedOnlyWhileNothingIsVisible() = runBlocking {
+        val hidden = mutableListOf<Int>()
+        // A code fence is held back as a possible tool call: every token of it is hidden.
+        run(false, listOf(listOf("```", "kotlin\n", "val a = 1\n", "```")), onHiddenTokens = { hidden += it })
+        assertEquals(listOf(1, 2, 3, 4), hidden)
+
+        hidden.clear()
+        // Plain text shows from its first word, so only the token that showed it is counted.
+        run(false, listOf(listOf("Olá", ", mundo", "!")), onHiddenTokens = { hidden += it })
+        assertEquals(emptyList<Int>(), hidden)
+
+        hidden.clear()
+        // Reasoning shows as soon as it has text; the blank opening tag before it is hidden.
+        run(true, listOf(listOf("<think>", "Pensando", "</think>", "Oi")), onHiddenTokens = { hidden += it })
+        assertEquals(listOf(1), hidden)
+    }
+
     private suspend fun run(
         expectReasoning: Boolean,
         rounds: List<List<String>>,
         toolRound: suspend (String) -> ToolRoundResult? = { null },
         seen: MutableList<List<AiChatMessage>> = mutableListOf(),
+        onHiddenTokens: (Int) -> Unit = {},
     ): List<String> {
         var round = 0
         val generate: (List<AiChatMessage>) -> Flow<String> = { messages ->
             seen += messages.toList()
             flowOf(*rounds[round++].toTypedArray())
         }
-        return agentStream(expectReasoning, 4, question, generate, toolRound).toList()
+        return agentStream(expectReasoning, 4, question, generate, toolRound, onHiddenTokens).toList()
     }
 }

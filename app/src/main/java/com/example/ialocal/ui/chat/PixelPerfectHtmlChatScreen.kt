@@ -82,6 +82,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,6 +113,7 @@ import com.example.ialocal.ads.ChatAdSchedule
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.audio.AudioRecorder
 import com.example.ialocal.chat.AssistantContent
+import com.example.ialocal.chat.GenerationProgress
 import com.example.ialocal.chat.QueuedChatMessage
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
@@ -130,6 +132,7 @@ import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.models.provider
+import com.example.ialocal.runtime.GenerationStage
 import com.example.ialocal.ui.formatMemoryGb
 import com.example.ialocal.ui.rememberLiveMemory
 import com.example.ialocal.ui.branding.ProviderLogo
@@ -173,7 +176,7 @@ fun PixelPerfectHtmlChatScreen(
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val attachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val generating by viewModel.isGenerating.collectAsStateWithLifecycle()
-    val waitingForSlot by viewModel.waitingForSlot.collectAsStateWithLifecycle()
+    val progress by viewModel.progress.collectAsStateWithLifecycle()
     val processing by viewModel.isProcessingAttachments.collectAsStateWithLifecycle()
     val queued by viewModel.queuedMessages.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -315,7 +318,7 @@ fun PixelPerfectHtmlChatScreen(
                 attachments = attachments,
                 queued = queued,
                 generating = generating,
-                waitingForSlot = waitingForSlot,
+                progress = progress,
                 processing = processing,
                 recording = recording,
                 deepThinkSupported = deepThinkSupported,
@@ -645,7 +648,7 @@ private fun ExactChatBody(
     attachments: List<PendingAttachment>,
     queued: List<QueuedChatMessage>,
     generating: Boolean,
-    waitingForSlot: Boolean,
+    progress: GenerationProgress?,
     processing: Boolean,
     recording: Boolean,
     deepThinkSupported: Boolean,
@@ -721,11 +724,16 @@ private fun ExactChatBody(
                 ) {
                     items(messages, key = { it.message.id }) { item ->
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
-                            ExactLoading(provider = selectedProvider, startedAt = item.message.createdAt)
+                            ExactLoading(provider = selectedProvider, progress = progress, startedAt = item.message.createdAt)
                         } else {
                             ExactMessage(
                                 item = item,
                                 fallbackProvider = selectedProvider,
+                                reasoningStartedAt = if (item.message.id == sendingAssistantId) {
+                                    progress?.steps?.lastOrNull { it.stage.kind == GenerationStage.Kind.REASONING }?.startedAt
+                                } else {
+                                    null
+                                },
                                 onOpenCanvas = { openCanvas = it },
                                 canRerun = !generating,
                                 showAd = adsEnabled &&
@@ -735,7 +743,7 @@ private fun ExactChatBody(
                         }
                     }
                     if (generating && sendingAssistantId == null) {
-                        item { ExactLoading(provider = selectedProvider, waitingForSlot = waitingForSlot) }
+                        item { ExactLoading(provider = selectedProvider, progress = progress) }
                     }
                 }
             }
@@ -910,6 +918,7 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
 private fun ExactMessage(
     item: MessageWithAttachments,
     fallbackProvider: ModelProvider?,
+    reasoningStartedAt: Long?,
     onOpenCanvas: (CanvasRef) -> Unit,
     canRerun: Boolean,
     showAd: Boolean,
@@ -918,7 +927,7 @@ private fun ExactMessage(
     if (item.message.role == MessageRole.USER.name) {
         ExactUserMessage(item)
     } else {
-        ExactAssistantMessage(item, fallbackProvider, onOpenCanvas, canRerun, showAd, onRerun)
+        ExactAssistantMessage(item, fallbackProvider, reasoningStartedAt, onOpenCanvas, canRerun, showAd, onRerun)
     }
 }
 
@@ -985,6 +994,8 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 private fun ExactAssistantMessage(
     item: MessageWithAttachments,
     fallbackProvider: ModelProvider?,
+    /** When the answer being written started reasoning; the time before it was loading and reading. */
+    reasoningStartedAt: Long?,
     onOpenCanvas: (CanvasRef) -> Unit,
     canRerun: Boolean,
     showAd: Boolean,
@@ -1009,7 +1020,7 @@ private fun ExactAssistantMessage(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (parsed.reasoning != null) {
                 val accent = Color(0xFFFBBF24)
-                val elapsed = if (thinking) rememberElapsedMs(item.message.createdAt) else null
+                val elapsed = if (thinking) rememberElapsedMs(reasoningStartedAt ?: item.message.createdAt) else null
                 val title = when {
                     thinking -> "Raciocinando… ${formatExactDuration(elapsed ?: 0L)}"
                     parsed.reasoningMs != null -> "Raciocínio · ${formatExactDuration(parsed.reasoningMs)}"
@@ -1110,7 +1121,7 @@ private fun ExactAssistantMessage(
                         Icon(Icons.Default.Bolt, null, tint = PEmerald.copy(alpha = 0.80f), modifier = Modifier.size(11.dp))
                         Spacer(Modifier.width(3.dp))
                         Text(
-                            parsed.responseMs?.let { "Respondeu em ${formatExactDuration(it)}" } ?: "NPU Local",
+                            parsed.responseMs?.let { "Respondeu em ${formatExactDuration(it)}" } ?: "Resposta local",
                             fontSize = 11.sp,
                             color = PEmerald.copy(alpha = 0.80f),
                         )
@@ -1121,17 +1132,25 @@ private fun ExactAssistantMessage(
     }
 }
 
-/** Milliseconds since [startedAt], refreshed every second while composed. */
+/** Milliseconds since [startedAt], refreshed while composed. */
 @Composable
-private fun rememberElapsedMs(startedAt: Long): Long {
+private fun rememberElapsedMs(startedAt: Long): Long = (rememberNow(startedAt) - startedAt).coerceAtLeast(0L)
+
+/**
+ * The current time, refreshed every 100 ms during the first 10 seconds after [since], which show
+ * tenths ([formatExactDuration]), and every second after that.
+ */
+@Composable
+private fun rememberNow(since: Long): Long {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(startedAt) {
+    val latestSince by rememberUpdatedState(since)
+    LaunchedEffect(Unit) {
         while (true) {
             now = System.currentTimeMillis()
-            delay(1_000)
+            delay(if (now - latestSince < 10_000L) 100L else 1_000L)
         }
     }
-    return (now - startedAt).coerceAtLeast(0L)
+    return now
 }
 
 /** Prose in bubbles; long or runnable code as canvas cards that open full screen, short code inline. */
@@ -1223,7 +1242,7 @@ private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modif
                 Image(
                     painter = painterResource(provider.logoRes()),
                     contentDescription = provider.brandName(),
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)),
                     contentScale = ContentScale.Fit,
                 )
             } else {
@@ -1233,8 +1252,13 @@ private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modif
     }
 }
 
+/**
+ * What the answer is doing before its first word: the steps already done, with how long each took,
+ * and the current one with its running time.
+ */
 @Composable
-private fun ExactLoading(provider: ModelProvider?, startedAt: Long? = null, waitingForSlot: Boolean = false) {
+private fun ExactLoading(provider: ModelProvider?, progress: GenerationProgress?, startedAt: Long? = null) {
+    val now = rememberNow(progress?.current?.startedAt ?: startedAt ?: 0L)
     Row(
         modifier = Modifier.fillMaxWidth(0.96f),
         verticalAlignment = Alignment.Top,
@@ -1242,23 +1266,59 @@ private fun ExactLoading(provider: ModelProvider?, startedAt: Long? = null, wait
     ) {
         AssistantAvatar(provider)
         Surface(shape = RoundedCornerShape(12.dp), color = PCard, border = BorderStroke(1.dp, PBorder)) {
-            Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Color(0xFFC084FC))
-                Spacer(Modifier.width(8.dp))
-                val elapsed = startedAt?.let { rememberElapsedMs(it) }
-                Text(
-                    if (waitingForSlot) {
-                        "Na fila: aguardando outras conversas serem respondidas…"
-                    } else {
-                        "Preparando a resposta…${elapsed?.let { " ${formatExactDuration(it)}" }.orEmpty()}"
-                    },
-                    fontSize = 12.sp,
-                    color = PText2,
-                )
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                progress?.finished?.forEach { step ->
+                    val duration = step.durationMs(now)
+                    Row(verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Default.Check, null, tint = PEmerald, modifier = Modifier.padding(top = 2.dp).size(12.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stageText(step.stage, finished = true) +
+                                // Instant steps (the conversation was already in memory) have no time to show.
+                                if (duration >= INSTANT_STEP_MS) " · ${formatExactDuration(duration)}" else "",
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            color = PMuted,
+                        )
+                    }
+                }
+                val current = progress?.current
+                Row(verticalAlignment = Alignment.Top) {
+                    CircularProgressIndicator(
+                        Modifier.padding(top = 1.dp).size(13.dp),
+                        strokeWidth = 1.5.dp,
+                        color = Color(0xFFC084FC),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    // Before the first step arrives, the message is on its way to the AI process.
+                    val label = current?.let { stageText(it.stage, finished = false) } ?: "Enviando a mensagem para a IA"
+                    val since = current?.startedAt ?: startedAt
+                    Text(
+                        "$label…" + since?.let { " ${formatExactDuration((now - it).coerceAtLeast(0L))}" }.orEmpty(),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = PText2,
+                    )
+                }
+                val totalSince = progress?.startedAt
+                if (totalSince != null && progress.steps.size > 1) {
+                    Text(
+                        "Tempo total: ${formatExactDuration((now - totalSince).coerceAtLeast(0L))}",
+                        fontSize = 10.sp,
+                        color = PMuted.copy(alpha = 0.85f),
+                        modifier = Modifier.padding(start = 20.dp),
+                    )
+                }
             }
         }
     }
 }
+
+/** Steps shorter than this are shown without a duration. */
+private const val INSTANT_STEP_MS = 100L
 
 @Composable
 private fun ExactComposer(

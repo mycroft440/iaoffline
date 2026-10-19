@@ -20,6 +20,14 @@ class RuntimeLimitsTest {
     }
 
     @Test
+    fun deepSeekLatentAttentionModelsKeepTheirWeightsUnrepacked() {
+        // GigaChat 3.1 10B aborted the AI process with repacked weights and ran without them.
+        assertTrue(RuntimeLimits.needsPlainWeights("deepseek2"))
+        assertFalse(RuntimeLimits.needsPlainWeights("qwen3"))
+        assertFalse(RuntimeLimits.needsPlainWeights(null))
+    }
+
+    @Test
     fun unknownDeviceMemoryDoesNotForceLowMemoryMode() {
         assertFalse(RuntimeLimits.needsLowMemoryMode(modelBytes = 5 * gb, deviceTotalMemory = 0))
     }

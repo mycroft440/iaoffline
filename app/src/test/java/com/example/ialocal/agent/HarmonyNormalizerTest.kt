@@ -25,6 +25,13 @@ class HarmonyNormalizerTest {
     }
 
     @Test
+    fun cohereReasoningBecomesThinkBlock() {
+        val north = "<|START_THINKING|>The user asks for the capital.<|END_THINKING|><|START_TEXT|>Paris é a capital.<|END_TEXT|>"
+        assertEquals("<think>The user asks for the capital.</think>Paris é a capital.", normalize(listOf(north)))
+        assertEquals("<think>The user asks for the capital.</think>Paris é a capital.", normalize(north.chunked(4)))
+    }
+
+    @Test
     fun unfinishedAnalysisIsClosed() {
         assertEquals("<think>Pensando</think>", normalize(listOf("<|channel|>analysis<|message|>Pensando")))
     }
