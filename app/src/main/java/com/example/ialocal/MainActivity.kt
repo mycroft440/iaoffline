@@ -55,6 +55,7 @@ import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.models.MyAisScreen
 import com.example.ialocal.ui.settings.AiProfilesScreen
+import com.example.ialocal.ui.settings.AiProfilesViewModel
 import com.example.ialocal.ui.settings.AppearanceScreen
 import com.example.ialocal.ui.settings.CompilersScreen
 import com.example.ialocal.ui.settings.SettingsScreen
@@ -461,11 +462,13 @@ private fun LocalAiApp(
             )
             val importProgress by container.automaticModelImporter.progress.collectAsStateWithLifecycle()
             val selectedProfile by container.modelRepository.selectedProfile.collectAsStateWithLifecycle()
+            val profiles by container.modelRepository.profiles.collectAsStateWithLifecycle()
             val wikipediaStates by container.offlineWikipedia.states.collectAsStateWithLifecycle()
             SettingsScreen(
                 viewModel = vm,
                 importProgress = importProgress,
                 selectedProfile = selectedProfile,
+                customProfileCount = profiles.count { it.isCustom },
                 privacyOptionsRequired = adsManager.privacyOptionsRequired,
                 onPrivacyOptions = onPrivacyOptions,
                 wikipediaSummary = wikipediaSummary(wikipediaStates),
@@ -493,10 +496,11 @@ private fun LocalAiApp(
         }
 
         composable("ai-profiles") {
-            val selectedProfile by container.modelRepository.selectedProfile.collectAsStateWithLifecycle()
+            val vm: AiProfilesViewModel = viewModel(
+                factory = AiProfilesViewModel.Factory(container.modelRepository),
+            )
             AiProfilesScreen(
-                selectedProfile = selectedProfile,
-                onSelectProfile = container.modelRepository::setSelectedProfile,
+                viewModel = vm,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -506,6 +510,7 @@ private fun LocalAiApp(
             StorageScanScreen(
                 importProgress = importProgress,
                 onScanStorage = onScanStorage,
+                onCancelScan = container.automaticModelImporter::cancelScan,
                 onBack = { navController.popBackStack() },
             )
         }

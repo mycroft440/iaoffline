@@ -173,6 +173,9 @@ fun MyAisScreen(
                         if (importProgress.phase == AutomaticModelImportPhase.FAILED) {
                             Text("A busca falhou. Tente novamente.", color = MyAiMuted, fontSize = 11.sp)
                         }
+                        if (importProgress.phase == AutomaticModelImportPhase.CANCELLED) {
+                            Text("A busca foi cancelada. As I.As já importadas continuam instaladas.", color = MyAiMuted, fontSize = 11.sp)
+                        }
                     }
                 }
 

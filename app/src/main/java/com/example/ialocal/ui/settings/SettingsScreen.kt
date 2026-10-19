@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.models.AutomaticModelImportProgress
-import com.example.ialocal.models.BuiltInProfile
+import com.example.ialocal.models.AiProfile
 
 /** Settings menu: one button per section, each opening its own screen. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,7 +46,8 @@ import com.example.ialocal.models.BuiltInProfile
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     importProgress: AutomaticModelImportProgress,
-    selectedProfile: BuiltInProfile,
+    selectedProfile: AiProfile,
+    customProfileCount: Int,
     privacyOptionsRequired: Boolean,
     onPrivacyOptions: () -> Unit,
     wikipediaSummary: String,
@@ -102,7 +103,11 @@ fun SettingsScreen(
                 SettingsEntry(
                     icon = Icons.Default.Psychology,
                     title = "Perfis de I.A",
-                    summary = "Perfil ativo: " + selectedProfile.displayName,
+                    summary = "Perfil ativo: " + selectedProfile.displayName + " · " + when (customProfileCount) {
+                        0 -> "nenhum perfil criado"
+                        1 -> "1 perfil criado"
+                        else -> "$customProfileCount perfis criados"
+                    },
                     onClick = onOpenAiProfiles,
                 )
             }

@@ -10,8 +10,14 @@ import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,11 +38,15 @@ class ModelRepository(
 
     private val agentUsagePreferences = context.getSharedPreferences(AGENT_USAGE_PREFS, Context.MODE_PRIVATE)
     private val profilePreferences = context.getSharedPreferences(PROFILE_PREFS, Context.MODE_PRIVATE)
-    private val _selectedProfile = MutableStateFlow(
-        BuiltInProfile.entries.firstOrNull { it.name == profilePreferences.getString(PROFILE_KEY, null) }
-            ?: BuiltInProfile.PROGRAMMER
+    private val _profiles = MutableStateFlow(
+        AiProfile.BUILT_IN + CustomProfiles.decode(profilePreferences.getString(CUSTOM_PROFILES_KEY, null))
     )
-    val selectedProfile: StateFlow<BuiltInProfile> = _selectedProfile.asStateFlow()
+    /** The built-in profiles followed by the ones the user created. */
+    val profiles: StateFlow<List<AiProfile>> = _profiles.asStateFlow()
+    private val _selectedProfile = MutableStateFlow(
+        _profiles.value.firstOrNull { it.id == profilePreferences.getString(PROFILE_KEY, null) } ?: AiProfile.DEFAULT
+    )
+    val selectedProfile: StateFlow<AiProfile> = _selectedProfile.asStateFlow()
     private val _agentUsageCounts = MutableStateFlow(loadAgentUsageCounts())
     val agentUsageCounts: StateFlow<Map<String, Int>> = _agentUsageCounts.asStateFlow()
     private val profileMigrationMutex = Mutex()
@@ -63,7 +73,15 @@ class ModelRepository(
         ModelImportPreview(uri, displayName, sourceSize, metadata, compatibility)
     }
 
-    suspend fun importGguf(preview: ModelImportPreview, catalog: CatalogModel? = null): AiModelEntity = withContext(Dispatchers.IO) {
+    /**
+     * Copies the GGUF into the app and registers it. [onCopied] hears how many bytes are copied as
+     * the copy goes; cancelling the coroutine stops the copy and removes what was copied.
+     */
+    suspend fun importGguf(
+        preview: ModelImportPreview,
+        catalog: CatalogModel? = null,
+        onCopied: (Long) -> Unit = {},
+    ): AiModelEntity = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val modelDir = File(context.filesDir, "models/$id").apply { mkdirs() }
         val destination = File(modelDir, "model.gguf")
@@ -71,7 +89,7 @@ class ModelRepository(
         try {
             logger?.info("MODEL_COPY", "Copiando ${preview.displayName} para armazenamento privado")
             context.contentResolver.openInputStream(preview.uri)?.use { input ->
-                FileOutputStream(destination).use { output -> input.copyTo(output, 1024 * 1024) }
+                FileOutputStream(destination).use { output -> copyCancellable(input, output, onCopied) }
             } ?: error("Não foi possível abrir o modelo selecionado.")
 
             if (preview.sourceSizeBytes != null && preview.sourceSizeBytes > 0 && destination.length() != preview.sourceSizeBytes) {
@@ -88,11 +106,36 @@ class ModelRepository(
                 apiIdPrefix = catalog?.apiIdPrefix,
             )
         } catch (t: Throwable) {
-            logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
-            runCatching { dao.deleteModel(id) }
-            modelDir.deleteRecursively()
+            // A cancelled import must still remove its row and its partial copy.
+            withContext(NonCancellable) {
+                if (t is CancellationException) {
+                    logger?.info("IMPORT", "Importação de ${preview.displayName} cancelada")
+                } else {
+                    logger?.error("IMPORT", "Falha ao importar ${preview.displayName}", t)
+                }
+                runCatching { dao.deleteModel(id) }
+                modelDir.deleteRecursively()
+            }
             throw t
         }
+    }
+
+    private suspend fun copyCancellable(input: InputStream, output: OutputStream, onCopied: (Long) -> Unit) {
+        val buffer = ByteArray(COPY_BUFFER_BYTES)
+        var copied = 0L
+        var reported = 0L
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val count = input.read(buffer)
+            if (count < 0) break
+            output.write(buffer, 0, count)
+            copied += count
+            if (copied - reported >= COPY_PROGRESS_STEP_BYTES) {
+                reported = copied
+                onCopied(copied)
+            }
+        }
+        onCopied(copied)
     }
 
     /**
@@ -200,9 +243,7 @@ class ModelRepository(
 
     suspend fun setDefaultAgent(id: String) {
         val agent = requireNotNull(dao.getAgent(id)) { "Agente não encontrado." }
-        val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
-            "Somente Programador e Sem censura podem ser perfis padrão."
-        }
+        val profile = requireNotNull(profileNamed(agent.name)) { PROFILE_GONE_MESSAGE }
         val model = requireNotNull(dao.getModel(agent.modelId)) { "O modelo deste agente não está mais disponível." }
         require(model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
             "Este perfil só pode ser definido como padrão depois que o modelo passar pelo teste real de inferência."
@@ -213,15 +254,83 @@ class ModelRepository(
         setSelectedProfile(profile)
     }
 
-    fun setSelectedProfile(profile: BuiltInProfile) {
-        profilePreferences.edit().putString(PROFILE_KEY, profile.name).apply()
-        _selectedProfile.value = profile
+    fun setSelectedProfile(profile: AiProfile) {
+        val current = requireNotNull(_profiles.value.firstOrNull { it.id == profile.id }) { PROFILE_GONE_MESSAGE }
+        profilePreferences.edit().putString(PROFILE_KEY, current.id).apply()
+        _selectedProfile.value = current
+    }
+
+    /** The profile whose agents are named [name], if it still exists. */
+    fun profileNamed(name: String): AiProfile? = _profiles.value.firstOrNull { it.displayName == name }
+
+    /** Saves a new profile and gives every installed model an agent for it. */
+    suspend fun createCustomProfile(name: String, description: String, systemPrompt: String): AiProfile {
+        val profile = profileMigrationMutex.withLock {
+            CustomProfiles.validate(name, description, systemPrompt, _profiles.value)?.let { throw IllegalArgumentException(it) }
+            CustomProfiles.create(name, description, systemPrompt).also { saveProfiles(_profiles.value + it) }
+        }
+        syncProfilesForAllModels()
+        logger?.info("PROFILES", "Perfil criado: ${profile.displayName}")
+        return profile
+    }
+
+    /** Changes a profile the user created; its agents keep their conversations. */
+    suspend fun updateCustomProfile(id: String, name: String, description: String, systemPrompt: String): AiProfile {
+        val updated = profileMigrationMutex.withLock {
+            val current = requireNotNull(_profiles.value.firstOrNull { it.id == id && it.isCustom }) { PROFILE_GONE_MESSAGE }
+            CustomProfiles.validate(name, description, systemPrompt, _profiles.value, editingId = id)
+                ?.let { throw IllegalArgumentException(it) }
+            val updated = current.copy(
+                displayName = name.trim(),
+                description = description.trim(),
+                systemPrompt = systemPrompt.trim(),
+            )
+            // Agents are found by name, so they are renamed before the profile list changes.
+            val now = System.currentTimeMillis()
+            dao.getAgents().filter { it.name == current.displayName }.forEach { agent ->
+                dao.updateAgent(
+                    agent.copy(
+                        name = updated.displayName,
+                        systemPrompt = updated.systemPrompt,
+                        maxTokens = updated.maxTokens,
+                        updatedAt = now,
+                    )
+                )
+            }
+            saveProfiles(_profiles.value.map { if (it.id == id) updated else it })
+            if (_selectedProfile.value.id == id) _selectedProfile.value = updated
+            updated
+        }
+        syncProfilesForAllModels()
+        return updated
+    }
+
+    /**
+     * Removes a profile the user created and its agents. Conversations that used it continue with
+     * Programador, which also becomes the selected profile if this one was.
+     */
+    suspend fun deleteCustomProfile(id: String) {
+        profileMigrationMutex.withLock {
+            val profile = _profiles.value.firstOrNull { it.id == id && it.isCustom } ?: return
+            saveProfiles(_profiles.value - profile)
+            if (_selectedProfile.value.id == id) setSelectedProfile(AiProfile.DEFAULT)
+            logger?.info("PROFILES", "Perfil removido: ${profile.displayName}")
+        }
+        syncProfilesForAllModels()
+        ensureDefaultAgentForVerifiedModels()
+    }
+
+    private fun saveProfiles(profiles: List<AiProfile>) {
+        profilePreferences.edit().putString(CUSTOM_PROFILES_KEY, CustomProfiles.encode(profiles)).apply()
+        _profiles.value = profiles
+    }
+
+    private suspend fun syncProfilesForAllModels() {
+        dao.getModels().forEach { model -> ensureStarterProfiles(model.id) }
     }
 
     suspend fun updateAgent(agent: AgentEntity) {
-        val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName == agent.name }) {
-            "Os perfis disponíveis são Programador e Sem censura."
-        }
+        val profile = requireNotNull(profileNamed(agent.name)) { PROFILE_GONE_MESSAGE }
         dao.updateAgent(
             agent.copy(
                 systemPrompt = profile.systemPrompt,
@@ -238,8 +347,8 @@ class ModelRepository(
         temperature: Float = 0.3f,
     ): AgentEntity {
         requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
-        val profile = requireNotNull(BuiltInProfile.entries.firstOrNull { it.displayName.equals(name.trim(), true) }) {
-            "Somente os dois perfis predefinidos estão disponíveis."
+        val profile = requireNotNull(_profiles.value.firstOrNull { it.displayName.equals(name.trim(), true) }) {
+            "Este perfil não existe. Crie-o em Configurações → Perfis de I.A."
         }
         val cleanName = profile.displayName
         val cleanPrompt = profile.systemPrompt
@@ -267,14 +376,16 @@ class ModelRepository(
     suspend fun ensureStarterProfiles(modelId: String) = profileMigrationMutex.withLock {
         requireNotNull(dao.getModel(modelId)) { "Modelo não encontrado." }
         var modelAgents = dao.getAgents().filter { it.modelId == modelId }
+        val currentProfiles = _profiles.value
 
-        BuiltInProfile.entries.forEach { profile ->
+        currentProfiles.forEach { profile ->
             val existing = modelAgents.firstOrNull { it.name.equals(profile.displayName, true) }
                 ?: modelAgents.firstOrNull { agent ->
-                    when (profile) {
+                    when (profile.builtIn) {
                         BuiltInProfile.PROGRAMMER -> agent.name.equals(LEGACY_ENGINEER_NAME, true) ||
                             (agent.name.endsWith(" · Agente") && agent.systemPrompt == DEFAULT_SYSTEM_PROMPT)
                         BuiltInProfile.UNCENSORED -> agent.name.equals(LEGACY_UNCENSORED_NAME, true)
+                        null -> false
                     }
                 }
             if (existing != null && (
@@ -293,22 +404,27 @@ class ModelRepository(
         }
 
         modelAgents = dao.getAgents().filter { it.modelId == modelId }
-        STARTER_PROFILES.forEach { starter ->
-            if (modelAgents.none { it.name.equals(starter.name, ignoreCase = true) }) {
+        currentProfiles.forEach { profile ->
+            if (modelAgents.none { it.name.equals(profile.displayName, ignoreCase = true) }) {
                 createAgentProfile(
                     modelId = modelId,
-                    name = starter.name,
-                    systemPrompt = starter.prompt,
+                    name = profile.displayName,
+                    systemPrompt = profile.systemPrompt,
                 )
                 modelAgents = dao.getAgents().filter { it.modelId == modelId }
             }
         }
-        val keepIds = BuiltInProfile.entries.map { profile ->
-            requireNotNull(modelAgents.firstOrNull { it.name == profile.displayName }).id
-        }
+        fun agentOf(profile: AiProfile) = requireNotNull(modelAgents.firstOrNull { it.name == profile.displayName }).id
+        val keepIds = currentProfiles.map(::agentOf)
         val removed = modelAgents.filter { it.id !in keepIds }
         if (removed.isNotEmpty()) {
-            dao.keepOnlyProfiles(modelId, keepIds, keepIds.first(), keepIds.last(), LEGACY_UNCENSORED_NAME)
+            dao.keepOnlyProfiles(
+                modelId,
+                keepIds,
+                agentOf(AiProfile.of(BuiltInProfile.PROGRAMMER)),
+                agentOf(AiProfile.of(BuiltInProfile.UNCENSORED)),
+                LEGACY_UNCENSORED_NAME,
+            )
             val editor = agentUsagePreferences.edit()
             removed.forEach { editor.remove("count_${it.id}") }
             editor.apply()
@@ -324,8 +440,8 @@ class ModelRepository(
 
     suspend fun deleteAgent(id: String) = withContext(Dispatchers.IO) {
         val agent = dao.getAgent(id) ?: return@withContext
-        require(BuiltInProfile.entries.none { it.displayName == agent.name }) {
-            "Os dois perfis predefinidos são gerenciados em Configurações e não podem ser excluídos."
+        require(profileNamed(agent.name) == null) {
+            "Os perfis são gerenciados em Configurações → Perfis de I.A."
         }
         dao.deleteAgent(id)
         agentUsagePreferences.edit().remove("count_$id").apply()
@@ -436,14 +552,14 @@ class ModelRepository(
     }
 
     private fun starterAgentsForModel(modelId: String, now: Long): List<AgentEntity> =
-        STARTER_PROFILES.map { starter ->
+        _profiles.value.map { profile ->
             AgentEntity(
                 id = UUID.randomUUID().toString(),
-                name = starter.name,
+                name = profile.displayName,
                 modelId = modelId,
-                systemPrompt = starter.prompt,
+                systemPrompt = profile.systemPrompt,
                 temperature = 0.3f,
-                maxTokens = starter.maxTokens,
+                maxTokens = profile.maxTokens,
                 isDefault = false,
                 createdAt = now,
                 updatedAt = now,
@@ -490,8 +606,6 @@ class ModelRepository(
         return "local-$slug-${id.take(8)}"
     }
 
-    private data class StarterProfile(val name: String, val prompt: String, val maxTokens: Int)
-
     companion object {
         const val ANDROID_RUNTIME_CONTEXT = 8192
         const val DEFAULT_SYSTEM_PROMPT =
@@ -513,13 +627,15 @@ class ModelRepository(
             "Responda de forma direta, franca e sem moralizações desnecessárias. Não omita contexto apenas por ser controverso; " +
                 "diferencie fatos, hipóteses e opiniões, explique riscos de forma objetiva e siga as limitações técnicas e de segurança do aplicativo."
 
-        private val STARTER_PROFILES = BuiltInProfile.entries.map { StarterProfile(it.displayName, it.systemPrompt, it.maxTokens) }
-
-        private const val LEGACY_ENGINEER_NAME = "Engenheiro de Software"
-        private const val LEGACY_UNCENSORED_NAME = "I.A sem sensura (jailbreak)"
+        internal const val LEGACY_ENGINEER_NAME = "Engenheiro de Software"
+        internal const val LEGACY_UNCENSORED_NAME = "I.A sem sensura (jailbreak)"
         private const val PROFILE_PREFS = "selected_builtin_profile"
         private const val PROFILE_KEY = "profile"
+        private const val CUSTOM_PROFILES_KEY = "custom_profiles"
+        private const val PROFILE_GONE_MESSAGE = "Este perfil não existe mais."
         private const val AGENT_USAGE_PREFS = "agent_profile_usage"
         private const val COPY_FALLBACK_HEADROOM = 256L * 1024 * 1024
+        private const val COPY_BUFFER_BYTES = 1024 * 1024
+        private const val COPY_PROGRESS_STEP_BYTES = 16L * 1024 * 1024
     }
 }

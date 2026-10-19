@@ -31,9 +31,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -125,7 +127,7 @@ import com.example.ialocal.data.MessageStatus
 import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
-import com.example.ialocal.models.BuiltInProfile
+import com.example.ialocal.models.AiProfile
 import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
@@ -184,6 +186,7 @@ fun PixelPerfectHtmlChatScreen(
     val models by viewModel.models.collectAsStateWithLifecycle()
     val selectedAgentId by viewModel.selectedAgentId.collectAsStateWithLifecycle()
     val selectedProfile by viewModel.selectedProfile.collectAsStateWithLifecycle()
+    val profiles by viewModel.profiles.collectAsStateWithLifecycle()
 
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -352,6 +355,7 @@ fun PixelPerfectHtmlChatScreen(
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         ) {
             ExactProfilesSheet(
+                profiles = profiles,
                 selected = selectedProfile,
                 onSelect = {
                     viewModel.selectProfile(it)
@@ -1688,12 +1692,14 @@ private fun ExactDeepThinkOption(
 
 @Composable
 private fun ExactProfilesSheet(
-    selected: BuiltInProfile,
-    onSelect: (BuiltInProfile) -> Unit,
+    profiles: List<AiProfile>,
+    selected: AiProfile,
+    onSelect: (AiProfile) -> Unit,
     onManage: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().padding(20.dp),
+        // Custom profiles can make the list taller than the sheet.
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1701,12 +1707,13 @@ private fun ExactProfilesSheet(
             Spacer(Modifier.width(8.dp))
             Text("Selecionar Perfil de IA", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
-        BuiltInProfile.entries.forEach { profile ->
+        profiles.forEach { profile ->
+            val isSelected = profile.id == selected.id
             Surface(
                 modifier = Modifier.fillMaxWidth().clickable { onSelect(profile) },
                 shape = RoundedCornerShape(12.dp),
                 color = PCard,
-                border = BorderStroke(1.dp, if (profile == selected) PIndigo.copy(alpha = 0.40f) else PBorder),
+                border = BorderStroke(1.dp, if (isSelected) PIndigo.copy(alpha = 0.40f) else PBorder),
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(
@@ -1721,9 +1728,9 @@ private fun ExactProfilesSheet(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(profile.displayName, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                        Text(profile.description, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color(0xFF94A3B8))
+                        Text(profile.summary, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color(0xFF94A3B8))
                     }
-                    if (profile == selected) Icon(Icons.Default.Check, null, tint = Color(0xFF818CF8), modifier = Modifier.size(12.dp))
+                    if (isSelected) Icon(Icons.Default.Check, null, tint = Color(0xFF818CF8), modifier = Modifier.size(12.dp))
                 }
             }
         }
