@@ -327,7 +327,7 @@ class LlamaCppRuntime(
             logger?.error("MODEL_LOAD", message)
             throw IllegalStateException(message)
         }
-        val lowMemory = plan.lowMemory
+        val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, the memory that sizes the (Q4_0) context and the presence penalty

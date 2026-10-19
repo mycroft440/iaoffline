@@ -21,6 +21,7 @@ enum class ModelProvider(val sectionLabel: String) {
     ZAI("Modelos da Z.ai / GLM"),
     COHERE("Modelos da Cohere"),
     POOLSIDE("Modelos da Poolside / Laguna"),
+    SBER("Modelos da Sber / GigaChat"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -1038,6 +1039,21 @@ object ModelCatalog {
             activeParametersBillions = 3.6,
             description = "Sucessor do Nemotron 3 Nano 30B-A3B (agosto de 2026): MoE híbrido Mamba-Transformer com 31,6B no total e 3,6B ativos. Experimental no celular: roda lendo os pesos do armazenamento e é lento.",
             strengths = "Na Artificial Analysis, índice de inteligência 24, contra 15 do Nemotron 3 Nano 30B-A3B. Idiomas principais: inglês, espanhol, francês, alemão, italiano e japonês.",
+        ),
+        CatalogModel(
+            id = "gigachat3.1-10b-a1.8b-q4-k-m",
+            displayName = "GigaChat 3.1 10B-A1.8B",
+            provider = ModelProvider.SBER,
+            repository = "ai-sage/GigaChat3.1-10B-A1.8B-GGUF",
+            fileName = "GigaChat3.1-10B-A1.8B-q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 6_474_702_976L,
+            sha256 = "68a8732fb5cee04f83ebffd7924e15c534d4442c5a43d2ba9e2041fe310b8deb",
+            recommendedRamBytes = 10_000_000_000L,
+            totalParametersBillions = 10.0,
+            activeParametersBillions = 1.8,
+            description = "MoE compacto da Sber, da família GigaChat 3.1: 10B no total e 1,8B ativos por palavra. Forte em russo e inglês, treinado em 10 idiomas.",
+            strengths = "Segundo a Sber, foi de 14,3 (GigaChat 3 Lightning) para 46,7 no Arena Hard.",
         ),
     )
 

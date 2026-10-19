@@ -32,6 +32,7 @@ internal val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.ZAI,
     ModelProvider.COHERE,
     ModelProvider.POOLSIDE,
+    ModelProvider.SBER,
 )
 
 /**

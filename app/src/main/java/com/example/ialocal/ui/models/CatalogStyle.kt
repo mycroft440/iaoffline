@@ -349,4 +349,13 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         tagline = "Modelos da Poolside para programar com agentes",
         accent = Color(0xFF2DD4BF),
     )
+
+    ModelProvider.SBER -> ProviderUiMeta(
+        selectorName = "GigaChat",
+        selectorSubtitle = "Sber",
+        sectionName = "Sber (GigaChat)",
+        badge = "GigaChat",
+        tagline = "Modelos da Sber, fortes em russo e inglês",
+        accent = Color(0xFF22C55E),
+    )
 }
