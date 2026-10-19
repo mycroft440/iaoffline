@@ -30,8 +30,27 @@ class PromptContextBuilder {
         require(turns.isNotEmpty() && turns.last().role == USER) { "A solicitação precisa conter uma mensagem do usuário." }
         val latestUser = turns.last().content
         require(latestUser.isNotBlank()) { "A última mensagem do usuário está vazia." }
-        val conversation = turns.dropLast(1)
+        return select(baseSystemPrompt, turns.dropLast(1), latestUser, contextTokens, maxOutputTokens)
+    }
 
+    /**
+     * What [prepare] will choose for the next message of [messages] (the conversation so far),
+     * before that message is written. As long as it fits, the request makes the same choice.
+     */
+    fun prepareHistory(
+        baseSystemPrompt: String,
+        messages: List<AiChatMessage>,
+        contextTokens: Int,
+        maxOutputTokens: Int,
+    ): Prepared = select(baseSystemPrompt, normalize(messages), latestUser = "", contextTokens, maxOutputTokens)
+
+    private fun select(
+        baseSystemPrompt: String,
+        conversation: List<AiChatMessage>,
+        latestUser: String,
+        contextTokens: Int,
+        maxOutputTokens: Int,
+    ): Prepared {
         // Reserve at most half the context for the answer so the history keeps room; a longer
         // answer continues through the native context shift.
         val reservedOutput = minOf(maxOutputTokens, contextTokens / 2)

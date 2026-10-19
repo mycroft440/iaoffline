@@ -29,6 +29,28 @@ class PromptContextBuilderTest {
     }
 
     @Test
+    fun aPrefillPicksTheHistoryTheNextMessageWillUse() {
+        // Opening the chat prepares the conversation so far; sending then finds it already read.
+        val conversation = listOf(
+            AiChatMessage("assistant", "Olá! Como posso ajudar?"),
+            AiChatMessage("user", "primeira"),
+            AiChatMessage("assistant", "<think>x</think>resposta"),
+        )
+        val prefill = builder.prepareHistory("Sistema base", conversation, contextTokens = 8192, maxOutputTokens = 512)
+        val request = builder.prepare(
+            baseSystemPrompt = "Sistema base",
+            messages = conversation + AiChatMessage("user", "segunda"),
+            contextTokens = 8192,
+            maxOutputTokens = 512,
+        )
+
+        assertEquals(request.systemPrompt, prefill.systemPrompt)
+        assertEquals(request.conversation, prefill.conversation)
+        assertEquals(request.history, prefill.history)
+        assertEquals(listOf(AiChatMessage("user", "primeira"), AiChatMessage("assistant", "resposta")), prefill.history)
+    }
+
+    @Test
     fun normalizesTurnsTheWayChatTemplatesExpect() {
         val result = builder.prepare(
             baseSystemPrompt = "Sistema",

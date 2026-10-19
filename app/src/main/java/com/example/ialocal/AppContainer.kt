@@ -88,6 +88,7 @@ class AppContainer(context: Context) {
         aiGateway,
         modelRepository,
         modelManager,
+        orchestrator,
     )
 
     // App-wide, so a loaded ad and the ads' consent state outlive a recreated activity.

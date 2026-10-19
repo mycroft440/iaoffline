@@ -194,7 +194,8 @@ class ModelsViewModel(
             if (model.verificationStatus == ModelVerificationStatus.VERIFIED.name) {
                 manager.load(id)
             } else {
-                manager.retryVerification(id)
+                // Kept loaded after the test, so load() finds it ready instead of loading it again.
+                manager.retryVerification(id, keepLoaded = true)
                 manager.load(id)
             }
         }.onFailure { _error.value = it.message ?: "Falha ao ativar o modelo." }

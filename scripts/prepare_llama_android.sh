@@ -655,6 +655,112 @@ replace_once(
     "static bool is_valid_utf8(const char *string) {",
 )
 
+# 13. System prompt cache. Decoding the system prompt (instructions, tools, date) is most of the
+#     wait before the first answer: about a thousand tokens at 5-20 tokens/s on a phone CPU. Its
+#     KV state is saved to the file the app names in IAOFFLINE_PROMPT_CACHE (one per model), up to
+#     the text the app marks as changing (IAOFFLINE_SYSTEM_PROMPT_TAIL, the date at the end), so the
+#     saved state stays a prefix of the next day's prompt; recurrent and sliding-window caches
+#     cannot be cut back to a shorter prefix. The next load restores it and decodes only the rest.
+#     llama.cpp rejects a state that does not fit the context (another cache type or model), and
+#     the fallback is always the full decode.
+replace_once(
+    "#include <mutex>\n",
+    "#include <mutex>\n#include <cstdio>\n",
+)
+replace_once(
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(",
+    "// Restores the longest prefix of [tokens] that the saved state holds; returns its length.\n"
+    "static int iaoffline_restore_prompt_cache(const llama_tokens &tokens) {\n"
+    "    const char *path = getenv(\"IAOFFLINE_PROMPT_CACHE\");\n"
+    "    if (path == nullptr || path[0] == '\\0' || access(path, R_OK) != 0) return 0;\n"
+    "    llama_memory_t mem = llama_get_memory(g_context);\n"
+    "    size_t n_saved = 0;\n"
+    "    if (llama_state_seq_load_file(g_context, path, 0, nullptr, 0, &n_saved) == 0 || n_saved == 0) return 0;\n"
+    "    llama_tokens saved(n_saved);\n"
+    "    size_t n_loaded = 0;\n"
+    "    if (llama_state_seq_load_file(g_context, path, 0, saved.data(), saved.size(), &n_loaded) == 0) {\n"
+    "        LOGw(\"%s: the saved system prompt state does not fit this context; decoding the prompt\", __func__);\n"
+    "        llama_memory_clear(mem, false);\n"
+    "        return 0;\n"
+    "    }\n"
+    "    saved.resize(n_loaded);\n"
+    "    size_t common = 0;\n"
+    "    while (common < saved.size() && common < tokens.size() && saved[common] == tokens[common]) common++;\n"
+    "    if (common < saved.size()) {\n"
+    "        // Drop the saved tokens that differ. Recurrent layers cannot go back, and a sliding-window\n"
+    "        // cache must still hold the whole window before the first token decoded next.\n"
+    "        const int n_swa = llama_model_n_swa(g_model);\n"
+    "        const llama_pos needed = n_swa > 0 ? std::max<llama_pos>(0, (llama_pos) common - n_swa + 1) : 0;\n"
+    "        const bool removed = common > 0 && llama_memory_seq_rm(mem, 0, (llama_pos) common, -1);\n"
+    "        const llama_pos pos_min = llama_memory_seq_pos_min(mem, 0);\n"
+    "        if (!removed || pos_min < 0 || pos_min > needed) {\n"
+    "            LOGi(\"%s: the saved system prompt shares %zu of %zu tokens but cannot be cut there; decoding the prompt\",\n"
+    "                 __func__, common, tokens.size());\n"
+    "            llama_memory_clear(mem, false);\n"
+    "            return 0;\n"
+    "        }\n"
+    "    }\n"
+    "    LOGi(\"%s: restored %zu of %zu system prompt tokens\", __func__, common, tokens.size());\n"
+    "    return (int) common;\n"
+    "}\n\n"
+    "// Tokens before the changing end of the system prompt (IAOFFLINE_SYSTEM_PROMPT_TAIL): the part\n"
+    "// that is saved. Tokenizing that text alone may merge its last characters differently, so only\n"
+    "// the tokens both tokenizations share count.\n"
+    "static size_t iaoffline_stable_prompt_tokens(const std::string &formatted, const llama_tokens &tokens, const bool special) {\n"
+    "    const char *tail = getenv(\"IAOFFLINE_SYSTEM_PROMPT_TAIL\");\n"
+    "    if (tail == nullptr || tail[0] == '\\0') return tokens.size();\n"
+    "    const size_t at = formatted.rfind(tail);\n"
+    "    if (at == std::string::npos || at == 0) return tokens.size();\n"
+    "    const auto head = common_tokenize(g_context, formatted.substr(0, at), special, special);\n"
+    "    size_t common = 0;\n"
+    "    while (common < head.size() && common < tokens.size() && head[common] == tokens[common]) common++;\n"
+    "    return common;\n"
+    "}\n\n"
+    "static void iaoffline_save_prompt_cache(const llama_tokens &tokens) {\n"
+    "    const char *path = getenv(\"IAOFFLINE_PROMPT_CACHE\");\n"
+    "    if (path == nullptr || path[0] == '\\0') return;\n"
+    "    // Written aside and renamed, so a write cut short never leaves a damaged state behind.\n"
+    "    const std::string partial = std::string(path) + \".partial\";\n"
+    "    if (llama_state_seq_save_file(g_context, partial.c_str(), 0, tokens.data(), tokens.size()) == 0 ||\n"
+    "        rename(partial.c_str(), path) != 0) {\n"
+    "        unlink(partial.c_str());\n"
+    "        LOGw(\"%s: could not save the system prompt state\", __func__);\n"
+    "        return;\n"
+    "    }\n"
+    "    LOGi(\"%s: saved %zu system prompt tokens\", __func__, tokens.size());\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(",
+)
+replace_once(
+    "    // Decode system tokens in batches\n"
+    "    if (decode_tokens_in_batches(g_context, g_batch, system_tokens, current_position)) {\n"
+    "        LOGe(\"%s: llama_decode() failed!\", __func__);\n"
+    "        return 2;\n"
+    "    }\n",
+    "    // Restore what an earlier load saved of this prompt, decode the rest of its unchanging part\n"
+    "    // and save that, then decode the changing end.\n"
+    "    const int stable = (int) iaoffline_stable_prompt_tokens(formatted_system_prompt, system_tokens, has_chat_template);\n"
+    "    int position = iaoffline_restore_prompt_cache(system_tokens);\n"
+    "    if (position < stable) {\n"
+    "        const llama_tokens head(system_tokens.begin() + position, system_tokens.begin() + stable);\n"
+    "        if (decode_tokens_in_batches(g_context, g_batch, head, position)) {\n"
+    "            LOGe(\"%s: llama_decode() failed!\", __func__);\n"
+    "            return 2;\n"
+    "        }\n"
+    "        position = stable;\n"
+    "        iaoffline_save_prompt_cache(llama_tokens(system_tokens.begin(), system_tokens.begin() + stable));\n"
+    "    }\n"
+    "    const llama_tokens rest(system_tokens.begin() + position, system_tokens.end());\n"
+    "    if (!rest.empty() && decode_tokens_in_batches(g_context, g_batch, rest, position)) {\n"
+    "        LOGe(\"%s: llama_decode() failed!\", __func__);\n"
+    "        return 2;\n"
+    "    }\n",
+)
+
 path.write_text(text)
 print("Applied IA Offline Android model-load compatibility patch")
 PY

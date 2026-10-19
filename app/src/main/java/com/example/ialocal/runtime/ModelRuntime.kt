@@ -24,12 +24,30 @@ data class TurnOptions(
     val assistantPrefix: String = "",
     /** enable_thinking for templates that read it (Gemma 4); off renders them without reasoning. */
     val templateThinking: Boolean = true,
+    /**
+     * The end of the system prompt that changes from one day to the next (the date). The runtime
+     * keeps the system prompt processed up to it between loads, so only this part is read again.
+     */
+    val systemPromptTail: String = "",
+)
+
+/** What the next answer starts from, processed while the user is still writing the message. */
+data class PromptPrefill(
+    val systemPrompt: String,
+    /** The conversation so far, without the message being written. */
+    val history: List<AiChatMessage>,
+    /** The answer budget of the next request, which decides how much of the history fits. */
+    val maxTokens: Int,
+    val turn: TurnOptions,
 )
 
 interface ModelRuntime {
     val state: StateFlow<RuntimeState>
-    suspend fun warmUp(model: AiModelEntity)
-    suspend fun verify(model: AiModelEntity): VerificationResult
+    /** Loads [model]; with [prefill], also processes what the next answer starts from. */
+    suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill? = null)
+
+    /** Runs a short test answer. The model is freed afterwards unless [keepLoaded] and it passed. */
+    suspend fun verify(model: AiModelEntity, keepLoaded: Boolean = false): VerificationResult
 
     fun streamComplete(
         model: AiModelEntity,

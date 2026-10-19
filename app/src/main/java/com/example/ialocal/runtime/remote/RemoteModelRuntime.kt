@@ -12,6 +12,7 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.RuntimeState
 import com.example.ialocal.runtime.RuntimeStatus
 import com.example.ialocal.runtime.TurnOptions
@@ -76,13 +77,16 @@ class RemoteModelRuntime(
         }
     }
 
-    override suspend fun warmUp(model: AiModelEntity) = withContext(Dispatchers.IO) {
-        call(model, ModelCrashGuard.Phase.LOAD) { it.warmUp(RemoteProtocol.encodeModel(model), safeLevel(model)) }
+    override suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill?) = withContext(Dispatchers.IO) {
+        val prefillJson = prefill?.let(RemoteProtocol::encodePrefill).orEmpty()
+        call(model, ModelCrashGuard.Phase.LOAD) { it.warmUp(RemoteProtocol.encodeModel(model), safeLevel(model), prefillJson) }
     }
 
-    override suspend fun verify(model: AiModelEntity): VerificationResult = withContext(Dispatchers.IO) {
+    override suspend fun verify(model: AiModelEntity, keepLoaded: Boolean): VerificationResult = withContext(Dispatchers.IO) {
         VerificationResult(
-            call(model, ModelCrashGuard.Phase.LOAD) { it.verify(RemoteProtocol.encodeModel(model), safeLevel(model)) },
+            call(model, ModelCrashGuard.Phase.LOAD) {
+                it.verify(RemoteProtocol.encodeModel(model), safeLevel(model), keepLoaded)
+            },
         )
     }
 

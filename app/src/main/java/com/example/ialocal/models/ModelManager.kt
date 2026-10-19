@@ -7,6 +7,7 @@ import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.PromptCache
 import com.example.ialocal.runtime.RuntimeState
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -427,11 +428,12 @@ class ModelManager(
         if (!_downloadState.value.isBusy) _downloadState.value = ModelDownloadState()
     }
 
-    suspend fun verifyAndActivate(modelId: String): AiModelEntity {
+    /** [keepLoaded] when the model is about to be used, so it is not loaded a second time. */
+    suspend fun verifyAndActivate(modelId: String, keepLoaded: Boolean = false): AiModelEntity {
         val model = requireNotNull(repository.getModel(modelId)) { "Modelo não encontrado." }
         repository.markVerifying(model.id)
         return try {
-            val result = runtime.verify(model)
+            val result = runtime.verify(model, keepLoaded)
             logger?.info("INFERENCE", "Verificação concluída para ${model.apiModelId}: ${result.output.take(40)}")
             repository.markVerified(model.id)
             repository.activateModel(model.id)
@@ -454,7 +456,8 @@ class ModelManager(
         repository.activateModel(model.id)
     }
 
-    suspend fun retryVerification(modelId: String): AiModelEntity = verifyAndActivate(modelId)
+    suspend fun retryVerification(modelId: String, keepLoaded: Boolean = false): AiModelEntity =
+        verifyAndActivate(modelId, keepLoaded)
 
     suspend fun delete(modelId: String) {
         val model = repository.getModel(modelId)
@@ -465,6 +468,7 @@ class ModelManager(
         if (catalogModel != null) persistentDownloads.deletePersistedModel(catalogModel)
         repository.deleteModel(modelId)
         crashGuard?.forget(modelId)
+        PromptCache.forget(appContext, modelId)
     }
 
     suspend fun unload() = runtime.unload()

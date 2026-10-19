@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -88,6 +90,14 @@ class ChatViewModel(
         }
         viewModelScope.launch {
             generation.resolvedAgentId.collect { agentId -> if (agentId != null) _selectedAgentId.value = agentId }
+        }
+        viewModelScope.launch {
+            // While the user writes, the selected AI loads and reads this conversation, so the
+            // first answer does not start with minutes of loading and reading.
+            combine(_selectedAgentId, _selectedModelId) { agentId, modelId -> agentId?.let { it to modelId } }
+                .filterNotNull()
+                .distinctUntilChanged()
+                .collect { generationManager.prepare(conversationId, currentTarget()) }
         }
         viewModelScope.launch {
             combine(modelRepository.models, selectedProfile, _selectedModelId) { installed, _, requestedId ->

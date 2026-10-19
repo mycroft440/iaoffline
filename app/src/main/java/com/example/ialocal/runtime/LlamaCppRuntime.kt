@@ -11,6 +11,7 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.models.GgufInspector
 import com.example.ialocal.models.ModelCatalog
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -50,24 +51,44 @@ class LlamaCppRuntime(
     private var loadedContextTokens = RuntimeLimits.MIN_CONTEXT_TOKENS
     /** The conversation the native context holds, if the last answer ended normally. */
     private var session: ChatSession? = null
+    /** The system prompt and earlier turns the native context holds, prepared before a message. */
+    private var primed: Primed? = null
+    /** Counts requests, so a prefill still running stops at the next turn when one arrives. */
+    private val requests = AtomicInteger()
 
-    override suspend fun warmUp(model: AiModelEntity) = withContext(nativeDispatcher) {
-        mutex.withLock { ensureLoaded(model) }
+    private data class Primed(val modelId: String, val key: String, val history: List<AiChatMessage>)
+
+    override suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill?) = withContext(nativeDispatcher) {
+        val ticket = requests.incrementAndGet()
+        mutex.withLock {
+            ensureLoaded(model)
+            if (prefill != null) prime(model, prefill, ticket)
+        }
     }
 
-    override suspend fun verify(model: AiModelEntity): VerificationResult = withContext(nativeDispatcher) {
+    override suspend fun verify(model: AiModelEntity, keepLoaded: Boolean): VerificationResult = withContext(nativeDispatcher) {
+        requests.incrementAndGet()
         mutex.withLock {
             var finalState = RuntimeState()
+            var passed = false
             try {
                 logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
-                ensureLoaded(model, forceReload = true)
-                runCatching { Os.unsetenv(ASSISTANT_PREFIX_ENV) }
+                ensureLoaded(model)
+                session = null
+                primed = null
+                runCatching {
+                    Os.unsetenv(ASSISTANT_PREFIX_ENV)
+                    // The test prompt must not replace the model's saved system prompt.
+                    Os.unsetenv(PROMPT_CACHE_ENV)
+                    Os.unsetenv(SYSTEM_PROMPT_TAIL_ENV)
+                }
                 engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
                 _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
                 val output = engine.sendUserPrompt("Responda apenas: OK", predictLength = 8)
                     .toList().joinToString("").trim()
                 require(output.isNotBlank()) { "O runtime carregou o modelo, mas a inferência de teste não gerou texto." }
                 logger?.info("INFERENCE", "Smoke test respondeu: ${output.take(80)}")
+                passed = true
                 VerificationResult(output)
             } catch (t: Throwable) {
                 finalState = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
@@ -75,9 +96,13 @@ class LlamaCppRuntime(
                 logger?.error("INFERENCE", "Falha no teste real de inferência", t)
                 throw t
             } finally {
-                // A verification is only a smoke test. Do not keep a multi-GB model resident in RAM
-                // before the user actually opens/activates it.
-                unloadLocked(finalState)
+                // A test after a download or an import frees the multi-GB model until the user opens
+                // it; a test right before an answer keeps it, so the answer does not load it again.
+                if (keepLoaded && passed) {
+                    _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
+                } else {
+                    unloadLocked(finalState)
+                }
             }
         }
     }
@@ -93,6 +118,8 @@ class LlamaCppRuntime(
         require(kotlin.math.abs(temperature - FIXED_TEMPERATURE) < 0.0001f) {
             "O binding llama.cpp Android não aceita temperature por requisição; ele usa a recomendada pelo modelo ou $FIXED_TEMPERATURE."
         }
+        // A prefill still running for another message stops at its next turn.
+        requests.incrementAndGet()
         mutex.lock()
         try {
             ensureLoaded(model)
@@ -104,10 +131,12 @@ class LlamaCppRuntime(
                 maxOutputTokens = outputTokens,
             )
             val latestUser = prepared.latestUser + turn.userSuffix
-            val sessionKey = prepared.systemPrompt + "\u0000thinking=" + turn.templateThinking
+            val sessionKey = sessionKey(prepared.systemPrompt, turn.templateThinking)
             val previous = session
+            val ready = primed
             // Invalid until this answer ends normally.
             session = null
+            primed = null
             runCatching {
                 Os.setenv(THINKING_ENV, if (turn.templateThinking) "1" else "0", true)
                 if (turn.assistantPrefix.isEmpty()) Os.unsetenv(ASSISTANT_PREFIX_ENV)
@@ -118,9 +147,11 @@ class LlamaCppRuntime(
                 previous.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)
             if (continuing) {
                 logger?.info("PROMPT_TEMPLATE", "Continuando a conversa no contexto carregado (${previous?.tokens} tokens)")
+            } else if (ready == Primed(model.id, sessionKey, prepared.history)) {
+                logger?.info("PROMPT_TEMPLATE", "Instruções e ${prepared.history.size} turnos já processados antes do envio")
             } else {
                 if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
-                engine.setSystemPrompt(prepared.systemPrompt)
+                setSystemPrompt(model, prepared.systemPrompt, turn)
                 prepared.history.forEach { engine.addHistoryMessage(it.role, it.content) }
                 logger?.info("PROMPT_TEMPLATE", "Conversa montada com ${prepared.history.size} turnos anteriores")
             }
@@ -186,6 +217,71 @@ class LlamaCppRuntime(
         mutex.withLock { unloadLocked() }
     }
 
+    /**
+     * Processes the system prompt and the conversation so far while the user writes, so the next
+     * message only has its own text left to read. Stops between turns if a request arrives.
+     */
+    private suspend fun prime(model: AiModelEntity, prefill: PromptPrefill, ticket: Int) {
+        if (requests.get() != ticket) return
+        val prepared = promptBuilder.prepareHistory(
+            baseSystemPrompt = prefill.systemPrompt,
+            messages = prefill.history,
+            contextTokens = loadedContextTokens,
+            maxOutputTokens = prefill.maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS),
+        )
+        val key = sessionKey(prepared.systemPrompt, prefill.turn.templateThinking)
+        val target = Primed(model.id, key, prepared.history)
+        // The context already holds this conversation, after its last answer or a previous prefill.
+        if (primed == target || session?.holds(model.id, key, prepared.conversation) == true) return
+
+        session = null
+        primed = null
+        _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
+        try {
+            runCatching { Os.setenv(THINKING_ENV, if (prefill.turn.templateThinking) "1" else "0", true) }
+            setSystemPrompt(model, prepared.systemPrompt, prefill.turn)
+            for (message in prepared.history) {
+                if (requests.get() != ticket) {
+                    logger?.info("PROMPT_TEMPLATE", "Preparação interrompida por uma nova solicitação")
+                    return
+                }
+                engine.addHistoryMessage(message.role, message.content)
+            }
+            primed = target
+            logger?.info("PROMPT_TEMPLATE", "Instruções e ${prepared.history.size} turnos processados antes da próxima mensagem")
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            // Only time is lost: the next message processes the conversation (or reloads) as before.
+            logger?.error("PROMPT_TEMPLATE", "Falha ao preparar a conversa antes do envio", t)
+            _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, humanize(t))
+        } finally {
+            if (engine.state.value is InferenceEngine.State.ModelReady) {
+                _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
+            }
+        }
+    }
+
+    /**
+     * Processes [systemPrompt]. The native side restores what it saved of this model's system
+     * prompt, up to the part that changes daily ([TurnOptions.systemPromptTail]), and saves it
+     * again when it had to process it.
+     */
+    private suspend fun setSystemPrompt(model: AiModelEntity, systemPrompt: String, turn: TurnOptions) {
+        val tail = turn.systemPromptTail.trimEnd()
+        runCatching {
+            val file = PromptCache.file(appContext, model.id, turn.templateThinking)
+            file.parentFile?.mkdirs()
+            Os.setenv(PROMPT_CACHE_ENV, file.path, true)
+            if (tail.isNotEmpty() && systemPrompt.endsWith(tail)) Os.setenv(SYSTEM_PROMPT_TAIL_ENV, tail, true)
+            else Os.unsetenv(SYSTEM_PROMPT_TAIL_ENV)
+        }
+        engine.setSystemPrompt(systemPrompt)
+    }
+
+    private fun sessionKey(systemPrompt: String, templateThinking: Boolean) =
+        systemPrompt + "\u0000thinking=" + templateThinking
+
     override suspend fun releaseIfIdle(): Boolean = withContext(nativeDispatcher) {
         // Busy means loading or answering, possibly for the background service: leave it alone.
         if (loadedModelId == null || !mutex.tryLock()) return@withContext false
@@ -202,9 +298,9 @@ class LlamaCppRuntime(
      * Loads [model] unless it is already loaded and healthy. The model stays loaded between
      * messages, so a conversation does not pay for a reload (and its weight repacking) each turn.
      */
-    private suspend fun ensureLoaded(model: AiModelEntity, forceReload: Boolean = false) {
+    private suspend fun ensureLoaded(model: AiModelEntity) {
         awaitEngineInitialized()
-        if (!forceReload && loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
+        if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
         }
@@ -259,11 +355,13 @@ class LlamaCppRuntime(
             logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")
             loadedModelId = model.id
             session = null
+            primed = null
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("MODEL_LOAD", "Modelo READY: ${model.apiModelId}")
         } catch (t: Throwable) {
             loadedModelId = null
             session = null
+            primed = null
             val message = humanize(t)
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
             logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}: $message", t)
@@ -291,6 +389,7 @@ class LlamaCppRuntime(
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
             session = null
+            primed = null
             _state.value = finalState
             return
         }
@@ -305,6 +404,7 @@ class LlamaCppRuntime(
             .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
         loadedModelId = null
         session = null
+        primed = null
         _state.value = finalState
     }
 
@@ -351,6 +451,8 @@ class LlamaCppRuntime(
         private const val SESSION_CLEAN_ENV = "IAOFFLINE_SESSION_CLEAN"
         private const val SESSION_TOKENS_ENV = "IAOFFLINE_SESSION_TOKENS"
         private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
+        private const val PROMPT_CACHE_ENV = "IAOFFLINE_PROMPT_CACHE"
+        private const val SYSTEM_PROMPT_TAIL_ENV = "IAOFFLINE_SYSTEM_PROMPT_TAIL"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
         private const val MB = 1024L * 1024
     }

@@ -13,14 +13,19 @@ import java.util.Locale
  * short excerpts of the offline Wikipedia articles the question names, so facts come from the
  * encyclopedia instead of from the weights. It adds a few hundred prompt tokens at most.
  *
- * The system part only changes once a day, so the next message of a conversation can continue
- * the loaded context; the excerpts go with the message they answer.
+ * Only the date changes in the system part, once a day, so the next message of a conversation can
+ * continue the loaded context; it goes at the end of the system prompt, so the runtime keeps the
+ * processed rules between loads. The excerpts go with the message they answer.
  */
 class AnswerGuidance(
     private val wikipedia: OfflineWikipedia? = null,
     private val clock: () -> ZonedDateTime = { ZonedDateTime.now() },
 ) {
-    fun systemSuffix(): String = baseSuffix(clock())
+    /** Rules that never change. */
+    fun systemRules(): String = RULES
+
+    /** Today's date, the only part of the instructions that changes; it goes last. */
+    fun dateNote(): String = dateNote(clock())
 
     /** Excerpts for the latest user message, or "" when there is nothing to add. */
     suspend fun turnSuffix(messages: List<AiChatMessage>): String {
@@ -34,12 +39,11 @@ class AnswerGuidance(
             Locale.forLanguageTag("pt-BR"),
         )
 
-        fun baseSuffix(now: ZonedDateTime): String = buildString {
-            append("\n\nData de hoje no aparelho: ").append(DATE_FORMAT.format(now)).append(". ")
-            append("Para a hora exata, use a ferramenta current_time.")
-            append("\nBoas práticas: responda no idioma do usuário. Se não souber um fato ou não tiver certeza, ")
-            append("diga isso em vez de inventar nomes, datas ou números. Para contas, use a ferramenta calculate. ")
-            append("Em problemas de várias etapas, resolva passo a passo e confira o resultado antes da resposta final.")
-        }
+        const val RULES = "\n\nBoas práticas: responda no idioma do usuário. Se não souber um fato ou não tiver certeza, " +
+            "diga isso em vez de inventar nomes, datas ou números. Para contas, use a ferramenta calculate. " +
+            "Em problemas de várias etapas, resolva passo a passo e confira o resultado antes da resposta final."
+
+        fun dateNote(now: ZonedDateTime): String =
+            "\n\nData de hoje no aparelho: ${DATE_FORMAT.format(now)}. Para a hora exata, use a ferramenta current_time."
     }
 }
