@@ -84,12 +84,15 @@ Além da amostragem recomendada pelo modelo, cada conversa recebe técnicas que 
 - **Calculadora** (`calculate`): contas exatas com precedência, potências, funções e constantes, em vez de aritmética "de cabeça".
 - **Wikipedia Offline**: quando instalada, os agentes podem procurar (`wikipedia_search`) e ler (`wikipedia_read`) artigos, e, com a consulta automática ligada, perguntas que citam uma pessoa, lugar ou assunto recebem o começo do artigo correspondente (no máximo dois artigos, ~650 caracteres cada).
 
-## Ferramentas offline
+## Configurações e ferramentas offline
 
-Em **Configurações → Ferramentas offline** há duas entradas:
+As **Configurações** são um menu de botões, e cada um abre a própria tela com as opções daquela parte:
 
+- **Aparência**: o tema do app (seguir o sistema, claro ou escuro).
+- **Perfis de I.A**: os perfis **Programador** e **Sem censura**.
+- **Achar I.As no armazenamento**: busca e importa GGUFs já salvos no aparelho.
 - **Baixar compiladores**: os pacotes de linguagem do editor de código (veja abaixo).
-- **Wikipedia Offline**: edições da Wikipédia publicadas pelo [Kiwix](https://kiwix.org) no formato ZIM, para os agentes consultarem sem internet. Há resumos dos 50 mil artigos essenciais em português (~150 MB), resumos de todos os artigos em português (~1,7 GB), os artigos essenciais completos (~1 GB), a Wikipédia em português completa sem imagens (~7 GB) e resumos em inglês. Quem escolhe o que baixar é o usuário: nada é baixado sem tocar em **Baixar** numa edição e confirmar o diálogo (que mostra o tamanho, o espaço livre e a opção de baixar apenas pelo Wi-Fi), o app não atualiza as edições sozinho e os agentes só leem as edições já instaladas. Ao confirmar, o app baixa a edição mais recente, usando o gerenciador de downloads do Android (continua em segundo plano e retoma após quedas de rede), confere o arquivo com o SHA-256 publicado pelo Kiwix e o guarda na pasta do app em `Android/data`.
+- **Baixar Wikipedia Offline**: edições da Wikipédia publicadas pelo [Kiwix](https://kiwix.org) no formato ZIM, para os agentes consultarem sem internet. Há resumos dos 50 mil artigos essenciais em português (~150 MB), resumos de todos os artigos em português (~1,7 GB), os artigos essenciais completos (~1 GB), a Wikipédia em português completa sem imagens (~7 GB) e resumos em inglês. Quem escolhe o que baixar é o usuário: nada é baixado sem tocar em **Baixar** numa edição e confirmar o diálogo (que mostra o tamanho, o espaço livre e a opção de baixar apenas pelo Wi-Fi), o app não atualiza as edições sozinho e os agentes só leem as edições já instaladas. Ao confirmar, o app baixa a edição mais recente, usando o gerenciador de downloads do Android (continua em segundo plano e retoma após quedas de rede), confere o arquivo com o SHA-256 publicado pelo Kiwix e o guarda na pasta do app em `Android/data`.
 
 O leitor de ZIM é do próprio app: ele procura artigos por título com buscas binárias nos índices do arquivo e descomprime (zstd) só o trecho necessário, então consultar a Wikipédia completa usa quase nada de RAM. Não há busca de texto completo: os artigos são encontrados pelo título, a partir do assunto da pergunta.
 

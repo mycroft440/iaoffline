@@ -54,9 +54,12 @@ import com.example.ialocal.ui.models.HtmlAiHomeScreen
 import com.example.ialocal.ui.models.ModelsScreen
 import com.example.ialocal.ui.models.ModelsViewModel
 import com.example.ialocal.ui.models.MyAisScreen
+import com.example.ialocal.ui.settings.AiProfilesScreen
+import com.example.ialocal.ui.settings.AppearanceScreen
 import com.example.ialocal.ui.settings.CompilersScreen
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
+import com.example.ialocal.ui.settings.StorageScanScreen
 import com.example.ialocal.ui.settings.WikipediaScreen
 import com.example.ialocal.ui.theme.LocalAiTheme
 import kotlinx.coroutines.Dispatchers
@@ -462,15 +465,47 @@ private fun LocalAiApp(
             SettingsScreen(
                 viewModel = vm,
                 importProgress = importProgress,
-                onScanStorage = onScanStorage,
                 selectedProfile = selectedProfile,
-                onSelectProfile = container.modelRepository::setSelectedProfile,
                 privacyOptionsRequired = adsManager.privacyOptionsRequired,
                 onPrivacyOptions = onPrivacyOptions,
                 wikipediaSummary = wikipediaSummary(wikipediaStates),
+                onOpenAppearance = { navController.navigate("appearance") },
+                onOpenAiProfiles = { navController.navigate("ai-profiles") },
+                onOpenStorageScan = { navController.navigate("storage-scan") },
                 onOpenCompilers = { navController.navigate("compilers") },
                 onOpenWikipedia = { navController.navigate("wikipedia") },
                 adsEnabled = adsManager.adsReady,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("appearance") {
+            val vm: SettingsViewModel = viewModel(
+                factory = SettingsViewModel.Factory(
+                    container.themeRepository,
+                    container.codeLanguagePacks,
+                ),
+            )
+            AppearanceScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("ai-profiles") {
+            val selectedProfile by container.modelRepository.selectedProfile.collectAsStateWithLifecycle()
+            AiProfilesScreen(
+                selectedProfile = selectedProfile,
+                onSelectProfile = container.modelRepository::setSelectedProfile,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("storage-scan") {
+            val importProgress by container.automaticModelImporter.progress.collectAsStateWithLifecycle()
+            StorageScanScreen(
+                importProgress = importProgress,
+                onScanStorage = onScanStorage,
                 onBack = { navController.popBackStack() },
             )
         }
