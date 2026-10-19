@@ -36,6 +36,21 @@ data class ChatSession(
         return sameAnswer(answer.content, reply)
     }
 
+    /**
+     * True when the context already holds [conversation] (the turns before the next message): it
+     * continues with this answer, or it is this conversation just before the answer, from a
+     * prefill that arrives after the answer it was preparing.
+     */
+    fun holds(modelId: String, key: String, conversation: List<AiChatMessage>): Boolean {
+        if (continuesWith(modelId, key, conversation)) return true
+        if (modelId != this.modelId || key != this.key) return false
+        if (conversation.size !in this.conversation.size - 1..this.conversation.size) return false
+        return conversation.indices.all { i ->
+            conversation[i].role == this.conversation[i].role &&
+                collapse(conversation[i].content) == collapse(this.conversation[i].content)
+        }
+    }
+
     /** Whether the new message and the answer still fit without the native context shift. */
     fun hasRoomFor(latestUserChars: Int, maxOutputTokens: Int, contextTokens: Int): Boolean {
         val reservedOutput = minOf(maxOutputTokens, contextTokens / 2)

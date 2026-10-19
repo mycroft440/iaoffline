@@ -1,9 +1,11 @@
 package com.example.ialocal.chat
 
 import android.content.Context
+import com.example.ialocal.agent.AiOrchestrator
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.ai.AiChatRequest
 import com.example.ialocal.ai.AiGateway
+import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.ChatRepository
 import com.example.ialocal.data.MessageRole
 import com.example.ialocal.data.MessageStatus
@@ -52,10 +54,13 @@ class ChatGenerationManager(
     private val aiGateway: AiGateway,
     private val modelRepository: ModelRepository,
     private val modelManager: ModelManager,
+    private val orchestrator: AiOrchestrator,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = ConcurrentHashMap<String, Session>()
+    /** The latest [prepare]; each one waits for the previous, so they never overlap. */
+    private var warmUp: Job? = null
 
     private val _activeGenerations = MutableStateFlow(0)
     val activeGenerations: StateFlow<Int> = _activeGenerations.asStateFlow()
@@ -84,6 +89,31 @@ class ChatGenerationManager(
     }
 
     fun session(conversationId: String): Session = sessions.getOrPut(conversationId) { Session() }
+
+    /**
+     * Loads the AI a message sent now would use and processes its instructions and this
+     * conversation in the background, while the user writes, so the answer starts sooner. Skipped
+     * while answers are running: they need the model, and their conversations stay in its context.
+     */
+    fun prepare(conversationId: String, target: GenerationTarget) {
+        if (_activeGenerations.value > 0) return
+        val previous = warmUp
+        warmUp = scope.launch {
+            previous?.join()
+            if (_activeGenerations.value > 0) return@launch
+            try {
+                val agent = resolveAgent(conversationId, target, verify = false) ?: return@launch
+                val history = repository.getMessages(conversationId).map(::toAiMessage)
+                // A message sent meanwhile already loads the model and reads the conversation.
+                if (_activeGenerations.value > 0) return@launch
+                orchestrator.warmUpAgent(agent.id, history)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Throwable) {
+                // Only time is lost; sending the message loads the model again and reports the error.
+            }
+        }
+    }
 
     fun send(conversationId: String, outgoing: QueuedChatMessage, target: GenerationTarget) {
         val session = session(conversationId)
@@ -206,13 +236,11 @@ class ChatGenerationManager(
         startOrQueue(conversationId, session, next, session.queuedTarget ?: previousTarget)
     }
 
-    private suspend fun generateAssistant(
-        conversationId: String,
-        session: Session,
-        target: GenerationTarget,
-        history: List<AiChatMessage>,
-        attachments: List<PendingAttachment>,
-    ) {
+    /**
+     * The profile, and so the model, that answers a message sent now. With [verify], a model not
+     * yet tested is tested first and stays loaded for the answer; without it, such a model gives null.
+     */
+    private suspend fun resolveAgent(conversationId: String, target: GenerationTarget, verify: Boolean): AgentEntity? {
         val profileName = modelRepository.selectedProfile.value.displayName
         val conversation = repository.getConversation(conversationId)
         val preferredAgentId = target.preferredAgentId ?: conversation?.agentId
@@ -230,11 +258,22 @@ class ChatGenerationManager(
                 "O modelo selecionado não está mais disponível."
             }
             if (selectedModel.verificationStatus != ModelVerificationStatus.VERIFIED.name) {
-                modelManager.retryVerification(selectedModel.id)
+                if (!verify) return null
+                modelManager.retryVerification(selectedModel.id, keepLoaded = true)
             }
         }
+        return modelRepository.resolveAgentForUse(preferredAgent?.id)
+    }
 
-        val agent = modelRepository.resolveAgentForUse(preferredAgent?.id)
+    private suspend fun generateAssistant(
+        conversationId: String,
+        session: Session,
+        target: GenerationTarget,
+        history: List<AiChatMessage>,
+        attachments: List<PendingAttachment>,
+    ) {
+        val conversation = repository.getConversation(conversationId)
+        val agent = resolveAgent(conversationId, target, verify = true)
             ?: throw IllegalStateException("Nenhum perfil com modelo local disponível pôde ser preparado para uso.")
         session._resolvedAgentId.value = agent.id
         if (conversation?.agentId != agent.id) {

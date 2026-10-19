@@ -13,11 +13,14 @@ interface IInferenceService {
 
     void setStateListener(IInferenceStateListener listener);
 
-    /** Loads the model and returns when it is ready. */
-    void warmUp(String modelJson, int safeLevel);
+    /**
+     * Loads the model and returns when it is ready. A non-empty prefillJson (a PromptPrefill) also
+     * processes what the next answer starts from.
+     */
+    void warmUp(String modelJson, int safeLevel, String prefillJson);
 
-    /** Loads the model, runs a short test answer and frees it; returns the answer. */
-    String verify(String modelJson, int safeLevel);
+    /** Loads the model and runs a short test answer; returns the answer. Frees it unless keepLoaded. */
+    String verify(String modelJson, int safeLevel, boolean keepLoaded);
 
     /** Starts an answer; its text, end or failure arrive on the callback. */
     void generate(String requestId, String requestJson, IInferenceCallback callback);

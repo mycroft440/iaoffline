@@ -2,6 +2,7 @@ package com.example.ialocal.runtime.remote
 
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.TurnOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -38,10 +39,26 @@ class RemoteProtocolTest {
             messages = listOf(AiChatMessage("user", "Olá"), AiChatMessage("assistant", "Oi!"), AiChatMessage("user", "Tudo bem?")),
             temperature = 0.3f,
             maxTokens = 2048,
-            turn = TurnOptions(userSuffix = " /no_think", assistantPrefix = "<think>\n\n</think>\n\n", templateThinking = false),
+            turn = TurnOptions(
+                userSuffix = " /no_think",
+                assistantPrefix = "<think>\n\n</think>\n\n",
+                templateThinking = false,
+                systemPromptTail = "\n\nData de hoje no aparelho: sábado.",
+            ),
             safeLevel = 1,
         )
         assertEquals(request, RemoteProtocol.decodeRequest(RemoteProtocol.encodeRequest(request)))
+    }
+
+    @Test
+    fun prefillsCrossTheProcessUnchanged() {
+        val prefill = PromptPrefill(
+            systemPrompt = "Sistema\n\nData de hoje no aparelho: sábado.",
+            history = listOf(AiChatMessage("user", "Olá"), AiChatMessage("assistant", "Oi!")),
+            maxTokens = 8192,
+            turn = TurnOptions(templateThinking = false, systemPromptTail = "\n\nData de hoje no aparelho: sábado."),
+        )
+        assertEquals(prefill, RemoteProtocol.decodePrefill(RemoteProtocol.encodePrefill(prefill)))
     }
 
     @Test

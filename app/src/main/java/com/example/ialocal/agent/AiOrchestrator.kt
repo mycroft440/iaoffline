@@ -9,7 +9,9 @@ import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.models.ReasoningPlan
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.TurnOptions
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
@@ -85,7 +87,53 @@ class AiOrchestrator(
         return model to chunks
     }
 
+    /**
+     * Loads the profile's model and processes its instructions and [history] (the conversation so
+     * far) while the user writes, so the answer to the next message starts sooner. A model not yet
+     * verified is left for the first message, which tests it.
+     */
+    suspend fun warmUpAgent(agentId: String?, history: List<AiChatMessage>) {
+        val agent = resolveAgent(agentId)
+        val model = models.getModel(agent.modelId) ?: return
+        if (model.verificationStatus != ModelVerificationStatus.VERIFIED.name) return
+        val prompt = agentPrompt(agent, model, maxTokensOverride = null)
+        runtime.warmUp(model, PromptPrefill(prompt.systemPrompt, history, prompt.plan.maxTokens, prompt.turn))
+    }
+
     private data class PreparedAgent(val agent: AgentEntity, val model: AiModelEntity, val chunks: Flow<String>)
+
+    private data class AgentPrompt(
+        val systemPrompt: String,
+        val plan: ReasoningPlan,
+        val expectReasoning: Boolean,
+        /** Options shared by every turn; the first one adds its user suffix. */
+        val turn: TurnOptions,
+    )
+
+    private fun agentPrompt(agent: AgentEntity, model: AiModelEntity, maxTokensOverride: Int?): AgentPrompt {
+        val capability = DeepThinkSupport.capability(model)
+        val deepThinkEnabled = deepThinkStore.isEnabled(agent.id, capability.defaultEnabled)
+        val plan = DeepThinkSupport.plan(
+            model = model,
+            baseMaxTokens = maxTokensOverride ?: agent.maxTokens,
+            enabled = deepThinkEnabled,
+            level = deepThinkStore.getLevel(agent.id),
+        )
+        val expectReasoning = capability.mode == DeepThinkControlMode.REASONING_MODEL ||
+            (capability.mode == DeepThinkControlMode.HYBRID_THINKING && deepThinkEnabled)
+        // The date is the only part that changes (daily), so it goes last, where the runtime can
+        // keep everything before it processed between loads. Thinking switches such as Nemotron's
+        // /no_think must stay at the very end.
+        val tail = guidance.dateNote() + plan.systemSuffix
+        val systemPrompt = agent.systemPrompt + guidance.systemRules() + tools.promptInstructions() + tail
+        val turn = TurnOptions(
+            userSuffix = plan.userSuffix,
+            assistantPrefix = plan.assistantPrefix,
+            templateThinking = plan.templateThinking,
+            systemPromptTail = tail,
+        )
+        return AgentPrompt(systemPrompt, plan, expectReasoning, turn)
+    }
 
     private suspend fun prepareAgent(
         agentId: String?,
@@ -99,27 +147,11 @@ class AiOrchestrator(
             ?: throw IllegalStateException("O modelo deste agente não está mais disponível.")
         requireVerified(model)
 
-        val capability = DeepThinkSupport.capability(model)
-        val deepThinkEnabled = deepThinkStore.isEnabled(agent.id, capability.defaultEnabled)
-        val plan = DeepThinkSupport.plan(
-            model = model,
-            baseMaxTokens = maxTokensOverride ?: agent.maxTokens,
-            enabled = deepThinkEnabled,
-            level = deepThinkStore.getLevel(agent.id),
-        )
-        val expectReasoning = capability.mode == DeepThinkControlMode.REASONING_MODEL ||
-            (capability.mode == DeepThinkControlMode.HYBRID_THINKING && deepThinkEnabled)
-        // Thinking switches such as Nemotron's /no_think must stay at the very end.
-        val systemPrompt = agent.systemPrompt + guidance.systemSuffix() + tools.promptInstructions() + plan.systemSuffix
+        val (systemPrompt, plan, expectReasoning, toolTurn) = agentPrompt(agent, model, maxTokensOverride)
         val temperature = temperatureOverride ?: agent.temperature
         // Encyclopedia excerpts go with the user's question only; tool results get just the
         // thinking switch, which (like Qwen3's /no_think) must end the message.
-        val firstTurn = TurnOptions(
-            userSuffix = guidance.turnSuffix(messages) + plan.userSuffix,
-            assistantPrefix = plan.assistantPrefix,
-            templateThinking = plan.templateThinking,
-        )
-        val toolTurn = firstTurn.copy(userSuffix = plan.userSuffix)
+        val firstTurn = toolTurn.copy(userSuffix = guidance.turnSuffix(messages) + plan.userSuffix)
 
         val chunks = agentStream(
             expectReasoning = expectReasoning,

@@ -37,6 +37,21 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aLatePrefillDoesNotReplaceTheAnswerItWasPreparing() {
+        val answered = listOf(AiChatMessage("user", "Meu nome é Ana."), AiChatMessage("assistant", "Prazer,  Ana!"))
+        // After the answer, with the question not yet answered, or before the question was saved.
+        assertTrue(session.holds("m1", "sistema", answered))
+        assertTrue(session.holds("m1", "sistema", listOf(AiChatMessage("user", "Meu nome é Ana."))))
+        assertTrue(session.holds("m1", "sistema", emptyList()))
+        val longer = session.copy(conversation = answered + AiChatMessage("user", "E você?"), reply = "Sou uma IA.")
+        assertFalse(longer.holds("m1", "sistema", emptyList()))
+        // Another conversation, model or system prompt is not.
+        assertFalse(session.holds("m1", "sistema", listOf(AiChatMessage("user", "Meu nome é Bia."))))
+        assertFalse(session.holds("m2", "sistema", answered))
+        assertFalse(session.holds("m1", "outro sistema", answered))
+    }
+
+    @Test
     fun startsOverWhenTheContextWouldOverflow() {
         assertTrue(session.hasRoomFor(latestUserChars = 300, maxOutputTokens = 2048, contextTokens = 8192))
         // 900 tokens in use + a long message + half of a 4096 context reserved for the answer.

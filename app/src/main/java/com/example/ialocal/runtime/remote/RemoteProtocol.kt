@@ -2,6 +2,7 @@ package com.example.ialocal.runtime.remote
 
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.TurnOptions
 import org.json.JSONArray
 import org.json.JSONObject
@@ -34,37 +35,65 @@ internal object RemoteProtocol {
     fun encodeRequest(request: GenerateRequest): String = JSONObject()
         .put("model", modelJson(request.model))
         .put("systemPrompt", request.systemPrompt)
-        .put("messages", JSONArray().apply {
-            fitToLimit(request.messages).forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
-        })
+        .put("messages", messagesJson(fitToLimit(request.messages)))
         .put("temperature", request.temperature.toDouble())
         .put("maxTokens", request.maxTokens)
-        .put("userSuffix", request.turn.userSuffix)
-        .put("assistantPrefix", request.turn.assistantPrefix)
-        .put("templateThinking", request.turn.templateThinking)
+        .putTurn(request.turn)
         .put("safeLevel", request.safeLevel)
         .toString()
 
     fun decodeRequest(json: String): GenerateRequest {
         val o = JSONObject(json)
-        val messages = o.getJSONArray("messages")
         return GenerateRequest(
             model = model(o.getJSONObject("model")),
             systemPrompt = o.getString("systemPrompt"),
-            messages = List(messages.length()) { index ->
-                val item = messages.getJSONObject(index)
-                AiChatMessage(item.getString("role"), item.getString("content"))
-            },
+            messages = messages(o.getJSONArray("messages")),
             temperature = o.getDouble("temperature").toFloat(),
             maxTokens = o.getInt("maxTokens"),
-            turn = TurnOptions(
-                userSuffix = o.optString("userSuffix"),
-                assistantPrefix = o.optString("assistantPrefix"),
-                templateThinking = o.optBoolean("templateThinking", true),
-            ),
+            turn = turn(o),
             safeLevel = o.optInt("safeLevel"),
         )
     }
+
+    /** Limited like a request's messages, so it fits the same Binder transaction. */
+    fun encodePrefill(prefill: PromptPrefill): String = JSONObject()
+        .put("systemPrompt", prefill.systemPrompt)
+        .put("history", messagesJson(fitToLimit(prefill.history)))
+        .put("maxTokens", prefill.maxTokens)
+        .putTurn(prefill.turn)
+        .toString()
+
+    fun decodePrefill(json: String): PromptPrefill {
+        val o = JSONObject(json)
+        return PromptPrefill(
+            systemPrompt = o.getString("systemPrompt"),
+            history = messages(o.getJSONArray("history")),
+            maxTokens = o.getInt("maxTokens"),
+            turn = turn(o),
+        )
+    }
+
+    private fun messagesJson(messages: List<AiChatMessage>) = JSONArray().apply {
+        messages.forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
+    }
+
+    private fun messages(array: JSONArray) = List(array.length()) { index ->
+        val item = array.getJSONObject(index)
+        AiChatMessage(item.getString("role"), item.getString("content"))
+    }
+
+    private fun JSONObject.putTurn(turn: TurnOptions) = this
+        .put("userSuffix", turn.userSuffix)
+        .put("assistantPrefix", turn.assistantPrefix)
+        .put("templateThinking", turn.templateThinking)
+        .put("systemPromptTail", turn.systemPromptTail)
+
+    private fun turn(o: JSONObject) = TurnOptions(
+        userSuffix = o.optString("userSuffix"),
+        assistantPrefix = o.optString("assistantPrefix"),
+        templateThinking = o.optBoolean("templateThinking", true),
+        systemPromptTail = o.optString("systemPromptTail"),
+    )
 
     /** The most recent messages within [limit] characters; the latest one is always kept. */
     fun fitToLimit(messages: List<AiChatMessage>, limit: Int = MAX_CONVERSATION_CHARS): List<AiChatMessage> {

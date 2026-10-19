@@ -52,16 +52,17 @@ class InferenceService : Service() {
             }
         }
 
-        override fun warmUp(modelJson: String, safeLevel: Int) = forApp {
+        override fun warmUp(modelJson: String, safeLevel: Int, prefillJson: String?) = forApp {
             val model = RemoteProtocol.decodeModel(modelJson)
             safeLevels[model.id] = safeLevel
-            runBlocking { runtime.warmUp(model) }
+            val prefill = prefillJson?.takeIf { it.isNotEmpty() }?.let(RemoteProtocol::decodePrefill)
+            runBlocking { runtime.warmUp(model, prefill) }
         }
 
-        override fun verify(modelJson: String, safeLevel: Int): String = forApp {
+        override fun verify(modelJson: String, safeLevel: Int, keepLoaded: Boolean): String = forApp {
             val model = RemoteProtocol.decodeModel(modelJson)
             safeLevels[model.id] = safeLevel
-            runBlocking { runtime.verify(model) }.output
+            runBlocking { runtime.verify(model, keepLoaded) }.output
         }
 
         override fun generate(requestId: String, requestJson: String, callback: IInferenceCallback) {

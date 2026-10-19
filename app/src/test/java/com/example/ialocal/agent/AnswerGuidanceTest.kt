@@ -14,23 +14,25 @@ class AnswerGuidanceTest {
 
     @Test
     fun tellsTheModelTodaysDateInPortuguese() {
-        val suffix = AnswerGuidance.baseSuffix(now)
-        assertTrue(suffix, suffix.contains("quinta-feira, 15 de outubro de 2026"))
-        assertTrue(suffix.contains("calculate"))
-        assertTrue(suffix.contains("em vez de inventar"))
+        val note = AnswerGuidance.dateNote(now)
+        assertTrue(note, note.contains("quinta-feira, 15 de outubro de 2026"))
+        assertTrue(AnswerGuidance.RULES.contains("calculate"))
+        assertTrue(AnswerGuidance.RULES.contains("em vez de inventar"))
     }
 
     @Test
     fun systemPartOnlyChangesFromOneDayToTheNext() {
         // Minutes do not appear, so later messages of a conversation keep the same system prompt.
-        assertFalse(AnswerGuidance.baseSuffix(now).contains("22:40"))
-        assertEquals(AnswerGuidance.baseSuffix(now), AnswerGuidance.baseSuffix(now.plusHours(1)))
+        assertFalse(AnswerGuidance.dateNote(now).contains("22:40"))
+        assertEquals(AnswerGuidance.dateNote(now), AnswerGuidance.dateNote(now.plusHours(1)))
+        // The rules have no date, so the runtime can keep them processed from one day to the next.
+        assertFalse(AnswerGuidance.RULES.contains("2026"))
     }
 
     @Test
     fun withoutWikipediaNothingIsAddedToTheMessage() = runBlocking {
         val guidance = AnswerGuidance(wikipedia = null, clock = { now })
-        assertEquals(AnswerGuidance.baseSuffix(now), guidance.systemSuffix())
+        assertEquals(AnswerGuidance.dateNote(now), guidance.dateNote())
         assertEquals("", guidance.turnSuffix(listOf(AiChatMessage("user", "Quem foi Tiradentes?"))))
     }
 }
