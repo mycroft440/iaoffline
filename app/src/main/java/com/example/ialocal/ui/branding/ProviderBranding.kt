@@ -38,6 +38,8 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.ORNITH -> "Ornith AI"
     ModelProvider.INCLUSION_AI -> "inclusionAI / Ling"
     ModelProvider.POWERINFER -> "PowerInfer (Tiiny)"
+    ModelProvider.ZAI -> "Z.ai / GLM"
+    ModelProvider.COHERE -> "Cohere"
 }
 
 /** Every company has its own logo, shown in the catalog and next to its model's replies in the chat. */
@@ -59,6 +61,8 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.ORNITH -> R.drawable.provider_ornith
     ModelProvider.INCLUSION_AI -> R.drawable.provider_inclusionai
     ModelProvider.POWERINFER -> R.drawable.provider_powerinfer
+    ModelProvider.ZAI -> R.drawable.provider_zai
+    ModelProvider.COHERE -> R.drawable.provider_cohere
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =

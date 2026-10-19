@@ -19,6 +19,9 @@ class ModelProvidersTest {
     fun recognizesTheAddedMoeCompanies() {
         assertEquals(ModelProvider.INCLUSION_AI, providerFromName("Ling-mini-2.0 bailingmoe2"))
         assertEquals(ModelProvider.POWERINFER, providerFromName("SmallThinker-4BA0.6B-Instruct"))
+        // GLM-4.7-Flash uses DeepSeek's architecture name.
+        assertEquals(ModelProvider.ZAI, providerFromName("GLM-4.7-Flash deepseek2"))
+        assertEquals(ModelProvider.COHERE, providerFromName("North-Mini-Code-1.0 cohere2moe"))
         // Words that merely contain these names stay unknown.
         assertNull(providerFromName("darling-7b"))
     }

@@ -322,4 +322,22 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         tagline = "MoE pensados para rodar no próprio aparelho",
         accent = Color(0xFFA3E635),
     )
+
+    ModelProvider.ZAI -> ProviderUiMeta(
+        selectorName = "GLM",
+        selectorSubtitle = "Z.ai",
+        sectionName = "Z.ai (GLM)",
+        badge = "GLM",
+        tagline = "Modelos da Zhipu fortes em código, agentes e raciocínio",
+        accent = Color(0xFF818CF8),
+    )
+
+    ModelProvider.COHERE -> ProviderUiMeta(
+        selectorName = "North",
+        selectorSubtitle = "Cohere",
+        sectionName = "Cohere (North)",
+        badge = "Código",
+        tagline = "Modelos da Cohere para programação e agentes",
+        accent = Color(0xFFFB923C),
+    )
 }

@@ -19,6 +19,9 @@ fun providerFromName(name: String): ModelProvider? {
     return when {
         Regex("(^|[^a-z])(ling|ring)[- ](mini|lite|flash)").containsMatchIn(text) || "inclusionai" in text -> ModelProvider.INCLUSION_AI
         "smallthinker" in text || "powerinfer" in text -> ModelProvider.POWERINFER
+        // GLM-4.7-Flash uses DeepSeek's "deepseek2" architecture, so it comes before the DeepSeek rule.
+        Regex("(^|[^a-z])glm[- ]?\\d").containsMatchIn(text) || "zhipu" in text -> ModelProvider.ZAI
+        "north mini" in text || "north-mini" in text || "cohere" in text -> ModelProvider.COHERE
         "deepseek" in text -> ModelProvider.DEEPSEEK
         // Bonsai is built on Qwen, so it must be recognized before the Qwen check.
         "bonsai" in text || "prism" in text -> ModelProvider.PRISMML

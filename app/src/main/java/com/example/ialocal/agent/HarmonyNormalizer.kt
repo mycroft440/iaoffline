@@ -8,6 +8,10 @@ package com.example.ialocal.agent
  *
  * `<|channel|>analysis<|message|>R<|end|><|start|>assistant<|channel|>final<|message|>A` → `<think>R</think>A`
  *
+ * Cohere's North models mark their reasoning the same way, with their own tokens:
+ *
+ * `<|START_THINKING|>R<|END_THINKING|><|START_TEXT|>A` → `<think>R</think>A`
+ *
  * Output without `<|…|>` tokens passes through unchanged.
  */
 class HarmonyNormalizer {
@@ -70,11 +74,16 @@ class HarmonyNormalizer {
                 // The role after <|start|> and the format after <|constrain|> are not text either.
                 "<|start|>", "<|constrain|>" -> skip = Skip.ROLE
                 "<|channel|>" -> skip = Skip.CHANNEL
-                "<|end|>", "<|return|>", "<|call|>" -> if (inAnalysis) {
+                "<|end|>", "<|return|>", "<|call|>", "<|END_THINKING|>" -> if (inAnalysis) {
                     inAnalysis = false
                     out.append(CLOSE)
                 }
-                else -> Unit // <|message|> and other control tokens carry no text.
+                "<|START_THINKING|>" -> if (!inAnalysis) {
+                    inAnalysis = true
+                    out.append(OPEN)
+                }
+                // <|message|>, Cohere's <|START_TEXT|> and other control tokens carry no text.
+                else -> Unit
             }
         }
         return out.toString()

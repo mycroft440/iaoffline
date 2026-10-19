@@ -110,7 +110,7 @@ class ModelCatalogTest {
     @Test
     fun strongestNewModelsKeepQualityFormats() {
         // Google's quantization-aware checkpoints, in the fast ARM Q4_0 format.
-        listOf("gemma4-e2b-it-qat-q4-0", "gemma4-e4b-it-qat-q4-0", "gemma4-12b-it-qat-q4-0").forEach { id ->
+        listOf("gemma4-e2b-it-qat-q4-0", "gemma4-e4b-it-qat-q4-0", "gemma4-12b-it-qat-q4-0", "gemma4-26b-a4b-it-qat-q4-0").forEach { id ->
             val model = ModelCatalog.requireById(id)
             assertTrue(model.repository.startsWith("google/"))
             assertTrue(model.quantization.startsWith("Q4_0"))
@@ -128,6 +128,9 @@ class ModelCatalogTest {
         assertTrue("qwen3.6-35b-a3b-q3-k-m" in experimental)
         assertTrue("nemotron3-nano-30b-a3b-q3-k-m" in experimental)
         assertTrue("gpt-oss-20b-q3-k-m" in experimental)
+        listOf("ling-mini-2.0-q3-k-m", "gemma4-26b-a4b-it-qat-q4-0", "glm4.7-flash-ud-q3-k-xl", "north-mini-code-1.0-ud-q3-k-m")
+            .forEach { assertTrue(it, it in experimental) }
+        assertFalse("smallthinker-4b-a0.6b-q4-k-m" in experimental)
         // Small MoE fit in RAM and dense large models cannot run from storage at a usable speed.
         assertFalse("granite4.0-h-tiny-q3-k-m" in experimental)
         assertFalse("lfm2.5-8b-a1b-q4-k-m" in experimental)

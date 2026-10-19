@@ -226,6 +226,11 @@ class DeepThinkTest {
             model("SmallThinker 4B-A0.6B", "local-catalog-smallthinker-4b-a0.6b-q4-k-m-1", "smallthinker"),
             model("Ling mini 2.0 16B-A1.4B", "local-catalog-ling-mini-2.0-q3-k-m-1", "bailingmoe2"),
         ).forEach { assertEquals(DeepThinkControlMode.NONE, DeepThinkSupport.capability(it).mode) }
+        // Gemma 4's QAT MoE keeps the family's reasoning switch.
+        assertEquals(
+            DeepThinkControlMode.HYBRID_THINKING,
+            DeepThinkSupport.capability(model("Gemma 4 26B-A4B QAT", "local-catalog-gemma4-26b-a4b-it-qat-q4-0-1", "gemma4")).mode,
+        )
     }
 
     private fun model(name: String, apiModelId: String, architecture: String? = null) = AiModelEntity(
