@@ -116,6 +116,8 @@ Quando a assinatura de release estiver configurada, o APK mais recente ficará d
 
 `https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
 
+Enquanto a assinatura não estiver configurada, o APK de teste fica no ZIP **IA-Local-debug-APK** de cada execução do GitHub Actions. O workflow envia esse ZIP comprimido (`compression-level` acima de 0). Um ZIP sem compressão gerado pelo Actions abre no computador, mas o leitor de ZIP do Android e a maioria dos gerenciadores de arquivos do celular o recusam como corrompido.
+
 Requisitos do APK atual:
 
 - Android 13 ou superior (`minSdk 33`).
