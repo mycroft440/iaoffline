@@ -1121,7 +1121,7 @@ private fun ExactAssistantMessage(
                         Icon(Icons.Default.Bolt, null, tint = PEmerald.copy(alpha = 0.80f), modifier = Modifier.size(11.dp))
                         Spacer(Modifier.width(3.dp))
                         Text(
-                            parsed.responseMs?.let { "Respondeu em ${formatExactDuration(it)}" } ?: "Resposta local",
+                            replyTimingText(parsed.responseMs, parsed.tokensPerSecond),
                             fontSize = 11.sp,
                             color = PEmerald.copy(alpha = 0.80f),
                         )
@@ -1814,6 +1814,19 @@ private fun formatExactDuration(ms: Long): String {
         seconds < 60.0 -> "${seconds.toInt()}s"
         else -> "${(seconds / 60).toInt()}m ${(seconds % 60).toInt()}s"
     }
+}
+
+/**
+ * The note under a finished reply, beside Copiar and Regenerar: how long it took and, when the AI
+ * measured it, how fast the model wrote. With the speed, "Respondeu em" goes so the note stays
+ * about as long as before and still fits on one line.
+ */
+private fun replyTimingText(responseMs: Long?, tokensPerSecond: Double?): String = when {
+    responseMs == null -> "Resposta local"
+    tokensPerSecond == null -> "Respondeu em ${formatExactDuration(responseMs)}"
+    tokensPerSecond < 10.0 ->
+        "${formatExactDuration(responseMs)} · ${String.format(Locale.getDefault(), "%.1f", tokensPerSecond)} tokens/s"
+    else -> "${formatExactDuration(responseMs)} · ${String.format(Locale.getDefault(), "%.0f", tokensPerSecond)} tokens/s"
 }
 
 private fun exactHistoryGroup(timestamp: Long): String {

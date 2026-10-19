@@ -49,7 +49,10 @@ interface ModelRuntime {
     /** Runs a short test answer. The model is freed afterwards unless [keepLoaded] and it passed. */
     suspend fun verify(model: AiModelEntity, keepLoaded: Boolean = false): VerificationResult
 
-    /** Streams the answer; [onStage] hears each step before the first word, from any thread. */
+    /**
+     * Streams the answer; [onStage] hears each step before the first word and, after the last
+     * one, the answer's speed ([GenerationStage.Kind.ANSWER_SPEED]), from any thread.
+     */
     fun streamComplete(
         model: AiModelEntity,
         systemPrompt: String,

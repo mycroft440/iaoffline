@@ -17,6 +17,7 @@ import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.models.provider
 import com.example.ialocal.runtime.GenerationStage
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -310,10 +311,16 @@ class ChatGenerationManager(
         var reasoningStartedAt: Long? = null
         var reasoningEndedAt: Long? = null
         val accumulated = StringBuilder()
+        // Tokens written and the time spent writing them, summed over the model's turns (a tool
+        // call makes more than one); reported by the AI after each turn's last word.
+        val writtenTokens = AtomicLong()
+        val writingMs = AtomicLong()
         fun finalContent(): String {
             val now = System.currentTimeMillis()
             val reasoningMs = reasoningStartedAt?.let { start -> (reasoningEndedAt ?: now) - start }
-            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs, provider)
+            val tokensPerSecond = writingMs.get().takeIf { it > 0 && writtenTokens.get() > 0 }
+                ?.let { ms -> writtenTokens.get() * 1000.0 / ms }
+            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs, provider, tokensPerSecond)
         }
         try {
             // Each saved update re-reads the conversation and redraws the chat, so the text is
@@ -337,7 +344,14 @@ class ChatGenerationManager(
                             messages = history,
                             attachments = attachments,
                             agentId = agent.id,
-                            onStage = session::report,
+                            onStage = { stage ->
+                                if (stage.kind == GenerationStage.Kind.ANSWER_SPEED) {
+                                    writtenTokens.addAndGet(stage.done.toLong())
+                                    writingMs.addAndGet(stage.total.toLong())
+                                } else {
+                                    session.report(stage)
+                                }
+                            },
                         )
                     ).collect { chunk ->
                         accumulated.append(chunk)
