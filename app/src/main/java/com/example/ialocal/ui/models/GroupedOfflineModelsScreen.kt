@@ -77,7 +77,10 @@ private data class CatalogHardwareSnapshot(
     /** The phone's RAM as sold ("12 GB"), the unit the catalog requirements are written in. */
     val advertisedRamGb: Double,
     val availableRamBytes: Long,
-)
+) {
+    /** [advertisedRamGb] in bytes, as the catalog's requirements (12_000_000_000 is "12 GB"). */
+    val deviceRamBytes: Long get() = (advertisedRamGb * 1_000_000_000L).toLong()
+}
 
 private data class CatalogCompatibility(
     val label: String,
@@ -105,11 +108,48 @@ fun GroupedOfflineModelsScreen(
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
     val nativeAds = rememberNativeAdSlots(enabled = adsEnabled)
 
-    val visibleGroups = remember(viewModel.catalog, selectedProvider) {
-        catalogGroups(viewModel.catalog, onlyProvider = selectedProvider)
+    val deviceRamBytes = hardware.deviceRamBytes
+    val visibleGroups = remember(viewModel.catalog, selectedProvider, deviceRamBytes) {
+        catalogGroups(viewModel.catalog, onlyProvider = selectedProvider, deviceRamBytes = deviceRamBytes)
     }
     val visibleCount = visibleGroups.sumOf { it.models.size }
-    val moeCount = visibleGroups.filter { it.moe }.sumOf { it.models.size }
+    val sectionCounts = visibleGroups.groupBy { it.section }.mapValues { (_, groups) -> groups.sumOf { it.models.size } }
+    val installedCatalogIds = remember(installedModels, viewModel.catalog) {
+        viewModel.catalog.filter { entry -> installedModels.any { it.apiModelId.startsWith(entry.apiIdPrefix) } }
+            .map { it.id }
+            .toSet()
+    }
+    val recommendation = remember(viewModel.catalog, hardware, installedCatalogIds) {
+        recommendedModels(
+            catalog = viewModel.catalog,
+            freeRamBytes = hardware.availableRamBytes,
+            deviceRamBytes = deviceRamBytes,
+            installedIds = installedCatalogIds,
+        )
+    }
+    // One card per model, in the recommendations and again in its company's section.
+    val catalogCard: @Composable (CatalogModel) -> Unit = { catalogModel ->
+        val installed = installedModels.firstOrNull {
+            it.apiModelId.startsWith(catalogModel.apiIdPrefix)
+        }
+        HtmlCatalogInstallCard(
+            model = catalogModel,
+            hardware = hardware,
+            download = downloads.firstOrNull { it.model.id == catalogModel.id },
+            installedModel = installed,
+            onInstall = {
+                onEnsureStorageAccess {
+                    if (viewModel.downloadCatalogModel(catalogModel.id)) onDownloadStarted()
+                }
+            },
+            onPause = viewModel::cancelDownload,
+            onResume = {
+                onEnsureStorageAccess { viewModel.resumeDownload(catalogModel.id) }
+            },
+            onRemove = { viewModel.removeDownload(catalogModel.id) },
+            onDelete = { installed?.let { viewModel.delete(it.id) } },
+        )
+    }
 
     LaunchedEffect(error) {
         error?.let {
@@ -152,6 +192,16 @@ fun GroupedOfflineModelsScreen(
                 InlineAdBanner(enabled = adsEnabled)
             }
 
+            if (recommendation.models.isNotEmpty()) {
+                item(key = "section-recommended") {
+                    RecommendedSectionHeader(
+                        freeRamBytes = hardware.availableRamBytes,
+                        fitFreeRam = recommendation.fitFreeRam,
+                    )
+                }
+                items(items = recommendation.models, key = { "recommended-${it.id}" }) { catalogCard(it) }
+            }
+
             item(key = "company-selector") {
                 CompanySelectorSection(
                     catalog = viewModel.catalog,
@@ -168,14 +218,18 @@ fun GroupedOfflineModelsScreen(
 
             visibleGroups.forEachIndexed { groupIndex, group ->
                 val provider = group.provider
-                // The MoE section comes first; the dense one gets a heading only when it follows it.
-                if (group.moe && groupIndex == 0) {
-                    item(key = "section-moe") { MoeSectionHeader(modelCount = moeCount) }
-                } else if (!group.moe && groupIndex > 0 && visibleGroups[groupIndex - 1].moe) {
-                    item(key = "section-dense") { DenseSectionHeader() }
+                // Each section opens with its heading, before its first company.
+                if (groupIndex == 0 || visibleGroups[groupIndex - 1].section != group.section) {
+                    item(key = "section-${group.section.name}") {
+                        when (group.section) {
+                            CatalogSection.MOE -> MoeSectionHeader(modelCount = sectionCounts[group.section] ?: 0)
+                            CatalogSection.DENSE -> DenseSectionHeader()
+                            CatalogSection.MOE_NEEDS_MORE_RAM -> MoeNeedsMoreRamHeader(hardware.advertisedRamGb)
+                        }
+                    }
                 }
 
-                item(key = "provider-${if (group.moe) "moe-" else ""}${provider.name}") {
+                item(key = "provider-${group.section.name}-${provider.name}") {
                     ProviderCatalogHeader(
                         provider = provider,
                         modelCount = group.models.size,
@@ -186,28 +240,7 @@ fun GroupedOfflineModelsScreen(
                 items(
                     items = group.models,
                     key = { it.id },
-                ) { catalogModel ->
-                    val installed = installedModels.firstOrNull {
-                        it.apiModelId.startsWith(catalogModel.apiIdPrefix)
-                    }
-                    HtmlCatalogInstallCard(
-                        model = catalogModel,
-                        hardware = hardware,
-                        download = downloads.firstOrNull { it.model.id == catalogModel.id },
-                        installedModel = installed,
-                        onInstall = {
-                            onEnsureStorageAccess {
-                                if (viewModel.downloadCatalogModel(catalogModel.id)) onDownloadStarted()
-                            }
-                        },
-                        onPause = viewModel::cancelDownload,
-                        onResume = {
-                            onEnsureStorageAccess { viewModel.resumeDownload(catalogModel.id) }
-                        },
-                        onRemove = { viewModel.removeDownload(catalogModel.id) },
-                        onDelete = { installed?.let { viewModel.delete(it.id) } },
-                    )
-                }
+                ) { catalogCard(it) }
 
                 if (nativeAds != null && CatalogAdSlots.showsAfterGroup(groupIndex, visibleGroups.size)) {
                     item(key = "catalog-native-ad-$groupIndex") {
@@ -380,7 +413,51 @@ private fun CompanyFilterCard(
     }
 }
 
-/** Opens the MoE section: what a mixture-of-experts model is and what it costs on a phone. */
+/** Opens the recommendations: the models that fit the RAM free right now. */
+@Composable
+private fun RecommendedSectionHeader(freeRamBytes: Long, fitFreeRam: Boolean) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CatalogEmerald.copy(alpha = 0.07f), shape)
+            .border(1.dp, CatalogEmerald.copy(alpha = 0.40f), shape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Recomendadas para o seu telefone",
+                color = CatalogText,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.weight(1f),
+            )
+            CatalogPill(
+                text = "${groupedFormatBytes(freeRamBytes)} livres",
+                foreground = CatalogEmerald,
+                background = CatalogEmerald.copy(alpha = 0.12f),
+                border = CatalogEmerald.copy(alpha = 0.4f),
+            )
+        }
+        Text(
+            text = if (fitFreeRam) {
+                "As mais capazes que cabem na RAM livre agora."
+            } else {
+                "Pouca RAM livre agora: feche apps em segundo plano. Estas são as mais leves."
+            },
+            color = if (fitFreeRam) CatalogMuted else CatalogAmber,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
+    }
+}
+
+/** Opens the MoE section with one line on what a mixture-of-experts model is. */
 @Composable
 private fun MoeSectionHeader(modelCount: Int) {
     val shape = RoundedCornerShape(16.dp)
@@ -389,28 +466,21 @@ private fun MoeSectionHeader(modelCount: Int) {
             .fillMaxWidth()
             .background(CatalogViolet.copy(alpha = 0.08f), shape)
             .border(1.dp, CatalogViolet.copy(alpha = 0.45f), shape)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Modelos MoE",
-                    color = CatalogText,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                Text(
-                    text = "Mixture of Experts · mistura de especialistas",
-                    color = CatalogViolet,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
+            Text(
+                text = "Modelos MoE que podem rodar no seu telefone",
+                color = CatalogText,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.weight(1f),
+            )
             CatalogPill(
                 text = "$modelCount ${if (modelCount == 1) "modelo" else "modelos"}",
                 foreground = CatalogViolet,
@@ -419,20 +489,31 @@ private fun MoeSectionHeader(modelCount: Int) {
             )
         }
         Text(
-            text = "Em vez de usar todos os parâmetros a cada palavra, o modelo é dividido em vários " +
-                "especialistas, e só alguns deles trabalham em cada palavra. No nome, 30B-A3B quer dizer " +
-                "30 bilhões de parâmetros no total e 3 bilhões ativos: ele escreve quase na velocidade de um " +
-                "modelo de 3B e sabe mais, porque o conhecimento fica espalhado pelos 30B.",
+            text = "Modelos MoE são divididos em especialistas e só alguns trabalham a cada palavra: " +
+                "respondem rápido mesmo sendo grandes.",
             color = Color(0xFFCBD5E1),
             fontSize = 11.sp,
-            lineHeight = 16.sp,
+            lineHeight = 15.sp,
+        )
+    }
+}
+
+/** Opens the MoE models that need more RAM than the phone has, after the dense ones. */
+@Composable
+private fun MoeNeedsMoreRamHeader(deviceRamGb: Double) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Text(
+            text = "Outros modelos MoE",
+            color = CatalogText,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.ExtraBold,
         )
         Text(
-            text = "Em troca, o arquivo é grande. Os maiores que a RAM do celular rodam lendo os pesos " +
-                "do armazenamento e aparecem como Experimental – lento.",
+            text = "Precisam de mais RAM do que os ${formatAdvertisedGb(deviceRamGb)} deste telefone.",
             color = CatalogMuted,
             fontSize = 11.sp,
             lineHeight = 16.sp,
+            modifier = Modifier.padding(top = 2.dp),
         )
     }
 }
@@ -605,6 +686,8 @@ private fun HtmlCatalogInstallCard(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     Text("•", color = CatalogMutedDark, fontSize = 11.sp)
                     Text(
@@ -866,7 +949,8 @@ private fun ModelSpecsGrid(
                 .background(CatalogBorder),
         )
         SpecCell(
-            label = "REQUISITOS MÍN.",
+            // Experimental MoE models run on less, slowly from storage; this is what they need to run well.
+            label = if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
             value = "${formatRamRequirement(model.recommendedRamBytes)} RAM",
             valueColor = requirementAccent,
             modifier = Modifier.weight(1f),
@@ -966,7 +1050,13 @@ private fun ModelDetailsDialog(
                     } ?: "Tipo: denso, todos os parâmetros usados em cada palavra",
                 )
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
-                Text("Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM")
+                Text(
+                    if (model.isExperimental) {
+                        "RAM ideal: ${formatRamRequirement(model.recommendedRamBytes)}; com menos, roda lento lendo do armazenamento"
+                    } else {
+                        "Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM"
+                    },
+                )
                 Text(
                     text = compatibility.label,
                     color = compatibility.accent,
@@ -995,8 +1085,15 @@ private fun catalogCompatibility(
     // Android reports less RAM than the phone is sold with (a 12 GB phone shows about 11 GB), so
     // the requirement is compared with the advertised size, and the free RAM with what the model
     // itself needs (its file plus working memory), not with the whole requirement.
-    val deviceRamBytes = (hardware.advertisedRamGb * 1_000_000_000L).toLong()
+    val deviceRamBytes = hardware.deviceRamBytes
     return when {
+        // Experimental MoE models run on any phone, reading their weights from storage.
+        model.isExperimental && deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
+            label = "Roda lento",
+            accent = CatalogAmber,
+            canRunComfortably = false,
+        )
+
         deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
             label = "Requer ${formatRamRequirement(model.recommendedRamBytes)} RAM",
             accent = CatalogRose,
@@ -1038,9 +1135,6 @@ private fun groupedFormatParameters(value: Double): String =
 
 /** Catalog requirements are written in the gigabytes phones are sold with: 12_000_000_000 is "12 GB". */
 private fun formatRamRequirement(bytes: Long): String = formatAdvertisedGb(bytes / 1_000_000_000.0)
-
-/** Context, compute buffers and the app itself, on top of the model file. */
-private const val CATALOG_WORKING_MEMORY_BYTES = 768L * 1024 * 1024
 
 internal fun groupedFormatBytes(bytes: Long): String {
     val gb = bytes / (1024.0 * 1024.0 * 1024.0)

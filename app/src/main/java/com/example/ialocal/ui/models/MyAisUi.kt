@@ -85,7 +85,10 @@ fun MyAisScreen(
 ) {
     val models by viewModel.models.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
-    val orderedModels = remember(models) { models.sortedBy { it.importedAt } }
+    // Same order as on the home screen: the AI in use first, then the newest.
+    val orderedModels = remember(models) {
+        models.sortedWith(compareByDescending<AiModelEntity> { it.isActive }.thenByDescending { it.importedAt })
+    }
 
     Scaffold(containerColor = MyAiBg) { padding ->
         Column(

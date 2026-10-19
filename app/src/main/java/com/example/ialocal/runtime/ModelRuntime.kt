@@ -49,6 +49,7 @@ interface ModelRuntime {
     /** Runs a short test answer. The model is freed afterwards unless [keepLoaded] and it passed. */
     suspend fun verify(model: AiModelEntity, keepLoaded: Boolean = false): VerificationResult
 
+    /** Streams the answer; [onStage] hears each step before the first word, from any thread. */
     fun streamComplete(
         model: AiModelEntity,
         systemPrompt: String,
@@ -56,6 +57,7 @@ interface ModelRuntime {
         temperature: Float = 0.3f,
         maxTokens: Int = 1024,
         turn: TurnOptions = TurnOptions(),
+        onStage: (GenerationStage) -> Unit = {},
     ): Flow<String>
 
     suspend fun complete(

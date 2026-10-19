@@ -10,6 +10,7 @@ import com.example.ialocal.models.DeepThinkStore
 import com.example.ialocal.models.DeepThinkSupport
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.models.ReasoningPlan
+import com.example.ialocal.runtime.GenerationStage
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.TurnOptions
@@ -50,11 +51,12 @@ class AiOrchestrator(
         maxTokens: Int = 1024,
         temperature: Float = 0.3f,
         systemPrompt: String = ModelRepository.DEFAULT_SYSTEM_PROMPT,
+        onStage: (GenerationStage) -> Unit = {},
     ): StreamingCompletion {
         val model = resolveModel(modelSelector)
         return StreamingCompletion(
             model,
-            runtime.streamComplete(model, systemPrompt, messages, temperature, maxTokens),
+            runtime.streamComplete(model, systemPrompt, messages, temperature, maxTokens, onStage = onStage),
         )
     }
 
@@ -75,15 +77,17 @@ class AiOrchestrator(
     /**
      * Streams a profile run as it is generated. Reasoning is re-emitted inside one canonical
      * `<think>…</think>` block (across tool rounds) so the chat can show it live; an answer that
-     * starts like a tool call is held back until it is known not to be one.
+     * starts like a tool call is held back until it is known not to be one. [onStage] hears what
+     * the run is doing while nothing is visible yet.
      */
     suspend fun streamAgent(
         agentId: String?,
         messages: List<AiChatMessage>,
         maxTokensOverride: Int? = null,
         temperatureOverride: Float? = null,
+        onStage: (GenerationStage) -> Unit = {},
     ): Pair<AiModelEntity, Flow<String>> {
-        val (_, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride) {}
+        val (_, model, chunks) = prepareAgent(agentId, messages, maxTokensOverride, temperatureOverride, onStage) {}
         return model to chunks
     }
 
@@ -140,6 +144,7 @@ class AiOrchestrator(
         messages: List<AiChatMessage>,
         maxTokensOverride: Int?,
         temperatureOverride: Float?,
+        onStage: (GenerationStage) -> Unit = {},
         onToolUsed: (String) -> Unit,
     ): PreparedAgent {
         val agent = resolveAgent(agentId)
@@ -151,27 +156,51 @@ class AiOrchestrator(
         val temperature = temperatureOverride ?: agent.temperature
         // Encyclopedia excerpts go with the user's question only; tool results get just the
         // thinking switch, which (like Qwen3's /no_think) must end the message.
-        val firstTurn = toolTurn.copy(userSuffix = guidance.turnSuffix(messages) + plan.userSuffix)
+        val wikipediaNote = guidance.turnSuffix(messages) {
+            onStage(GenerationStage(GenerationStage.Kind.CONSULTING_WIKIPEDIA))
+        }
+        val firstTurn = toolTurn.copy(userSuffix = wikipediaNote + plan.userSuffix)
+        var lastWritingReport = 0L
 
         val chunks = agentStream(
             expectReasoning = expectReasoning,
             maxRounds = MAX_TOOL_ROUNDS,
             messages = messages,
             generate = { working ->
+                val toolResult = working.size != messages.size
                 runtime.streamComplete(
                     model = model,
                     systemPrompt = systemPrompt,
                     messages = working,
                     temperature = temperature,
                     maxTokens = plan.maxTokens,
-                    turn = if (working.size == messages.size) firstTurn else toolTurn,
+                    turn = if (toolResult) toolTurn else firstTurn,
+                    onStage = { stage ->
+                        // After a tool, the "message" the model reads is the tool's result.
+                        onStage(
+                            if (toolResult && stage.kind == GenerationStage.Kind.READING_MESSAGE) {
+                                stage.copy(detail = GenerationStage.MESSAGE_TOOL_RESULT)
+                            } else {
+                                stage
+                            },
+                        )
+                    },
                 )
             },
             toolRound = { answer ->
                 tools.parseCall(answer)?.let { call ->
+                    onStage(GenerationStage(GenerationStage.Kind.USING_TOOL, call.name))
                     val output = tools.execute(call)
                     onToolUsed(call.name)
                     ToolRoundResult(call.name, output)
+                }
+            },
+            onHiddenTokens = { tokens ->
+                // A few times per second is enough for the chat, and it keeps the API stream light.
+                val now = System.currentTimeMillis()
+                if (tokens == 1 || now - lastWritingReport >= WRITING_REPORT_INTERVAL_MS) {
+                    lastWritingReport = now
+                    onStage(GenerationStage(GenerationStage.Kind.WRITING, done = tokens))
                 }
             },
         )
@@ -198,5 +227,8 @@ class AiOrchestrator(
         }
     }
 
-    companion object { private const val MAX_TOOL_ROUNDS = 4 }
+    companion object {
+        private const val MAX_TOOL_ROUNDS = 4
+        private const val WRITING_REPORT_INTERVAL_MS = 400L
+    }
 }

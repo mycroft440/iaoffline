@@ -27,10 +27,13 @@ class AnswerGuidance(
     /** Today's date, the only part of the instructions that changes; it goes last. */
     fun dateNote(): String = dateNote(clock())
 
-    /** Excerpts for the latest user message, or "" when there is nothing to add. */
-    suspend fun turnSuffix(messages: List<AiChatMessage>): String {
+    /**
+     * Excerpts for the latest user message, or "" when there is nothing to add. [onLookup] runs
+     * when the encyclopedia is actually searched.
+     */
+    suspend fun turnSuffix(messages: List<AiChatMessage>, onLookup: () -> Unit = {}): String {
         val question = messages.lastOrNull { it.role.equals("user", ignoreCase = true) }?.content ?: return ""
-        return wikipedia?.contextFor(question).orEmpty()
+        return wikipedia?.contextFor(question, onLookup).orEmpty()
     }
 
     companion object {

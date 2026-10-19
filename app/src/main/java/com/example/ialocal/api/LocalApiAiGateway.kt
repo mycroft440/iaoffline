@@ -4,6 +4,7 @@ import com.example.ialocal.ai.AiChatRequest
 import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.files.AttachmentContextBuilder
+import com.example.ialocal.runtime.GenerationStage
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,7 @@ class LocalApiAiGateway(
         val payload = JSONObject().apply {
             request.agentId?.let { put("agent_id", it) }
             put("stream", true)
+            if (request.onStage != null) put(LocalApiServer.STAGES_FIELD, true)
             put("messages", JSONArray().apply {
                 request.messages.forEachIndexed { index, message ->
                     val content = if (index == lastUserIndex && attachmentContext.isNotBlank()) {
@@ -80,6 +82,11 @@ class LocalApiAiGateway(
                     val json = JSONObject(data)
                     json.optJSONObject("error")?.let { error ->
                         throw IllegalStateException(error.optString("message", "Falha durante streaming local."))
+                    }
+                    val stage = json.optJSONObject("ia_stage")
+                    if (stage != null) {
+                        GenerationStage.fromJson(stage)?.let { request.onStage?.invoke(it) }
+                        continue
                     }
                     val content = json.optJSONArray("choices")
                         ?.optJSONObject(0)?.optJSONObject("delta")?.optString("content").orEmpty()
