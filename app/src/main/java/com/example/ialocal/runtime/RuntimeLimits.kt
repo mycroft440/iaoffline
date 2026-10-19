@@ -25,7 +25,7 @@ object RuntimeLimits {
     const val KV_BUDGET_RAM_FRACTION = 0.40
     const val MIN_KV_BUDGET_BYTES = 256L * 1024 * 1024
     const val MAX_KV_BUDGET_BYTES = 2L * 1024 * 1024 * 1024
-    /** Experimental MoE models already fill the RAM with weights read from storage. */
+    /** MoE models read from storage need the rest of the RAM to keep the experts they use. */
     const val EXPERIMENTAL_KV_BUDGET_BYTES = 384L * 1024 * 1024
 
     /**
@@ -78,40 +78,57 @@ object RuntimeLimits {
         val fits: Boolean,
         /** What the smallest configuration needs. */
         val minimumBytes: Long,
+        /**
+         * A mixture of experts larger than the budget: its experts stay in the file and are read
+         * as the router picks them. [lowMemory] then only concerns the rest of the weights.
+         */
+        val streamsExperts: Boolean = false,
     )
 
     /**
      * Fits the weights in RAM ([residentWeightsBytes], without what is read from the file on
      * demand), the context and the working memory into [aiBudgetBytes]. A dense model reads all
      * its weights for every token, so they must fit even when file-backed, or the phone spends
-     * its time reading them from storage and stops responding. Experimental MoE models read only
-     * a few experts per token and are meant to run from storage.
+     * its time reading them from storage and stops responding. A mixture of experts
+     * ([expertBytes] of its weights are experts) reads only a few experts per token, so when it
+     * does not fit its experts are read from storage and only the rest must fit.
      */
     fun planMemory(
         residentWeightsBytes: Long,
         memory: MemorySnapshot,
-        experimental: Boolean,
+        expertBytes: Long,
         safeLevel: Int,
     ): MemoryPlan {
         val budget = aiBudgetBytes(memory)
         val minimum = residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+        if (expertBytes > 0 && minimum > budget) {
+            // Attention, shared experts and output: read for every token, so they must fit.
+            val fixedBytes = (residentWeightsBytes - expertBytes).coerceAtLeast(0L)
+            val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+            return MemoryPlan(
+                budgetBytes = budget,
+                lowMemory = safeLevel > 0 || 2 * fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES > budget,
+                kvBudgetBytes = safeKvBudgetBytes(
+                    kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true),
+                    safeLevel,
+                ),
+                fits = fixedMinimum <= budget,
+                minimumBytes = fixedMinimum,
+                streamsExperts = true,
+            )
+        }
         // While the weights are repacked, the copy and the mapped file are in RAM together.
         val repackFits = 2 * residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES <= budget
-        val lowMemory = experimental || safeLevel > 0 || !repackFits ||
-            needsLowMemoryMode(residentWeightsBytes, memory.totalBytes)
-        val kvBudget = if (experimental) {
-            kvCacheBudgetBytes(residentWeightsBytes, memory.totalBytes, experimental = true)
-        } else {
-            minOf(
-                kvCacheBudgetBytes(residentWeightsBytes, memory.totalBytes, experimental = false),
-                budget - residentWeightsBytes - WORKING_MEMORY_BYTES,
-            ).coerceAtLeast(MIN_KV_BUDGET_BYTES)
-        }
+        val lowMemory = safeLevel > 0 || !repackFits || needsLowMemoryMode(residentWeightsBytes, memory.totalBytes)
+        val kvBudget = minOf(
+            kvCacheBudgetBytes(residentWeightsBytes, memory.totalBytes, experimental = false),
+            budget - residentWeightsBytes - WORKING_MEMORY_BYTES,
+        ).coerceAtLeast(MIN_KV_BUDGET_BYTES)
         return MemoryPlan(
             budgetBytes = budget,
             lowMemory = lowMemory,
             kvBudgetBytes = safeKvBudgetBytes(kvBudget, safeLevel),
-            fits = experimental || minimum <= budget,
+            fits = minimum <= budget,
             minimumBytes = minimum,
         )
     }

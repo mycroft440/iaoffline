@@ -80,6 +80,55 @@ class GgufInspectorTest {
         assertEquals(0L, inspector.inspect(ByteArrayInputStream(bytes), totalBytes = 4096L).onDemandBytes)
     }
 
+    @Test
+    fun sizesTheExpertsOfAMixtureOfExperts() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(5)
+            u64(1)
+            kvString("general.architecture", "gemma4")
+            tensor("token_embd.weight", offset = 0)
+            tensor("blk.0.attn_q.weight", offset = 1024)
+            tensor("blk.0.ffn_gate_up_exps.weight", offset = 2048)
+            tensor("blk.0.ffn_down_exps.weight", offset = 6144)
+            tensor("blk.0.ffn_gate_inp.weight", offset = 9216)
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 9472L)
+
+        assertEquals(7168L, metadata.expertBytes)
+        assertEquals(0L, metadata.onDemandBytes)
+    }
+
+    @Test
+    fun denseModelsHaveNoExperts() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(2)
+            u64(0)
+            tensor("blk.0.ffn_down.weight", offset = 0)
+            tensor("blk.0.ffn_up.weight", offset = 1024)
+        }.toByteArray()
+        assertEquals(0L, inspector.inspect(ByteArrayInputStream(bytes), totalBytes = 4096L).expertBytes)
+    }
+
+    /** Runs on the real Gemma 4 26B-A4B GGUF of the catalog when IAOFFLINE_GEMMA4_MOE_FILE points to it. */
+    @Test
+    fun realGemma4MixtureOfExpertsKeepsMostOfItsWeightsInExperts() {
+        val path = System.getenv("IAOFFLINE_GEMMA4_MOE_FILE")
+        Assume.assumeTrue("IAOFFLINE_GEMMA4_MOE_FILE not set", path != null)
+        val file = File(requireNotNull(path))
+
+        val metadata = inspector.inspect(file)
+
+        println("${file.name}: ${metadata.expertBytes} of ${file.length()} bytes in experts")
+        // UD-Q3_K_M: 10.31 GB of experts and 2.40 GB read for every token.
+        assertEquals(10.31, metadata.expertBytes / 1e9, 0.01)
+    }
+
     /** Runs on a real Gemma 4 E2B/E4B GGUF when IAOFFLINE_GEMMA4_FILE points to one. */
     @Test
     fun realGemma4FileKeepsItsPerLayerEmbeddingsOnStorage() {

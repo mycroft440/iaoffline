@@ -85,23 +85,66 @@ class RuntimeLimitsTest {
     @Test
     fun aDenseModelThatCannotFitIsRefusedInsteadOfFreezingThePhone() {
         // Gemma 4 12B QAT: 7 GB of weights, with 7.5 GB for the AI.
-        val plan = RuntimeLimits.planMemory(7 * gb, memory(10.0, 8.0), experimental = false, safeLevel = 0)
+        val plan = RuntimeLimits.planMemory(7 * gb, memory(10.0, 8.0), expertBytes = 0, safeLevel = 0)
         assertFalse(plan.fits)
+        assertFalse(plan.streamsExperts)
         assertTrue(plan.minimumBytes > plan.budgetBytes)
-        // Experimental MoE models read a few experts per token and are meant to run from storage.
-        assertTrue(RuntimeLimits.planMemory(14 * gb, memory(10.0, 8.0), experimental = true, safeLevel = 0).fits)
+    }
+
+    @Test
+    fun aMixtureOfExpertsLargerThanTheRamReadsItsExpertsFromStorage() {
+        // Gemma 4 26B-A4B UD-Q3_K_M on a 12 GB S22 Ultra (about 11 GB reported): 12.71 GB of
+        // weights, 10.31 GB of them experts; the AI gets 6.6 GB.
+        val plan = RuntimeLimits.planMemory(12_710_000_000L, memory(11.0, 5.0), expertBytes = 10_310_000_000L, safeLevel = 0)
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        // The other 2.4 GB fit twice (while repacked), so they are kept in RAM.
+        assertFalse(plan.lowMemory)
+        assertEquals(RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES, plan.kvBudgetBytes)
+        assertEquals(2_400_000_000L + RuntimeLimits.MIN_KV_BUDGET_BYTES + RuntimeLimits.WORKING_MEMORY_BYTES, plan.minimumBytes)
+    }
+
+    @Test
+    fun aMixtureOfExpertsKeepsItsSharedWeightsFileBackedWhenTwoCopiesDoNotFit() {
+        // 8 GB phone (about 7.3 GB reported): 4.2 GB for the AI, less than two copies of 2.4 GB.
+        val plan = RuntimeLimits.planMemory(12_710_000_000L, memory(7.3, 3.0), expertBytes = 10_310_000_000L, safeLevel = 0)
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        assertTrue(plan.lowMemory)
+    }
+
+    @Test
+    fun aMixtureOfExpertsWhoseSharedWeightsDoNotFitIsRefused() {
+        val plan = RuntimeLimits.planMemory(60 * gb, memory(7.3, 3.0), expertBytes = 50 * gb, safeLevel = 0)
+        assertTrue(plan.streamsExperts)
+        assertFalse(plan.fits)
+    }
+
+    @Test
+    fun aMixtureOfExpertsThatFitsLoadsLikeAnyOtherModel() {
+        // Granite 4.0 H Tiny (7B-A1B, about 4 GB) on a 12 GB phone.
+        val plan = RuntimeLimits.planMemory(4 * gb, memory(11.0, 5.0), expertBytes = 3 * gb, safeLevel = 0)
+        assertFalse(plan.streamsExperts)
+        assertTrue(plan.fits)
+    }
+
+    @Test
+    fun aMixtureOfExpertsThatCrashedKeepsItsSharedWeightsFileBacked() {
+        val plan = RuntimeLimits.planMemory(12_710_000_000L, memory(11.0, 5.0), expertBytes = 10_310_000_000L, safeLevel = 1)
+        assertTrue(plan.lowMemory)
+        assertEquals(RuntimeLimits.MIN_KV_BUDGET_BYTES, plan.kvBudgetBytes)
     }
 
     @Test
     fun repackingNeedsRoomForTwoCopiesOfTheWeights() {
         // 6 GB phone, 1.5 GB of weights: the 30% rule alone would repack them, but the copy and
         // the mapped file together do not fit in the 3.4 GB the AI gets.
-        val tight = RuntimeLimits.planMemory(3 * gb / 2, memory(6.0, 3.0), experimental = false, safeLevel = 0)
+        val tight = RuntimeLimits.planMemory(3 * gb / 2, memory(6.0, 3.0), expertBytes = 0, safeLevel = 0)
         assertTrue(tight.fits)
         assertTrue(tight.lowMemory)
         assertEquals(0.9, tight.kvBudgetBytes.toDouble() / gb, 0.001)
 
-        val roomy = RuntimeLimits.planMemory(2 * gb, memory(16.0, 12.0), experimental = false, safeLevel = 0)
+        val roomy = RuntimeLimits.planMemory(2 * gb, memory(16.0, 12.0), expertBytes = 0, safeLevel = 0)
         assertFalse(roomy.lowMemory)
         assertEquals(RuntimeLimits.MAX_KV_BUDGET_BYTES, roomy.kvBudgetBytes)
     }
@@ -109,13 +152,13 @@ class RuntimeLimitsTest {
     @Test
     fun contextNeverTakesMoreThanTheBudgetLeaves() {
         // 3 GB phone with almost nothing free: 1 GB for the AI, 0.3 GB of weights.
-        val plan = RuntimeLimits.planMemory(3 * gb / 10, memory(3.0, 0.5), experimental = false, safeLevel = 0)
+        val plan = RuntimeLimits.planMemory(3 * gb / 10, memory(3.0, 0.5), expertBytes = 0, safeLevel = 0)
         assertEquals(RuntimeLimits.MIN_KV_BUDGET_BYTES, plan.kvBudgetBytes)
     }
 
     @Test
     fun aModelThatCrashedLoadsLeaner() {
-        val plan = RuntimeLimits.planMemory(2 * gb, memory(16.0, 12.0), experimental = false, safeLevel = 1)
+        val plan = RuntimeLimits.planMemory(2 * gb, memory(16.0, 12.0), expertBytes = 0, safeLevel = 1)
         assertTrue(plan.lowMemory)
         assertEquals(RuntimeLimits.MAX_KV_BUDGET_BYTES / 2, plan.kvBudgetBytes)
     }

@@ -179,6 +179,8 @@ class LlamaCppRuntime(
 
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
             logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$outputTokens; streaming=true")
+            runCatching { Os.unsetenv(PERF_ENV) }
+            val ioBefore = ProcessIo.read()
             val reply = StringBuilder()
             // gpt-oss answers in the harmony format; everything else passes through unchanged.
             val harmony = HarmonyNormalizer()
@@ -209,6 +211,9 @@ class LlamaCppRuntime(
             }
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Resposta concluída (${reply.length} caracteres)")
+            AnswerSpeed.parse(runCatching { Os.getenv(PERF_ENV) }.getOrNull())?.let { speed ->
+                logger?.info("SPEED", speed.describe(ioBefore, ProcessIo.read()))
+            }
         } catch (cancel: CancellationException) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Geração cancelada pelo usuário")
@@ -343,17 +348,17 @@ class LlamaCppRuntime(
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         val catalogEntry = ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
-        val experimental = catalogEntry?.isExperimental == true
         val fileBytes = File(model.filePath).length()
+        val layout = runCatching { GgufInspector().inspect(File(model.filePath)) }.getOrNull()
         // Per-layer embeddings stay in the file (the native loader reads them on demand), so only
         // the rest of the weights takes RAM: about half of a Gemma 4 E2B/E4B file.
-        val onDemandBytes = runCatching { GgufInspector().inspect(File(model.filePath)).onDemandBytes }.getOrDefault(0L)
+        val onDemandBytes = layout?.onDemandBytes ?: 0L
         val modelBytes = (fileBytes - onDemandBytes).coerceAtLeast(0L)
         // Read after the previous model was freed, so its memory counts as free.
         val memory = DeviceMemory.read(appContext)
         // A model that already made the app close for lack of memory loads with less of it.
         val safeLevel = safeLevelOf(model.id)
-        val plan = RuntimeLimits.planMemory(modelBytes, memory, experimental, safeLevel)
+        val plan = RuntimeLimits.planMemory(modelBytes, memory, layout?.expertBytes ?: 0L, safeLevel)
         if (!plan.fits) {
             val message = "${model.name} precisa de cerca de ${gigabytes(plan.minimumBytes)} de RAM, mas a IA pode usar " +
                 "${gigabytes(plan.budgetBytes)} agora (a RAM livre menos 0,5 GB para o Android e o app). Carregar " +
@@ -365,10 +370,12 @@ class LlamaCppRuntime(
         val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
-        // comfortably in RAM, the memory that sizes the (Q4_0) context and the presence penalty
-        // the model card recommends (the other sampling settings come from the GGUF itself).
+        // comfortably in RAM, experts read from storage for a mixture of experts that does not fit
+        // at all, the memory that sizes the (Q4_0) context and the presence penalty the model card
+        // recommends (the other sampling settings come from the GGUF itself).
         runCatching {
             Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true)
+            Os.setenv(MOE_STREAM_ENV, if (plan.streamsExperts) "1" else "0", true)
             Os.setenv(CONTEXT_TOKENS_ENV, RuntimeLimits.MAX_CONTEXT_TOKENS.toString(), true)
             Os.setenv(KV_BUDGET_ENV, kvBudgetMb.toString(), true)
             Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
@@ -380,6 +387,12 @@ class LlamaCppRuntime(
                 (if (onDemandBytes > 0) " (+${onDemandBytes / MB} MB lidos do arquivo sob demanda)" else "") +
                 "; RAM livre ${memory.availableBytes / MB} MB de ${memory.totalBytes / MB} MB; " +
                 "limite da IA ${plan.budgetBytes / MB} MB; memória para contexto: $kvBudgetMb MB" +
+                (if (plan.streamsExperts) {
+                    "; especialistas MoE (${(layout?.expertBytes ?: 0L) / MB} MB) lidos do armazenamento conforme o uso" +
+                        if (lowMemory) "" else ", o restante dos pesos mantido na RAM"
+                } else {
+                    ""
+                }) +
                 (if (lowMemory) " em modo de pouca memória" else "") +
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
@@ -483,6 +496,8 @@ class LlamaCppRuntime(
         private const val CONTEXT_TOKENS_ENV = "IAOFFLINE_CONTEXT_TOKENS"
         private const val KV_BUDGET_ENV = "IAOFFLINE_KV_BUDGET_MB"
         private const val PRESENCE_PENALTY_ENV = "IAOFFLINE_PRESENCE_PENALTY"
+        private const val MOE_STREAM_ENV = "IAOFFLINE_MOE_STREAM"
+        private const val PERF_ENV = "IAOFFLINE_PERF"
         private const val ASSISTANT_PREFIX_ENV = "IAOFFLINE_ASSISTANT_PREFIX"
         private const val THINKING_ENV = "IAOFFLINE_ENABLE_THINKING"
         private const val SESSION_CLEAN_ENV = "IAOFFLINE_SESSION_CLEAN"

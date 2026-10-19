@@ -10,6 +10,8 @@ AAR_DEST="${ROOT_DIR}/app/libs/llama-android.aar"
 ENGINE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
 INTERFACE_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
 AI_CHAT_FILE="${LLAMA_DIR}/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
+MODEL_FILE="${LLAMA_DIR}/src/llama-model.cpp"
+MODEL_LOADER_FILE="${LLAMA_DIR}/src/llama-model-loader.cpp"
 
 mkdir -p "${ROOT_DIR}/third_party" "${ROOT_DIR}/app/libs"
 
@@ -761,8 +763,304 @@ replace_once(
     "    }\n",
 )
 
+# 14. Speed of each answer. The time and tokens of reading the user's message and of the answer
+#     are published as IAOFFLINE_PERF ("prompt_tokens prompt_ms answer_tokens answer_ms") when the
+#     answer ends, for the app's log.
+replace_once(
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n",
+    "// Speed of the answer in progress, published as IAOFFLINE_PERF when it ends.\n"
+    "static int64_t g_perf_prompt_us = 0;\n"
+    "static int g_perf_prompt_tokens = 0;\n"
+    "static int64_t g_perf_answer_us = 0;\n"
+    "static int g_perf_answer_tokens = 0;\n\n"
+    "static void iaoffline_publish_perf() {\n"
+    "    char value[96];\n"
+    "    snprintf(value, sizeof(value), \"%d %lld %d %lld\", g_perf_prompt_tokens, (long long) (g_perf_prompt_us / 1000),\n"
+    "             g_perf_answer_tokens, (long long) (g_perf_answer_us / 1000));\n"
+    "    setenv(\"IAOFFLINE_PERF\", value, 1);\n"
+    "    LOGi(\"%s: prompt %d tokens in %lld ms, answer %d tokens in %lld ms\", __func__, g_perf_prompt_tokens,\n"
+    "         (long long) (g_perf_prompt_us / 1000), g_perf_answer_tokens, (long long) (g_perf_answer_us / 1000));\n"
+    "}\n\n"
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n",
+)
+replace_once(
+    "    // Decode user tokens in batches\n"
+    "    if (decode_tokens_in_batches(g_context, g_batch, user_tokens, current_position, true)) {\n"
+    "        LOGe(\"%s: llama_decode() failed!\", __func__);\n"
+    "        return 2;\n"
+    "    }\n",
+    "    // Decode user tokens in batches\n"
+    "    const int64_t prompt_start_us = ggml_time_us();\n"
+    "    if (decode_tokens_in_batches(g_context, g_batch, user_tokens, current_position, true)) {\n"
+    "        LOGe(\"%s: llama_decode() failed!\", __func__);\n"
+    "        return 2;\n"
+    "    }\n"
+    "    g_perf_prompt_us = ggml_time_us() - prompt_start_us;\n"
+    "    g_perf_prompt_tokens = (int) user_tokens.size();\n"
+    "    g_perf_answer_us = 0;\n"
+    "    g_perf_answer_tokens = 0;\n",
+)
+replace_once(
+    "        LOGw(\"%s: STOP: hitting stop position: %d\", __func__, stop_generation_position);\n"
+    "        return nullptr;\n",
+    "        LOGw(\"%s: STOP: hitting stop position: %d\", __func__, stop_generation_position);\n"
+    "        iaoffline_publish_perf();\n"
+    "        return nullptr;\n",
+)
+replace_once(
+    "    // Sample next token\n"
+    "    const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);\n",
+    "    // Sample next token\n"
+    "    const int64_t token_start_us = ggml_time_us();\n"
+    "    const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);\n",
+)
+replace_once(
+    "    // Update position\n"
+    "    current_position++;\n",
+    "    g_perf_answer_us += ggml_time_us() - token_start_us;\n"
+    "    g_perf_answer_tokens++;\n\n"
+    "    // Update position\n"
+    "    current_position++;\n",
+)
+replace_once(
+    "        setenv(\"IAOFFLINE_SESSION_TOKENS\", std::to_string(current_position).c_str(), 1);\n"
+    "        return nullptr;\n",
+    "        setenv(\"IAOFFLINE_SESSION_TOKENS\", std::to_string(current_position).c_str(), 1);\n"
+    "        iaoffline_publish_perf();\n"
+    "        return nullptr;\n",
+)
+
+# 15. Mixture-of-experts models larger than the RAM the app may use (IAOFFLINE_MOE_STREAM=1, set
+#     by the app from the GGUF): each token uses a few experts per layer (8 of 128 in Gemma 4
+#     26B-A4B, about 21 MB per layer), which stay in the file and are read as the router picks
+#     them. Unpatched, the CPU threads read them through page faults, a small read at a time while
+#     the matrix product waits: about a word per second on a 12 GB Galaxy S22 Ultra.
+#     a) As soon as a layer's router has picked its experts, their slices are requested from the
+#        kernel all at once (MADV_WILLNEED) from a thread of their own, so the storage reads them
+#        in parallel while the CPU starts on them. An eval callback watches the router output
+#        (ffn_moe_topk-<layer>), which splits the graph there: a few pauses per token.
+#     b) The expert tensors are kept mapped from the file; the rest (attention, shared expert,
+#        output; about 2.4 GB in Gemma 4 26B-A4B, read for every token) may then be repacked into
+#        RAM, where it is faster and is never dropped and read again, unless IAOFFLINE_LOW_MEMORY=1.
+#     c) Loading without mmap would copy the whole model into RAM, so that fallback is skipped.
+replace_once(
+    "#include <cstdlib>\n",
+    "#include <cstdlib>\n"
+    "#include <cstring>\n"
+    "#include <algorithm>\n"
+    "#include <condition_variable>\n"
+    "#include <deque>\n"
+    "#include <thread>\n"
+    "#include <vector>\n"
+    "#include <sys/mman.h>\n",
+)
+replace_once(
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n",
+    "// Set by the app (IAOFFLINE_MOE_STREAM=1) for a mixture-of-experts model larger than the RAM it\n"
+    "// may use: its experts stay in the file and are read as the router picks them.\n"
+    "static bool iaoffline_moe_stream_mode() {\n"
+    "    const char *value = getenv(\"IAOFFLINE_MOE_STREAM\");\n"
+    "    return value != nullptr && value[0] == '1';\n"
+    "}\n\n"
+    "struct iaoffline_prefetch_range {\n"
+    "    const char *addr;\n"
+    "    size_t size;\n"
+    "};\n\n"
+    "constexpr size_t                          IAOFFLINE_MAX_PREFETCH_QUEUE = 16384;\n\n"
+    "struct iaoffline_prefetch_state {\n"
+    "    std::mutex mutex;\n"
+    "    std::condition_variable cv;\n"
+    "    std::deque<iaoffline_prefetch_range> queue;\n"
+    "    bool started = false;\n"
+    "};\n\n"
+    "// Never destroyed: its thread still waits on it while the process exits.\n"
+    "static iaoffline_prefetch_state &iaoffline_prefetch() {\n"
+    "    static auto *state = new iaoffline_prefetch_state();\n"
+    "    return *state;\n"
+    "}\n\n"
+    "// Mapped expert weights of each layer, in the order the graph uses them (gate/up, then down),\n"
+    "// learned from the graph as it runs. Only the inference thread touches it.\n"
+    "static std::vector<std::vector<const ggml_tensor *>> g_moe_layer_weights;\n\n"
+    "// Requests the queued slices from the kernel. MADV_WILLNEED starts the reads and returns, so the\n"
+    "// storage gets many requests at once; a slice already in memory costs nothing.\n"
+    "static void iaoffline_prefetch_worker() {\n"
+    "    const uintptr_t page_mask = (uintptr_t) sysconf(_SC_PAGESIZE) - 1;\n"
+    "    auto &prefetch = iaoffline_prefetch();\n"
+    "    while (true) {\n"
+    "        iaoffline_prefetch_range range{};\n"
+    "        {\n"
+    "            std::unique_lock<std::mutex> lock(prefetch.mutex);\n"
+    "            prefetch.cv.wait(lock, [&prefetch] { return !prefetch.queue.empty(); });\n"
+    "            range = prefetch.queue.front();\n"
+    "            prefetch.queue.pop_front();\n"
+    "        }\n"
+    "        const uintptr_t begin = (uintptr_t) range.addr & ~page_mask;\n"
+    "        const uintptr_t end = (uintptr_t) range.addr + range.size;\n"
+    "        madvise((void *) begin, end - begin, MADV_WILLNEED);\n"
+    "    }\n"
+    "}\n\n"
+    "// Forgets the weights of the model being unloaded; queued requests for it are dropped too.\n"
+    "static void iaoffline_reset_prefetch() {\n"
+    "    auto &prefetch = iaoffline_prefetch();\n"
+    "    std::lock_guard<std::mutex> lock(prefetch.mutex);\n"
+    "    prefetch.queue.clear();\n"
+    "    g_moe_layer_weights.clear();\n"
+    "}\n\n"
+    "// \"blk.12.ffn_down_exps.weight\" -> 12\n"
+    "static int iaoffline_layer_of(const char *name) {\n"
+    "    int layer = -1;\n"
+    "    return sscanf(name, \"blk.%d.\", &layer) == 1 ? layer : -1;\n"
+    "}\n\n"
+    "constexpr char                            IAOFFLINE_TOPK_PREFIX[] = \"ffn_moe_topk-\";\n\n"
+    "static bool iaoffline_moe_eval_callback(struct ggml_tensor *t, bool ask, void * /*user_data*/) {\n"
+    "    if (ask) {\n"
+    "        // Learns which mapped expert tensors each layer multiplies by.\n"
+    "        if (t->op == GGML_OP_MUL_MAT_ID) {\n"
+    "            const ggml_tensor *weights = t->src[0];\n"
+    "            const int layer = iaoffline_layer_of(weights->name);\n"
+    "            if (layer >= 0 && weights->ne[2] > 1 && weights->buffer != nullptr &&\n"
+    "                strcmp(ggml_backend_buffer_name(weights->buffer), \"CPU_Mapped\") == 0) {\n"
+    "                if ((int) g_moe_layer_weights.size() <= layer) g_moe_layer_weights.resize(layer + 1);\n"
+    "                auto &known = g_moe_layer_weights[layer];\n"
+    "                if (std::find(known.begin(), known.end(), weights) == known.end()) known.push_back(weights);\n"
+    "            }\n"
+    "            return false;\n"
+    "        }\n"
+    "        // Stops the graph right after a router has picked its experts.\n"
+    "        return strncmp(t->name, IAOFFLINE_TOPK_PREFIX, sizeof(IAOFFLINE_TOPK_PREFIX) - 1) == 0;\n"
+    "    }\n"
+    "    // The picked experts: ids [n_expert_used, n_tokens], possibly a view of the sorted ids.\n"
+    "    const int layer = atoi(t->name + sizeof(IAOFFLINE_TOPK_PREFIX) - 1);\n"
+    "    if (t->type != GGML_TYPE_I32 || t->data == nullptr || layer < 0 || layer >= (int) g_moe_layer_weights.size() ||\n"
+    "        g_moe_layer_weights[layer].empty()) {\n"
+    "        return true;\n"
+    "    }\n"
+    "    const auto &weights = g_moe_layer_weights[layer];\n"
+    "    std::vector<bool> used(weights[0]->ne[2], false);\n"
+    "    for (int64_t token = 0; token < t->ne[1]; token++) {\n"
+    "        for (int64_t k = 0; k < t->ne[0]; k++) {\n"
+    "            const int32_t id = *(const int32_t *) ((const char *) t->data + token * t->nb[1] + k * t->nb[0]);\n"
+    "            if (id >= 0 && id < (int64_t) used.size()) used[id] = true;\n"
+    "        }\n"
+    "    }\n"
+    "    auto &prefetch = iaoffline_prefetch();\n"
+    "    {\n"
+    "        std::lock_guard<std::mutex> lock(prefetch.mutex);\n"
+    "        for (const ggml_tensor *w : weights) {\n"
+    "            for (int64_t expert = 0; expert < std::min<int64_t>(w->ne[2], (int64_t) used.size()); expert++) {\n"
+    "                if (!used[expert]) continue;\n"
+    "                if (prefetch.queue.size() >= IAOFFLINE_MAX_PREFETCH_QUEUE) prefetch.queue.pop_front();\n"
+    "                prefetch.queue.push_back({(const char *) w->data + expert * w->nb[2], (size_t) w->nb[2]});\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    prefetch.cv.notify_one();\n"
+    "    return true;\n"
+    "}\n\n"
+    "static void iaoffline_start_prefetch() {\n"
+    "    auto &prefetch = iaoffline_prefetch();\n"
+    "    std::lock_guard<std::mutex> lock(prefetch.mutex);\n"
+    "    if (prefetch.started) return;\n"
+    "    std::thread(iaoffline_prefetch_worker).detach();\n"
+    "    prefetch.started = true;\n"
+    "}\n\n"
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n",
+)
+replace_once(
+    "    if (iaoffline_low_memory_mode()) {\n"
+    "        // Repacked CPU buffers copy every weight into anonymous memory; without them the\n",
+    "    if (iaoffline_moe_stream_mode()) {\n"
+    "        // The experts stay mapped from the file, where they are read as the router picks them;\n"
+    "        // repacking them would copy the whole model into RAM.\n"
+    "        static const llama_model_tensor_buft_override expert_overrides[] = {\n"
+    "            {\"\\\\.ffn_(up|down|gate|gate_up)_(ch|)exps\", ggml_backend_cpu_buffer_type()},\n"
+    "            {nullptr, nullptr},\n"
+    "        };\n"
+    "        model_params.tensor_buft_overrides = expert_overrides;\n"
+    "        LOGi(\"%s: mixture of experts read from storage: experts mapped from the file\", __func__);\n"
+    "    }\n"
+    "    if (iaoffline_low_memory_mode()) {\n"
+    "        // Repacked CPU buffers copy every weight into anonymous memory; without them the\n",
+)
+replace_once(
+    "    if (!model) {\n"
+    "        append_native_error(\"[IA Offline] mmap conservador falhou; tentando I/O regular em CPU.\");\n",
+    "    if (!model && !iaoffline_moe_stream_mode()) {\n"
+    "        append_native_error(\"[IA Offline] mmap conservador falhou; tentando I/O regular em CPU.\");\n",
+)
+replace_once(
+    "    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;\n",
+    "    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;\n"
+    "    if (iaoffline_moe_stream_mode()) {\n"
+    "        ctx_params.cb_eval = iaoffline_moe_eval_callback;\n"
+    "        ctx_params.cb_eval_user_data = nullptr;\n"
+    "    }\n",
+)
+replace_once(
+    "    int n_ctx = iaoffline_context_for_memory(g_model);\n",
+    "    iaoffline_reset_prefetch();\n"
+    "    if (iaoffline_moe_stream_mode()) iaoffline_start_prefetch();\n"
+    "    int n_ctx = iaoffline_context_for_memory(g_model);\n",
+)
+replace_once(
+    "    // Free up resources\n"
+    "    common_sampler_free(g_sampler);\n",
+    "    // Free up resources\n"
+    "    iaoffline_reset_prefetch();\n"
+    "    common_sampler_free(g_sampler);\n",
+)
+
 path.write_text(text)
 print("Applied IA Offline Android model-load compatibility patch")
+PY
+
+# 16. Loading a mixture-of-experts model larger than the RAM (IAOFFLINE_MOE_STREAM=1):
+#     a) llama.cpp maps the model file and asks the kernel to read all of it right away
+#        (MAP_POPULATE and MADV_WILLNEED). That reads gigabytes the page cache cannot keep, slows
+#        the load and leaves the cache holding the end of the file; the experts are read as the
+#        router picks them instead.
+#     b) A tensor overridden to the CPU buffer may still be repacked (IQ4_NL experts are, on ARM
+#        and x86), which copies it into RAM. The experts must stay mapped from the file.
+python3 - "${MODEL_FILE}" "${MODEL_LOADER_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = None
+text = ""
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp model loader source shape in {path.name}: expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+path = Path(sys.argv[1])
+text = path.read_text()
+replace_once(
+    "    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);\n",
+    "    // IA Offline: a mixture of experts read from storage does not fit the RAM; reading all of its\n"
+    "    // file up front only fills the page cache with the end of it.\n"
+    "    const char * iaoffline_moe_stream = getenv(\"IAOFFLINE_MOE_STREAM\");\n"
+    "    const bool iaoffline_prefetch = iaoffline_moe_stream == nullptr || iaoffline_moe_stream[0] != '1';\n"
+    "    ml.init_mappings(iaoffline_prefetch, use_mlock ? &pimpl->mlock_mmaps : nullptr);\n",
+)
+path.write_text(text)
+
+path = Path(sys.argv[2])
+text = path.read_text()
+replace_once(
+    "                    if (overrides->buft == ggml_backend_cpu_buffer_type()) {\n"
+    "                        // when overriding to a CPU buffer, consider the extra buffer types\n",
+    "                    // IA Offline: the experts of a mixture of experts read from storage stay mapped\n"
+    "                    // from the file; repacking them would copy them into RAM.\n"
+    "                    const char * iaoffline_moe_stream = getenv(\"IAOFFLINE_MOE_STREAM\");\n"
+    "                    const bool iaoffline_keep_mapped = iaoffline_moe_stream != nullptr && iaoffline_moe_stream[0] == '1';\n"
+    "                    if (overrides->buft == ggml_backend_cpu_buffer_type() && !iaoffline_keep_mapped) {\n"
+    "                        // when overriding to a CPU buffer, consider the extra buffer types\n",
+)
+path.write_text(text)
+print("Applied IA Offline model-loader patch")
 PY
 
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
