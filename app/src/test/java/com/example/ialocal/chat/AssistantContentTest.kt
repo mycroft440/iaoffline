@@ -73,6 +73,30 @@ class AssistantContentTest {
     }
 
     @Test
+    fun recordsHowFastTheModelWroteWithoutShowingItInTheAnswer() {
+        val stored = AssistantContent.withTimings(
+            "<think>pensando</think>\n\nResposta",
+            responseMs = 12_000,
+            reasoningMs = 4_000,
+            provider = ModelProvider.GOOGLE,
+            tokensPerSecond = 2.6431,
+        )
+
+        val parsed = AssistantContent.parse(stored)
+
+        assertEquals(2.64, requireNotNull(parsed.tokensPerSecond), 0.0001)
+        assertEquals("Resposta", parsed.answer)
+        assertEquals("pensando", parsed.reasoning)
+        assertEquals(ModelProvider.GOOGLE, parsed.provider)
+        assertEquals("Resposta", AssistantContent.answerForHistory(stored))
+        // Regenerated without a measured speed: the old one is dropped, not kept or duplicated.
+        val regenerated = AssistantContent.withTimings(stored, responseMs = 1, reasoningMs = null)
+        assertNull(AssistantContent.parse(regenerated).tokensPerSecond)
+        assertFalse(regenerated.contains("nexus_tokens_per_second"))
+        assertNull(AssistantContent.parse(AssistantContent.withTimings("Oi", 1, null, tokensPerSecond = 0.0)).tokensPerSecond)
+    }
+
+    @Test
     fun repliesSavedBeforeHaveNoCompany() {
         assertNull(AssistantContent.parse("Resposta\n\n<!--nexus_response_ms:10-->").provider)
         assertNull(AssistantContent.parse("Resposta<!--nexus_provider:DESCONHECIDA-->").provider)

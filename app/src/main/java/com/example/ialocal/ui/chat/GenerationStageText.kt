@@ -59,6 +59,8 @@ internal fun stageText(stage: GenerationStage, finished: Boolean): String {
         Kind.USING_TOOL ->
             if (finished) "Ferramenta usada: ${toolName(detail)}" else "Usando a ferramenta: ${toolName(detail)}"
         Kind.REASONING -> if (finished) "Raciocinou" else "Raciocinando"
+        // Kept with the reply instead of listed as a step; worded like one all the same.
+        Kind.ANSWER_SPEED -> "Resposta escrita (${tokensText(stage.done)})"
     }
 }
 

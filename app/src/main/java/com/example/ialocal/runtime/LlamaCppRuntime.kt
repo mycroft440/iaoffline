@@ -213,6 +213,13 @@ class LlamaCppRuntime(
             logger?.info("INFERENCE", "Resposta concluída (${reply.length} caracteres)")
             AnswerSpeed.parse(runCatching { Os.getenv(PERF_ENV) }.getOrNull())?.let { speed ->
                 logger?.info("SPEED", speed.describe(ioBefore, ProcessIo.read()))
+                onStage(
+                    GenerationStage(
+                        GenerationStage.Kind.ANSWER_SPEED,
+                        done = speed.answerTokens,
+                        total = speed.answerMillis.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    ),
+                )
             }
         } catch (cancel: CancellationException) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)

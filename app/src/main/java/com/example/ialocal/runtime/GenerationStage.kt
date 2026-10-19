@@ -42,6 +42,11 @@ data class GenerationStage(
         USING_TOOL,
         /** The model started reasoning; the chat shows the reasoning itself from here on. */
         REASONING,
+        /**
+         * Sent after the last word, not a step: [done] tokens written in [total] ms, as the native
+         * side measured them. The chat keeps it with the reply to show the answer's speed.
+         */
+        ANSWER_SPEED,
     }
 
     fun encode(): String = JSONObject()
