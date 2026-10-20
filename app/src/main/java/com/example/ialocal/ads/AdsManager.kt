@@ -23,6 +23,7 @@ class AdsManager(private val appContext: Context) {
     private val consentInformation by lazy { UserMessagingPlatform.getConsentInformation(appContext) }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloadInterstitial = DownloadInterstitial(appContext)
+    private val downloadRewarded = DownloadRewarded(appContext)
     private val appOpenAds = AppOpenAds(appContext)
     private var initializing = false
     private var initialized = false
@@ -55,7 +56,10 @@ class AdsManager(private val appContext: Context) {
 
     /** Loads the download ad ahead of time, when the catalog opens. */
     fun preloadDownloadAd() {
-        if (adsReady) downloadInterstitial.preload()
+        if (adsReady) {
+            downloadInterstitial.preload()
+            downloadRewarded.preload()
+        }
     }
 
     /** Full-screen ad right after the user starts downloading an AI; the download goes on behind it. */
@@ -64,13 +68,31 @@ class AdsManager(private val appContext: Context) {
     }
 
     /**
+     * Catalog downloads: grant only from the SDK reward callback. If no ad is available,
+     * preserve free download; dismissing a shown ad early does not grant anything.
+     */
+    fun requestRewardedDownload(
+        activity: Activity,
+        onReward: () -> Unit,
+        onUnavailable: () -> Unit,
+        onBusy: () -> Unit,
+    ) {
+        if (!adsReady || BuildConfig.REWARDED_AD_UNIT_ID.isBlank()) {
+            onUnavailable()
+            return
+        }
+        downloadRewarded.show(activity, onReward, onUnavailable, onBusy)
+    }
+
+    /**
      * The user came back to the app. [aiIdle] is false while an AI is loaded, loading or answering:
      * the ad's video player would then take RAM the model needs.
      */
     fun onAppForeground(activity: Activity, aiIdle: Boolean) {
         appOpenAds.countOpening()
-        if (!adsReady) return
-        if (aiIdle) appOpenAds.show(activity, downloadInterstitial.lastShownAtMs) else appOpenAds.preload()
+        if (!adsReady || downloadRewarded.isShowing) return
+        val lastDownloadAdAt = maxOf(downloadInterstitial.lastShownAtMs, downloadRewarded.lastShownAtMs)
+        if (aiIdle) appOpenAds.show(activity, lastDownloadAdAt) else appOpenAds.preload()
     }
 
     fun showPrivacyOptions(activity: Activity) {
@@ -121,6 +143,9 @@ class AdsManager(private val appContext: Context) {
 
     private fun refreshAdsReady() {
         adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
-        if (adsReady) appOpenAds.preload()
+        if (adsReady) {
+            appOpenAds.preload()
+            downloadRewarded.preload()
+        }
     }
 }
