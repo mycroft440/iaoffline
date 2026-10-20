@@ -75,12 +75,10 @@ class ModelManager(
 
     suspend fun importAndVerify(preview: ModelImportPreview): AiModelEntity {
         val model = repository.importGguf(preview)
-        return try {
-            verifyAndActivate(model.id)
-        } catch (t: Throwable) {
-            // Keep the imported file so the user can retry after freeing RAM.
-            throw t
-        }
+        // The GGUF is installed. Verify under a foreground service rather than the caller's
+        // screen ViewModel, otherwise leaving the import screen cancels the inference test.
+        BackgroundModelVerificationService.enqueue(appContext, model.id)
+        return model
     }
 
     /** Finds catalog models in the shared folder and in older Downloads folders. */
