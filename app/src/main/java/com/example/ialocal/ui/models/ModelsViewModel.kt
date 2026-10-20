@@ -110,7 +110,7 @@ class ModelsViewModel(
         if (_isImporting.value || manager.downloadState.value.isBusy) return
         _preview.value = null
         _isImporting.value = true
-        _operationText.value = "Copiando e verificando modelo…"
+        _operationText.value = "Copiando modelo e preparando teste automático…"
         _error.value = null
         viewModelScope.launch {
             runCatching { manager.importAndVerify(selected) }
