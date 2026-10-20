@@ -116,7 +116,11 @@ Quando a assinatura de release estiver configurada, o APK mais recente ficará d
 
 `https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
 
-Enquanto a assinatura não estiver configurada, o APK de teste é o artefato **IA-Local-debug.apk** de cada execução do GitHub Actions. Ele é enviado como o próprio APK, sem ZIP (`archive: false`): o download já é o arquivo para instalar, sem nada para descompactar. Execuções anteriores entregavam um ZIP, e os ZIPs sem compressão (até o PR #46) aparecem como corrompidos no celular, porque o leitor de ZIP do Android recusa uma entrada sem compressão com descritor de dados, como o Actions os gerava.
+Enquanto a assinatura não estiver configurada, o APK de teste é o artefato **IA-Local-debug-0.1.N.apk** de cada execução do GitHub Actions, em que `N` é o número da execução. Ele é enviado como o próprio APK, sem ZIP (`archive: false`): o download já é o arquivo para instalar, sem nada para descompactar. Execuções anteriores entregavam um ZIP, e os ZIPs sem compressão (até o PR #46) aparecem como corrompidos no celular, porque o leitor de ZIP do Android recusa uma entrada sem compressão com descritor de dados, como o Actions os gerava.
+
+O código (dex) vai comprimido dentro do APK, como as bibliotecas nativas: guardado sem compressão, ele ocupava 87 dos 116 MB do APK, e o download fica com cerca de metade disso. Se a instalação, mesmo com o app desinstalado, terminar em "Como o pacote parece ser inválido, o app não foi instalado", o mais provável é que o arquivo tenha chegado danificado ao celular: o instalador ainda mostra o nome e o ícone, que ficam no fim do arquivo, mas a assinatura cobre o arquivo inteiro e não confere. Compare o tamanho do arquivo baixado (Meus Arquivos → Detalhes) com o tamanho indicado no resumo da execução do Actions e baixe de novo, de preferência pelo Wi-Fi, se for diferente.
+
+Todo APK debug é assinado com a mesma chave, `app/debug.keystore`, que fica no repositório, e o CI falha se o APK sair com outra. Antes, cada execução do Actions criava a própria chave de debug, e o Android recusava o APK novo como atualização do app instalado. Quem tem instalado um APK debug anterior a essa mudança precisa desinstalá-lo uma única vez; os APKs seguintes atualizam a instalação. Instale sempre o APK de número mais alto: o Android recusa, como "pacote inválido", um APK mais antigo que o instalado. A senha dessa chave é pública, como a da chave de debug do próprio Android, por isso ela nunca assina a Release.
 
 Requisitos do APK atual:
 

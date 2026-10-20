@@ -80,6 +80,16 @@ android {
     }
 
     signingConfigs {
+        // Debug builds use a key kept in the repository instead of the runner's ~/.android one,
+        // which every Actions run generated anew: the phone then refused each new APK as an
+        // update of the installed app. Its password is public, like Android's own debug key, so
+        // it must never sign the published release.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = file(releaseKeystorePath!!)
@@ -121,6 +131,11 @@ android {
 
     packaging {
         jniLibs {
+            useLegacyPackaging = true
+        }
+        // The code compressed in the APK, as the native libraries are: stored, the dex made up 87 of
+        // the APK's 116 MB; compressed, the APK is half the download to the phone.
+        dex {
             useLegacyPackaging = true
         }
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

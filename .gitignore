@@ -17,3 +17,5 @@ app/libs/*.aar
 *.keystore
 *.p12
 *.pfx
+# Except the public debug key, so every debug APK updates the previous one.
+!app/debug.keystore

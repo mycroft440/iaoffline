@@ -59,20 +59,41 @@ jobs:
       - name: Unit tests + lint + debug build
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --stacktrace --info
 
+      # The debug APK must be signed with app/debug.keystore. Signed with any other key (the
+      # runner's own debug key, as before), Android refuses it as an update of the installed app.
       - name: Verify debug APK
+        shell: bash
+        env:
+          DEBUG_CERT_SHA256: 6898c49482963e6abef1e5bd680f75fea4fe50865978938770ed62ebbd28f8c5
         run: |
-          test -f app/build/outputs/apk/debug/app-debug.apk
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          ls -lh "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | tee "$RUNNER_TEMP/apk-certs.txt"
+          grep -q "certificate SHA-256 digest: $DEBUG_CERT_SHA256" "$RUNNER_TEMP/apk-certs.txt"
           mkdir -p dist-debug
-          cp app/build/outputs/apk/debug/app-debug.apk dist-debug/IA-Local-debug.apk
+          cp "$APK" "dist-debug/IA-Local-debug-${IA_VERSION_NAME}.apk"
+          # A download that reaches the phone damaged is refused as "pacote inválido": its size
+          # in the phone's file manager must match this one exactly.
+          BYTES=$(stat -c %s "$APK")
+          {
+            echo "### IA-Local-debug-${IA_VERSION_NAME}.apk"
+            echo
+            echo "Tamanho: $(awk -v b="$BYTES" 'BEGIN { printf "%.2f MB", b / 1000000 }' | tr . ,) ($BYTES bytes)"
+            echo
+            echo "SHA-256: \`$(sha256sum "$APK" | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # The APK itself, not a ZIP (archive: false): the artifact is named after the file and
-      # downloads as IA-Local-debug.apk, ready to install on a phone. A ZIP had to be extracted
-      # first, and Android's ZIP reader rejected the uncompressed ones Actions used to stream.
+      # downloads as IA-Local-debug-0.1.N.apk, ready to install on a phone. A ZIP had to be
+      # extracted first, and Android's ZIP reader rejected the uncompressed ones Actions used to
+      # stream. The version in the name tells the newest download apart: an older APK cannot be
+      # installed over a newer one either.
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7
         with:
-          path: dist-debug/IA-Local-debug.apk
+          path: dist-debug/IA-Local-debug-${{ env.IA_VERSION_NAME }}.apk
           archive: false
           if-no-files-found: error
           retention-days: 14
