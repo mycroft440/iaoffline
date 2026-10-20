@@ -7,6 +7,7 @@ import com.example.ialocal.agent.AnswerGuidance
 import com.example.ialocal.agent.tools.AgentToolRegistry
 import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.api.ApiSettingsRepository
+import com.example.ialocal.api.ExternalApiSettings
 import com.example.ialocal.api.LocalApiAiGateway
 import com.example.ialocal.api.LocalApiServer
 import com.example.ialocal.chat.ChatGenerationManager
@@ -67,6 +68,7 @@ class AppContainer(context: Context) {
         AnswerGuidance(offlineWikipedia),
     )
 
+    val externalApiSettings = ExternalApiSettings(appContext)
     val apiSettings = ApiSettingsRepository(appContext)
     val apiServer = LocalApiServer(
         apiSettings,
