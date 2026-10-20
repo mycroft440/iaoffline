@@ -678,7 +678,7 @@ private fun ExactChatBody(
     }
     // The model answering now; also stands in for replies saved before their company was recorded.
     val selectedProvider = remember(selectedModel) { selectedModel?.provider() }
-    val selectedModelLabel = remember(selectedModel) { selectedModel?.let(::chatModelLabel) }
+    val selectedModelLabel = remember(selectedModel) { selectedModel?.let { chatModelLabel(it) } }
     // The code block open full screen; it is looked up again as the reply grows, so it follows the code being written.
     var openCanvas by remember { mutableStateOf<CanvasRef?>(null) }
     val canvas = remember(openCanvas, messages) {
@@ -1020,7 +1020,7 @@ private fun ExactAssistantMessage(
     val thinking = sending && parsed.reasoningInProgress
     // Finished replies retain the model that generated them, even after changing the selection.
     // Old messages may record only their company: do not fabricate a parameter count for them.
-    val replyModelLabel = parsed.modelName?.let(::chatModelLabel)
+    val replyModelLabel = parsed.modelName?.let { chatModelLabel(it) }
         ?: (if (sending) fallbackModelLabel else parsed.provider?.brandName())
         ?: "IA local"
     // While the model thinks, only its last two lines show unless the user opens the whole
