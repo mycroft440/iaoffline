@@ -41,6 +41,7 @@ fun optionalAdUnit(buildConfigField: String, variable: String, testId: String): 
 
 val optionalAdUnits = listOf(
     optionalAdUnit("INTERSTITIAL_AD_UNIT_ID", "ADMOB_INTERSTITIAL_AD_UNIT_ID", "ca-app-pub-3940256099942544/1033173712"),
+    optionalAdUnit("REWARDED_AD_UNIT_ID", "ADMOB_REWARDED_AD_UNIT_ID", "ca-app-pub-3940256099942544/5224354917"),
     optionalAdUnit("NATIVE_AD_UNIT_ID", "ADMOB_NATIVE_AD_UNIT_ID", "ca-app-pub-3940256099942544/2247696110"),
     optionalAdUnit("APP_OPEN_AD_UNIT_ID", "ADMOB_APP_OPEN_AD_UNIT_ID", "ca-app-pub-3940256099942544/9257395921"),
 )
