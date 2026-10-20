@@ -146,10 +146,15 @@ fun GroupedOfflineModelsScreen(
     val recommendation = remember(catalog, hardware.availableRamBytes) {
         recommendedModels(catalog = catalog, freeRamBytes = hardware.availableRamBytes)
     }
+    val featuredMoe = remember(catalog, hardware.availableRamBytes) {
+        featuredMoeModels(catalog, hardware.availableRamBytes)
+    }
     // The same IA is Free in the recommendation and in its company section.
     val freeDownloadModelId = recommendation.freeDownloadModelId
     // The banner, then the recommendations with their heading.
-    val selectorIndex = 1 + if (recommendation.models.isEmpty()) 0 else 1 + recommendation.models.size
+    val selectorIndex = 1 +
+        (if (featuredMoe.isEmpty()) 0 else 1 + featuredMoe.size) +
+        (if (recommendation.models.isEmpty()) 0 else 1 + recommendation.models.size)
     val selectorOutOfView by remember(selectorIndex) {
         derivedStateOf { listState.firstVisibleItemIndex > selectorIndex }
     }
@@ -237,6 +242,17 @@ fun GroupedOfflineModelsScreen(
             // card instead of building it again.
             item(key = "catalog-ad-top", contentType = CatalogItem.BANNER) {
                 InlineAdBanner(state = topBanner)
+            }
+
+            if (featuredMoe.isNotEmpty()) {
+                item(key = "section-featured-moe", contentType = CatalogItem.SECTION_HEADER) {
+                    FeaturedMoeHeader(featuredMoe.size, hardware.availableRamBytes)
+                }
+                items(
+                    items = featuredMoe,
+                    key = { "featured-moe-${it.id}" },
+                    contentType = { CatalogItem.MODEL_CARD },
+                ) { catalogCard(it) }
             }
 
             if (recommendation.models.isNotEmpty()) {
@@ -458,6 +474,36 @@ private fun CompanyFilterChip(
             foreground = accent,
             background = accent.copy(alpha = 0.12f),
             border = accent.copy(alpha = 0.35f),
+        )
+    }
+}
+
+/** Featured MoE is a discovery list: small total parameter count does not guarantee RAM fit. */
+@Composable
+private fun FeaturedMoeHeader(count: Int, freeRamBytes: Long) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CatalogViolet.copy(alpha = 0.10f), shape)
+            .border(1.dp, CatalogViolet.copy(alpha = 0.50f), shape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "MoE em destaque · até 14B",
+            color = CatalogText,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Text(
+            "Todos os $count modelos MoE com menos de 14 bilhões de parâmetros totais, " +
+                "com os que cabem na RAM livre primeiro e destaque para os 8B. " +
+                "Cada cartão informa a RAM estimada; estar aqui não garante que funcione neste aparelho. " +
+                "RAM livre agora: ${groupedFormatBytes(freeRamBytes)}.",
+            color = CatalogMuted,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
         )
     }
 }
