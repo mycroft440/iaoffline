@@ -14,6 +14,7 @@ import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.models.ModelCatalog
 import com.example.ialocal.models.provider
 import com.example.ialocal.runtime.GenerationStage
 import java.util.concurrent.ConcurrentHashMap
@@ -304,8 +305,14 @@ class ChatGenerationManager(
             repository.setConversationAgent(conversationId, agent.id)
         }
 
-        // Shown next to the reply: the company of the model answering it.
-        val provider = modelRepository.getModel(agent.modelId)?.provider()
+        // Store the actual answering model's identity, not just the company. After the user
+        // switches models, old replies must retain their correct model family and size.
+        val answeringModel = modelRepository.getModel(agent.modelId)
+        val provider = answeringModel?.provider()
+        val answeringModelName = answeringModel?.let { model ->
+            ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
+                ?.displayName ?: model.name
+        }
         val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
         val startedAt = System.currentTimeMillis()
         var reasoningStartedAt: Long? = null
@@ -320,7 +327,7 @@ class ChatGenerationManager(
             val reasoningMs = reasoningStartedAt?.let { start -> (reasoningEndedAt ?: now) - start }
             val tokensPerSecond = writingMs.get().takeIf { it > 0 && writtenTokens.get() > 0 }
                 ?.let { ms -> writtenTokens.get() * 1000.0 / ms }
-            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs, provider, tokensPerSecond)
+            return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs, provider, tokensPerSecond, answeringModelName)
         }
         try {
             // Each saved update re-reads the conversation and redraws the chat, so the text is
