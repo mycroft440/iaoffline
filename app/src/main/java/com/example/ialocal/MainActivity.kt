@@ -354,12 +354,24 @@ private fun LocalAiApp(
                 adsEnabled = adsManager.adsReady,
                 onStartChat = {
                     scope.launch {
+                        val installed = container.modelRepository.getModels()
+                        val recentModel = container.chatRepository.listRecentConversations(15)
+                            .firstNotNullOfOrNull { conversation ->
+                                container.chatRepository.getConversation(conversation.id)?.agentId
+                                    ?.let { container.modelRepository.getAgent(it)?.modelId }
+                            }
+                        val preferredId = preferredChatStartupModel(
+                            installed, container.modelRepository.lastChatModelId(), recentModel,
+                        )
                         val conversationId = container.chatRepository.createConversation()
-                        navController.navigate("chat/$conversationId")
+                        val destination = if (preferredId == null) "chat/$conversationId"
+                            else "chat/$conversationId?modelId=$preferredId"
+                        navController.navigate(destination)
                     }
                 },
                 onStartChatWith = { modelId ->
                     scope.launch {
+                        container.modelRepository.rememberChatModel(modelId)
                         val conversationId = container.chatRepository.createConversation()
                         navController.navigate("chat/$conversationId?modelId=$modelId")
                     }
@@ -395,6 +407,7 @@ private fun LocalAiApp(
                 onBack = { navController.popBackStack() },
                 onOpenChat = { modelId ->
                     scope.launch {
+                        container.modelRepository.rememberChatModel(modelId)
                         val conversationId = container.chatRepository.createConversation()
                         navController.navigate("chat/$conversationId?modelId=$modelId")
                     }
@@ -492,13 +505,18 @@ private fun LocalAiApp(
                 onOpenConversation = { targetId ->
                     if (targetId != id) {
                         navController.navigate("chat/$targetId") {
-                            popUpTo("home") { inclusive = false }
+                            popUpTo("ai-home") { inclusive = false }
                         }
                     }
                 },
                 onOpenHistory = {
-                    if (!navController.popBackStack("home", inclusive = false)) {
-                        navController.navigate("home")
+                    if (!navController.popBackStack()) {
+                        navController.navigate("ai-home") { launchSingleTop = true }
+                    }
+                },
+                onBack = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate("ai-home") { launchSingleTop = true }
                     }
                 },
                 onOpenModels = {
@@ -514,16 +532,20 @@ private fun LocalAiApp(
 
         // The main "Utilizar API" action connects to online providers such as OpenRouter.
         // The original local server remains available under Models e API for integrations.
-        composable("external-api") {
-            val vm: ExternalApiViewModel = viewModel(
-                factory = ExternalApiViewModel.Factory(
-                    container.externalApiSettings,
-                    container.externalApiChatStore,
-                    container.attachmentImporter,
-                    container.attachmentProcessor,
-                    container.modelRepository,
-                ),
-            )
+        composable(
+            route = "external-api?conversationId={conversationId}",
+            arguments = listOf(navArgument("conversationId") {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            }),
+        ) { entry ->
+            // Application-scoped: an in-flight API reply survives leaving this chat screen.
+            val vm = container.externalApiViewModel
+            val initialConversationId = entry.arguments?.getString("conversationId")
+            LaunchedEffect(initialConversationId) {
+                if (initialConversationId != null) vm.openConversation(initialConversationId)
+            }
             val installedLanguageIds by container.codeLanguagePacks.installedIds.collectAsStateWithLifecycle()
             ExternalApiScreen(
                 viewModel = vm,
@@ -686,4 +708,18 @@ private fun wikipediaSummary(states: List<WikipediaPackState>): String {
         installed.size > 1 -> "${installed.size} edições instaladas"
         else -> "Enciclopédia para os agentes consultarem sem internet"
     }
+}
+
+/** Preselect the user's last chosen IA, or the last conversation's model when available. */
+internal fun preferredChatStartupModel(
+    installed: List<com.example.ialocal.data.AiModelEntity>,
+    lastSelectedId: String?,
+    lastConversationModelId: String?,
+): String? {
+    val ready = installed.filter { it.verificationStatus == ModelVerificationStatus.VERIFIED.name }
+    return listOfNotNull(lastSelectedId, lastConversationModelId)
+        .firstOrNull { id -> ready.any { it.id == id } }
+        ?: ready.firstOrNull { it.isActive }?.id
+        ?: ready.firstOrNull()?.id
+        ?: installed.singleOrNull()?.id
 }
