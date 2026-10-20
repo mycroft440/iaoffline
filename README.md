@@ -152,15 +152,15 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 ### Anúncios AdMob
 
-**Anúncio de download (intersticial em tela cheia, vídeo ou imagem).** Ao tocar em **Instalar I.A** no catálogo, ou ao confirmar o download de uma edição da **Wikipedia Offline**, o download começa e um anúncio em tela cheia aparece. O download continua em segundo plano enquanto o anúncio passa, então a pessoa não perde tempo esperando. É o formato que mais rende sem pedir nada ao usuário, e o início de um download é a pausa natural que as regras do AdMob pedem para intersticiais. Detalhes:
+**Download de I.As (anúncio recompensado).** Na tela **Baixar I.As offline** e em **Modelos e API**, cada novo download abre um convite explícito para assistir a um anúncio recompensado. Ao aceitar, o app exibe o anúncio e **só inicia o download após o callback `onUserEarnedReward`**. Fechar o anúncio antes da recompensa não libera o download. O AdMob pode veicular vídeo, anúncio interativo ou outros criativos recompensados; não é garantido que seja sempre um vídeo.
 
-- O anúncio é carregado quando o catálogo ou a tela da Wikipédia abre, para aparecer na hora; um anúncio carregado vale por uma hora e é trocado antes disso.
-- No máximo um a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`), somando IAs e Wikipédia: quem escolhe vários downloads seguidos vê um só anúncio. O limite sobrevive ao fechamento do app.
-- Só novos downloads mostram o anúncio; **Continuar** e **Tentar novamente** não.
-- Não aparece enquanto uma resposta está sendo gerada: o player de vídeo tiraria RAM do modelo e poderia fazer o Android encerrar o processo da IA no meio da resposta.
-- Sem conexão, sem consentimento ou sem anúncio carregado, o download começa normalmente, sem anúncio.
+- O anúncio é pré-carregado ao abrir a tela; se ainda estiver carregando após o aceite, o app aguarda o carregamento.
+- **Continuar** e **Tentar novamente** em downloads pausados/falhos não exigem outro anúncio. Modelos já instalados, importações e consultas à IA não são afetados.
+- Se a rede, o consentimento ou o inventário do AdMob impedirem o anúncio de aparecer, o app mantém o comportamento anterior e permite baixar a IA sem anúncio. Não há bloqueio permanente por falta de publicidade.
+- O anúncio recompensado não é apresentado enquanto uma IA responde, para não competir pela RAM do aparelho.
+- IDs de teste não geram receita; para remunerar os downloads em uma release de produção, crie um bloco do tipo **Recompensado** no AdMob e configure `ADMOB_REWARDED_AD_UNIT_ID`.
 
-Para ganhar o máximo com esse anúncio, crie no AdMob um bloco do tipo **Intersticial** com os dois tipos de anúncio ligados (**Display** e **Vídeo**): os dois competem no leilão e ganha o que paga mais. Mais redes disputando cada exibição aumentam o valor pago: a mediação com lances (bidding) do AdMob aceita redes como Meta Audience Network, AppLovin, Unity Ads e Liftoff, mas cada uma precisa do seu adaptador no app (uma dependência `com.google.ads.mediation:…` no `app/build.gradle.kts`), que ainda não foi adicionado.
+**Download da Wikipédia (intersticial).** Continua com o comportamento anterior: o download começa normalmente e o intersticial pode aparecer em seguida. Esse anúncio é mostrado no máximo uma vez a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`), e só quando há anúncio disponível. A Wikipédia não usa o novo fluxo recompensado.
 
 **Anúncio de abertura (tela cheia).** Aparece quando a pessoa volta ao app (pelo ícone ou pelos recentes), com estas regras (`AppOpenAdPacing`):
 
@@ -180,7 +180,8 @@ Para ganhar o máximo com esse anúncio, crie no AdMob um bloco do tipo **Inters
 | --- | --- |
 | Aplicativo | `ca-app-pub-3940256099942544~3347511713` |
 | Banner adaptável | `ca-app-pub-3940256099942544/9214589741` |
-| Intersticial (vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
+| Intersticial (Wikipédia, vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
+| Recompensado (download de I.As) | `ca-app-pub-3940256099942544/5224354917` |
 | Nativo | `ca-app-pub-3940256099942544/2247696110` |
 | Abertura do app | `ca-app-pub-3940256099942544/9257395921` |
 
@@ -189,12 +190,13 @@ Para trocar pelos anúncios reais (que geram receita) em um build `release`, con
 ```bash
 export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
 export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
-export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # anúncio de download
+export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # downloads da Wikipédia
+export ADMOB_REWARDED_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/RRRRRRRRRR'     # baixar I.As mediante recompensa
 export ADMOB_NATIVE_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN'         # cards do catálogo
 export ADMOB_APP_OPEN_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/AAAAAAAAAA'       # abertura do app
 ```
 
-Use os IDs da sua conta AdMob (no AdMob, crie blocos dos tipos **Intersticial**, **Nativo avançado** e **Abertura de app**). No GitHub Actions, cadastre os mesmos valores como secrets com os mesmos nomes; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste cada formato e o fluxo de consentimento em um aparelho antes de publicar o APK.
+Use os IDs da sua conta AdMob (no AdMob, crie blocos dos tipos **Recompensado**, **Intersticial**, **Nativo avançado** e **Abertura de app**). No GitHub Actions, cadastre os mesmos valores como secrets com os mesmos nomes; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste cada formato e o fluxo de consentimento em um aparelho antes de publicar o APK.
 
 Os AARs nativos são preparados antes do build do aplicativo. Para reproduzir o mesmo caminho do CI com cobertura sintática máxima:
 
