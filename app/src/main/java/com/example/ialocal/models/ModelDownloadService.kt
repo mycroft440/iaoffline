@@ -143,6 +143,7 @@ class ModelDownloadService : Service() {
         )
 
         activeJob = serviceScope.launch {
+            var offlineFailures = 0
             try {
                 while (isActive) {
                     try {
@@ -150,9 +151,11 @@ class ModelDownloadService : Service() {
                         break
                     } catch (offline: NetworkUnavailableException) {
                         if (!isActive) throw offline
-                        // Keep ownership while offline. The partial file is preserved and the next
-                        // attempt resumes with HTTP Range instead of requiring another user action.
-                        delay(NETWORK_RETRY_DELAY_MS)
+                        // The first connection loss is retried immediately. Further attempts are
+                        // spaced by 30 seconds. Keep the foreground service and partial GGUF alive.
+                        offlineFailures = ModelDownloadRetryPolicy.nextFailureCount(offlineFailures)
+                        val waitMs = ModelDownloadRetryPolicy.delayBeforeRetryMs(offlineFailures)
+                        if (waitMs > 0L) delay(waitMs)
                         manager.prepareNetworkRetry(catalogId)
                     }
                 }
@@ -305,7 +308,6 @@ class ModelDownloadService : Service() {
         private const val REQUEST_OPEN_APP = 4302
         private const val REQUEST_PAUSE = 4303
         private const val REQUEST_END = 4304
-        private const val NETWORK_RETRY_DELAY_MS = 5_000L
 
         const val ACTION_START = "com.example.ialocal.action.START_MODEL_DOWNLOAD"
         const val ACTION_PAUSE = "com.example.ialocal.action.PAUSE_MODEL_DOWNLOAD"
