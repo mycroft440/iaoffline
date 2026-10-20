@@ -116,7 +116,9 @@ Quando a assinatura de release estiver configurada, o APK mais recente ficará d
 
 `https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
 
-Enquanto a assinatura não estiver configurada, o APK de teste é o artefato **IA-Local-debug.apk** de cada execução do GitHub Actions. Ele é enviado como o próprio APK, sem ZIP (`archive: false`): o download já é o arquivo para instalar, sem nada para descompactar. Execuções anteriores entregavam um ZIP, e os ZIPs sem compressão (até o PR #46) aparecem como corrompidos no celular, porque o leitor de ZIP do Android recusa uma entrada sem compressão com descritor de dados, como o Actions os gerava.
+Enquanto a assinatura não estiver configurada, o APK de teste é o artefato **IA-Local-debug-0.1.N.apk** de cada execução do GitHub Actions, em que `N` é o número da execução. Ele é enviado como o próprio APK, sem ZIP (`archive: false`): o download já é o arquivo para instalar, sem nada para descompactar. Execuções anteriores entregavam um ZIP, e os ZIPs sem compressão (até o PR #46) aparecem como corrompidos no celular, porque o leitor de ZIP do Android recusa uma entrada sem compressão com descritor de dados, como o Actions os gerava.
+
+Todo APK debug é assinado com a mesma chave, `app/debug.keystore`, que fica no repositório, e o CI falha se o APK sair com outra. Antes, cada execução do Actions criava a própria chave de debug, e o Android recusava o APK novo como atualização do app instalado com a mensagem "Como o pacote parece ser inválido, o app não foi instalado". Quem tem instalado um APK debug anterior a essa mudança precisa desinstalá-lo uma única vez; os APKs seguintes atualizam a instalação. Instale sempre o APK de número mais alto: o Android também recusa, com a mesma mensagem, um APK mais antigo que o instalado. A senha dessa chave é pública, como a da chave de debug do próprio Android, por isso ela nunca assina a Release.
 
 Requisitos do APK atual:
 
