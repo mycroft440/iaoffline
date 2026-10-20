@@ -5,4 +5,5 @@
     <exclude domain="file" path="models/" />
     <exclude domain="file" path="model-downloads/" />
     <exclude domain="sharedpref" path="local_api.xml" />
+    <exclude domain="sharedpref" path="external_api.xml" />
 </full-backup-content>
