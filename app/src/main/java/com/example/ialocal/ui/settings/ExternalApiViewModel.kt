@@ -1,6 +1,5 @@
 package com.example.ialocal.ui.settings
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -141,9 +140,9 @@ class ExternalApiViewModel(
         _notice.value = "Nova conversa iniciada."
     }
 
-    class Factory(private val context: Context) : ViewModelProvider.Factory {
+    class Factory(private val settings: ExternalApiSettings) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            ExternalApiViewModel(ExternalApiSettings(context)) as T
+            ExternalApiViewModel(settings) as T
     }
 }
