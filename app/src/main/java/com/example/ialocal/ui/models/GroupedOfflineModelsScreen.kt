@@ -104,6 +104,7 @@ fun GroupedOfflineModelsScreen(
     adsEnabled: Boolean,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
     onRequestRewardedDownload: (String, () -> Unit) -> Unit,
+    onFreeDownloadStarted: () -> Unit,
     onBack: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
@@ -145,6 +146,8 @@ fun GroupedOfflineModelsScreen(
     val recommendation = remember(catalog, hardware.availableRamBytes) {
         recommendedModels(catalog = catalog, freeRamBytes = hardware.availableRamBytes)
     }
+    // The same IA is Free in the recommendation and in its company section.
+    val freeDownloadModelId = recommendation.freeDownloadModelId
     // The banner, then the recommendations with their heading.
     val selectorIndex = 1 + if (recommendation.models.isEmpty()) 0 else 1 + recommendation.models.size
     val selectorOutOfView by remember(selectorIndex) {
@@ -153,15 +156,22 @@ fun GroupedOfflineModelsScreen(
     // One card per model, in the recommendations and again in its company's section.
     val catalogCard: @Composable (CatalogModel) -> Unit = { catalogModel ->
         val installed = installedByCatalogId[catalogModel.id]
+        val isFreeDownload = catalogModel.id == freeDownloadModelId
         HtmlCatalogInstallCard(
             model = catalogModel,
+            isFreeDownload = isFreeDownload,
             hardware = hardware,
             download = downloadsByCatalogId[catalogModel.id],
             installedModel = installed,
             onInstall = {
                 onEnsureStorageAccess {
-                    onRequestRewardedDownload(catalogModel.displayName) {
-                        viewModel.downloadCatalogModel(catalogModel.id)
+                    if (isFreeDownload) {
+                        // Begin the download before attempting the optional ordinary interstitial.
+                        if (viewModel.downloadCatalogModel(catalogModel.id)) onFreeDownloadStarted()
+                    } else {
+                        onRequestRewardedDownload(catalogModel.displayName) {
+                            viewModel.downloadCatalogModel(catalogModel.id)
+                        }
                     }
                 }
             },
@@ -663,6 +673,7 @@ private fun ProviderCatalogHeader(
 @Composable
 private fun HtmlCatalogInstallCard(
     model: CatalogModel,
+    isFreeDownload: Boolean,
     hardware: CatalogHardwareSnapshot,
     download: DownloadItemUi?,
     installedModel: AiModelEntity?,
@@ -764,6 +775,9 @@ private fun HtmlCatalogInstallCard(
             if (model.isExperimental) {
                 CatalogTag("MoE grande", accent = CatalogAmber)
             }
+            if (isFreeDownload) {
+                CatalogTag("FREE · GRÁTIS", accent = CatalogEmerald)
+            }
             if (installed) {
                 CatalogTag("Instalada", accent = CatalogEmerald)
             }
@@ -793,6 +807,19 @@ private fun HtmlCatalogInstallCard(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+
+        if (state == null && !installed) {
+            Text(
+                text = if (isFreeDownload) {
+                    "Download gratuito e imediato. Um anúncio comum poderá aparecer depois."
+                } else {
+                    "Assista a um anúncio recompensado para liberar este download."
+                },
+                color = if (isFreeDownload) CatalogEmerald else CatalogMuted,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+        }
 
         if (state != null && !installed) {
             DownloadStatePanel(
@@ -906,15 +933,27 @@ private fun HtmlCatalogInstallCard(
 
                 else -> {
                     CatalogActionButton(
-                        text = if (compatibility.canRunComfortably) "▶  Anúncio e instalar" else "▶  Anúncio e instalar (RAM alta)",
+                        text = if (isFreeDownload) "↓  Baixar GRÁTIS" else "▶  Assistir anúncio",
                         modifier = Modifier.weight(1f),
-                        background = if (compatibility.canRunComfortably) {
-                            Brush.horizontalGradient(listOf(CatalogCyan, Color(0xFF3B82F6)))
-                        } else {
-                            SolidColor(Color(0xE61E293B))
+                        background = when {
+                            isFreeDownload -> Brush.horizontalGradient(
+                                listOf(Color(0xFF16A34A), CatalogEmerald),
+                            )
+                            compatibility.canRunComfortably -> Brush.horizontalGradient(
+                                listOf(CatalogCyan, Color(0xFF3B82F6)),
+                            )
+                            else -> SolidColor(Color(0xE61E293B))
                         },
-                        foreground = if (compatibility.canRunComfortably) Color(0xFF041014) else CatalogAmber,
-                        border = if (compatibility.canRunComfortably) CatalogCyan.copy(alpha = 0.45f) else CatalogAmber.copy(alpha = 0.35f),
+                        foreground = when {
+                            isFreeDownload -> Color.White
+                            compatibility.canRunComfortably -> Color(0xFF041014)
+                            else -> CatalogAmber
+                        },
+                        border = when {
+                            isFreeDownload -> CatalogEmerald.copy(alpha = 0.8f)
+                            compatibility.canRunComfortably -> CatalogCyan.copy(alpha = 0.45f)
+                            else -> CatalogAmber.copy(alpha = 0.35f)
+                        },
                         onClick = onInstall,
                     )
                 }
