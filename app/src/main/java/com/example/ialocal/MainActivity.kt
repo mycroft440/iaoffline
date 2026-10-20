@@ -63,6 +63,8 @@ import com.example.ialocal.ui.settings.AiProfilesScreen
 import com.example.ialocal.ui.settings.AiProfilesViewModel
 import com.example.ialocal.ui.settings.AppearanceScreen
 import com.example.ialocal.ui.settings.CompilersScreen
+import com.example.ialocal.ui.settings.ExternalApiScreen
+import com.example.ialocal.ui.settings.ExternalApiViewModel
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
 import com.example.ialocal.ui.settings.StorageScanScreen
@@ -337,7 +339,7 @@ private fun LocalAiApp(
                 },
                 onOpenChats = { navController.navigate("my-ais") },
                 onOpenOfflineModels = { navController.navigate("offline-models") },
-                onOpenApi = { navController.navigate("models") },
+                onOpenApi = { navController.navigate("external-api") },
                 onOpenSettings = { navController.navigate("settings") },
                 onOpenCodeEditor = { navController.navigate("code-editor") },
                 onExitApp = onExitApp,
@@ -481,6 +483,15 @@ private fun LocalAiApp(
                 },
                 onOpenSettings = { navController.navigate("settings") },
             )
+        }
+
+        // The main "Utilizar API" action connects to online providers such as OpenRouter.
+        // The original local server remains available under Models e API for integrations.
+        composable("external-api") {
+            val vm: ExternalApiViewModel = viewModel(
+                factory = ExternalApiViewModel.Factory(container.externalApiSettings),
+            )
+            ExternalApiScreen(viewModel = vm, onBack = { navController.popBackStack() })
         }
 
         composable("models") {
