@@ -139,11 +139,9 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
-        // The code compressed in the APK, as the native libraries are: stored, the dex made up 87 of
-        // the APK's 116 MB; compressed, the APK is half the download to the phone.
-        dex {
-            useLegacyPackaging = true
-        }
+        // Keep Android's standard DEX packaging instead of forcing legacy compression.
+        // A smaller APK is not worth risking OEM installation failures. Restoring this default
+        // also lets the Android toolchain align the DEX code appropriately for modern devices.
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
