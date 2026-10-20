@@ -12,6 +12,7 @@ data class SavedRemoteMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: String,
     val content: String,
+    val createdAt: Long = System.currentTimeMillis(),
     /** Text/file references displayed to the user, not uploaded to another chat on replay. */
     val attachmentNames: List<String> = emptyList(),
 )
@@ -51,6 +52,7 @@ class ExternalApiChatStore(context: Context) {
                                 id = message.optString("id").ifBlank { UUID.randomUUID().toString() },
                                 role = message.optString("role"),
                                 content = message.optString("content"),
+                                createdAt = message.optLong("createdAt", chat.optLong("updatedAt")),
                                 attachmentNames = List(names.length()) { n -> names.optString(n) },
                             )
                         )
@@ -90,6 +92,7 @@ class ExternalApiChatStore(context: Context) {
                             put("id", message.id)
                             put("role", message.role)
                             put("content", message.content)
+                            put("createdAt", message.createdAt)
                             put("attachments", JSONArray(message.attachmentNames))
                         })
                     }
