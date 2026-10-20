@@ -95,6 +95,22 @@ class CatalogGroupsTest {
     }
 
     @Test
+    fun firstRecommendationIsTheFreeDownloadInEveryCatalogSection() {
+        val result = recommendedModels(ModelCatalog.entries, freeRamBytes = 6L * 1024 * 1024 * 1024)
+        assertTrue(result.models.size > 1)
+        assertEquals(result.models.first().id, result.freeDownloadModelId)
+        assertEquals(1, result.models.count { it.id == result.freeDownloadModelId })
+    }
+
+    @Test
+    fun fallbackAlsoProvidesTheFirstFreeModelButEmptyCatalogDoesNot() {
+        val fallback = recommendedModels(ModelCatalog.entries, 0L)
+        assertFalse(fallback.fitFreeRam)
+        assertEquals(fallback.models.first().id, fallback.freeDownloadModelId)
+        assertEquals(null, recommendedModels(emptyList(), 0L).freeDownloadModelId)
+    }
+
+    @Test
     fun changesInFreeRamChangeTheNumberOfModelsRecommended() {
         val lowBytes = 2_000_000_000L
         val highBytes = 5_000_000_000L
