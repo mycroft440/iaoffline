@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -145,18 +144,14 @@ fun ExternalApiScreen(
     }
     DisposableEffect(recorder) { onDispose { recorder.cancel() } }
 
-    funVoice@ run {
-        // Scoped composable local onClick below uses the same recorder as the offline chat.
-    }
-
     LaunchedEffect(configuration) {
         provider = configuration.provider
         url = configuration.baseUrl
         modelId = configuration.modelId
     }
     LaunchedEffect(messages.size, messages.lastOrNull()?.content?.length) {
-        if (messages.isNotEmpty() && chatScroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index
-            ?: -1 >= messages.size - 3) {
+        if (messages.isNotEmpty() &&
+            (chatScroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= messages.size - 3) {
             chatScroll.scrollToItem(messages.size - 1)
         }
     }
