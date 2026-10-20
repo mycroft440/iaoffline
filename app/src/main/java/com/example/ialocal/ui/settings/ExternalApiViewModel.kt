@@ -101,7 +101,7 @@ class ExternalApiViewModel(
 
     fun send(message: String) {
         val text = message.trim()
-        if (text.isEmpty() || _busy.value) return
+        if (text.isEmpty() || _busy.value || _loadingModels.value) return
         val connection = _config.value
         if (!connection.hasKey || connection.modelId.isBlank()) {
             _notice.value = "Configure sua chave e escolha um modelo para conversar."
@@ -132,7 +132,10 @@ class ExternalApiViewModel(
         }
     }
 
-    fun stop() { answerJob?.cancel() }
+    fun stop() {
+        answerJob?.cancel()
+        client.cancelChat()
+    }
 
     fun newConversation() {
         if (_busy.value) return
