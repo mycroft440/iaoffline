@@ -45,7 +45,6 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
@@ -53,8 +52,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -112,7 +109,6 @@ private data class HomeDeviceSnapshot(
 }
 
 /** The home screen, in the look of the "Baixar I.As offline" catalog. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HtmlAiHomeScreen(
     viewModel: ModelsViewModel,
@@ -150,17 +146,61 @@ fun HtmlAiHomeScreen(
         containerColor = CatalogBackground,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text("I.A Off-line") },
-                actions = {
-                    HomeIconButton(Icons.Default.Code, "Canvas de código", CatalogEmerald, onOpenCodeEditor)
-                    HomeIconButton(Icons.Default.Settings, "Configurações", CatalogMuted, onOpenSettings)
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = CatalogBackground,
-                    titleContentColor = CatalogText,
-                ),
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CatalogBackground)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "IA NO APARELHO",
+                        color = CatalogText,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.7.sp,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        HomeIconButton(Icons.Default.Code, "Canvas de código", CatalogEmerald, onOpenCodeEditor)
+                        HomeIconButton(Icons.Default.Settings, "Configurações", CatalogMuted, onOpenSettings)
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xCC1E293B), RoundedCornerShape(8.dp))
+                            .border(1.dp, CatalogBorderLight.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 9.dp, vertical = 5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "v${BuildConfig.VERSION_NAME}",
+                            color = CatalogCyanLight,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    CatalogPill(
+                        text = "100% offline",
+                        foreground = CatalogCyanLight,
+                        background = Color(0x2622D3EE),
+                        border = CatalogCyan.copy(alpha = 0.35f),
+                    )
+                }
+                Text(
+                    text = "Execução local, segura e privada: nenhum dado sai do celular",
+                    color = CatalogMuted,
+                    fontSize = 10.sp,
+                )
+            }
         },
     ) { padding ->
         // The banner is pinned to the bottom, outside the content, so it is always visible.
@@ -244,54 +284,6 @@ private fun HomeActionsSection(
     onOpenApi: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    Text(
-                        text = "IA NO APARELHO",
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.7.sp,
-                    )
-                    CatalogPill(
-                        text = "100% offline",
-                        foreground = CatalogCyanLight,
-                        background = Color(0x2622D3EE),
-                        border = CatalogCyan.copy(alpha = 0.35f),
-                    )
-                }
-                Text(
-                    text = "Execução local, segura e privada: nenhum dado sai do celular",
-                    color = CatalogMuted,
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .background(Color(0xCC1E293B), RoundedCornerShape(8.dp))
-                    .border(1.dp, CatalogBorderLight.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 9.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "v${BuildConfig.VERSION_NAME}",
-                    color = CatalogCyanLight,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-        }
-
         HomeStartChatButton(onClick = onStartChat)
         HomeApiButton(running = apiRunning, onClick = onOpenApi)
     }
