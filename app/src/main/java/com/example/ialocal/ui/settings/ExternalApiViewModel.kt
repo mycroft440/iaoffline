@@ -15,6 +15,7 @@ import com.example.ialocal.api.SavedRemoteConversation
 import com.example.ialocal.api.SavedRemoteMessage
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.data.PendingAttachment
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -142,6 +143,35 @@ class ExternalApiViewModel(
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) { _notice.value = error.message ?: "Falha ao importar anexo." }
             finally { _processingAttachment.value = false }
+        }
+    }
+
+    /** Offline voice recording is transcribed on-device before being sent to the remote provider. */
+    fun attachRecordedAudio(attachment: PendingAttachment) {
+        if (_processingAttachment.value || _busy.value) {
+            File(attachment.localPath).delete()
+            return
+        }
+        viewModelScope.launch {
+            _processingAttachment.value = true
+            try {
+                val prepared = processor.enrich(attachment)
+                val text = prepared.extractedText?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalArgumentException("Não foi possível transcrever este áudio.")
+                _attachments.value = _attachments.value + RemoteDraftAttachment(
+                    attachment.id,
+                    attachment.fileName,
+                    text,
+                )
+                _notice.value = "Áudio transcrito localmente. A transcrição será enviada à API ao enviar."
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                _notice.value = error.message ?: "Falha ao processar gravação."
+            } finally {
+                withContext(Dispatchers.IO) { runCatching { File(attachment.localPath).delete() } }
+                _processingAttachment.value = false
+            }
         }
     }
 
