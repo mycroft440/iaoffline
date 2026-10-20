@@ -69,6 +69,31 @@ class CatalogGroupsTest {
     }
 
     @Test
+    fun featuresEveryMoeUnderFourteenBWithoutPretendingAllFitRam() {
+        val free = 4_000_000_000L
+        val actual = featuredMoeModels(ModelCatalog.entries, free)
+        val expected = ModelCatalog.entries.filter { it.isMoe && it.totalParametersBillions < 14.0 }
+        assertTrue(expected.isNotEmpty())
+        assertEquals(expected.toSet(), actual.toSet())
+        assertEquals(expected.size, actual.size)
+        assertTrue(actual.all { it.isMoe && it.totalParametersBillions < 14.0 })
+        assertTrue(actual.zipWithNext().none {
+            estimatedCatalogRamBytes(it.first) > free && estimatedCatalogRamBytes(it.second) <= free
+        })
+        assertTrue(actual.any { it.totalParametersBillions in 7.5..8.5 })
+    }
+
+    @Test
+    fun featuredMoeIncludesModelsForEightGbPhonesAndRetainsHighMemoryWarning() {
+        val eightGbAvailable = 8_000_000_000L
+        val result = featuredMoeModels(ModelCatalog.entries, eightGbAvailable)
+        val fitting = result.filter { estimatedCatalogRamBytes(it) <= eightGbAvailable }
+        assertTrue(fitting.isNotEmpty())
+        assertEquals(fitting.size, result.takeWhile { estimatedCatalogRamBytes(it) <= eightGbAvailable }.size)
+        assertTrue(result.none { it.totalParametersBillions >= 14.0 })
+    }
+
+    @Test
     fun recommendsEveryModelThatFitsCurrentFreeRamWithoutLimitsPerCompany() {
         val free = 6L * 1024 * 1024 * 1024
         val recommended = recommendedModels(ModelCatalog.entries, freeRamBytes = free)
