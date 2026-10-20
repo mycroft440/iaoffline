@@ -150,6 +150,41 @@ for name in ("load", "prepare", "benchModel", "processSystemPrompt", "processUse
         f"    private external fun {name}(",
     )
 
+# The conversation in the context saved to storage and restored from it (step 18 of the native patch).
+replace_once(
+    "    private external fun processHistoryMessage(role: String, content: String): Int\n",
+    "    private external fun processHistoryMessage(role: String, content: String): Int\n\n"
+    "    private external fun saveSessionState(path: String): Int\n\n"
+    "    private external fun restoreSessionState(path: String): Int\n",
+)
+replace_once(
+    "    /**\n     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]\n     */\n",
+    "    /**\n"
+    "     * Writes the conversation in the context (its memory and turns) to [path].\n"
+    "     */\n"
+    "    override suspend fun saveSession(path: String): Boolean =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            check(_state.value is InferenceEngine.State.ModelReady) {\n"
+    "                \"Cannot save the session in ${_state.value.javaClass.simpleName}!\"\n"
+    "            }\n"
+    "            saveSessionState(path) == 0\n"
+    "        }\n\n"
+    "    /**\n"
+    "     * Replaces the context with the conversation saved in [path]; returns its tokens, or -1.\n"
+    "     */\n"
+    "    override suspend fun restoreSession(path: String): Int =\n"
+    "        withContext(llamaDispatcher) {\n"
+    "            check(_state.value is InferenceEngine.State.ModelReady) {\n"
+    "                \"Cannot restore a session in ${_state.value.javaClass.simpleName}!\"\n"
+    "            }\n"
+    "            _state.value = InferenceEngine.State.ProcessingSystemPrompt\n"
+    "            val tokens = restoreSessionState(path)\n"
+    "            _state.value = InferenceEngine.State.ModelReady\n"
+    "            tokens\n"
+    "        }\n\n"
+    "    /**\n     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]\n     */\n",
+)
+
 path.write_text(text)
 print("Applied IA Offline inference-engine recovery patch")
 PY
@@ -169,7 +204,15 @@ text = text.replace(
     "    /**\n"
     "     * Adds an earlier turn (\"user\" or \"assistant\") after the system prompt, without generating.\n"
     "     */\n"
-    "    suspend fun addHistoryMessage(role: String, content: String)\n",
+    "    suspend fun addHistoryMessage(role: String, content: String)\n\n"
+    "    /**\n"
+    "     * Writes the conversation in the context (its memory and turns) to [path]; false if it could not.\n"
+    "     */\n"
+    "    suspend fun saveSession(path: String): Boolean\n\n"
+    "    /**\n"
+    "     * Replaces the context with the conversation saved in [path]: its tokens, or -1 if it could not.\n"
+    "     */\n"
+    "    suspend fun restoreSession(path: String): Int\n",
     1,
 )
 path.write_text(text)
@@ -1151,6 +1194,124 @@ replace_once(
     "    // Infinite text generation via context shifting\n",
     "    iaoffline_update_threads(g_context);\n\n"
     "    // Infinite text generation via context shifting\n",
+)
+
+# 18. The conversation in the context, saved to storage after an answer (saveSessionState) and
+#     restored when the app goes back to it after the model was freed or the AI process stopped
+#     (restoreSessionState): the memory of the sequence (KV cache, recurrent state) in llama.cpp's
+#     own file, and next to it (".meta") the turns that format the next message and the positions.
+#     Reading a long conversation again with a large model takes minutes on a phone's CPU; restoring
+#     its state reads a file. llama.cpp rejects a state that does not fit this context (another
+#     cache type, a smaller context) and the app then reads the conversation as before.
+replace_once(
+    "static bool is_valid_utf8(const char *string) {",
+    "constexpr int32_t                         IAOFFLINE_SESSION_VERSION = 1;\n"
+    "constexpr uint32_t                        IAOFFLINE_MAX_SESSION_MESSAGES = 100000;\n"
+    "constexpr uint32_t                        IAOFFLINE_MAX_SESSION_TEXT = 64u * 1024 * 1024;\n\n"
+    "// Header of the \".meta\" file: version, position, system prompt position, newline, template mode, turns.\n"
+    "struct iaoffline_session_header {\n"
+    "    int32_t version;\n"
+    "    int32_t position;\n"
+    "    int32_t system_prompt_position;\n"
+    "    int32_t ends_with_newline;\n"
+    "    int32_t template_mode;\n"
+    "    uint32_t messages;\n"
+    "};\n\n"
+    "static bool iaoffline_write_session_meta(const std::string &path) {\n"
+    "    FILE *file = fopen(path.c_str(), \"wb\");\n"
+    "    if (file == nullptr) return false;\n"
+    "    const iaoffline_session_header header = {\n"
+    "            IAOFFLINE_SESSION_VERSION, (int32_t) current_position, (int32_t) system_prompt_position,\n"
+    "            g_kv_ends_with_newline ? 1 : 0, (int32_t) g_template_mode, (uint32_t) chat_msgs.size()};\n"
+    "    bool ok = fwrite(&header, sizeof(header), 1, file) == 1;\n"
+    "    for (const auto &msg : chat_msgs) {\n"
+    "        for (const std::string *part : {&msg.role, &msg.content}) {\n"
+    "            const uint32_t size = (uint32_t) part->size();\n"
+    "            ok = ok && fwrite(&size, sizeof(size), 1, file) == 1 &&\n"
+    "                 (size == 0 || fwrite(part->data(), 1, size, file) == size);\n"
+    "        }\n"
+    "    }\n"
+    "    return fclose(file) == 0 && ok;\n"
+    "}\n\n"
+    "static bool iaoffline_read_session_meta(const std::string &path, iaoffline_session_header &header,\n"
+    "                                        std::vector<common_chat_msg> &msgs) {\n"
+    "    FILE *file = fopen(path.c_str(), \"rb\");\n"
+    "    if (file == nullptr) return false;\n"
+    "    bool ok = fread(&header, sizeof(header), 1, file) == 1 && header.version == IAOFFLINE_SESSION_VERSION &&\n"
+    "              header.messages <= IAOFFLINE_MAX_SESSION_MESSAGES && header.position > 0 &&\n"
+    "              header.system_prompt_position >= 0 && header.system_prompt_position <= header.position &&\n"
+    "              header.template_mode >= (int32_t) iaoffline_template_mode::BUILT_IN &&\n"
+    "              header.template_mode <= (int32_t) iaoffline_template_mode::PLAIN;\n"
+    "    for (uint32_t i = 0; ok && i < header.messages; i++) {\n"
+    "        common_chat_msg msg;\n"
+    "        for (std::string *part : {&msg.role, &msg.content}) {\n"
+    "            uint32_t size = 0;\n"
+    "            ok = ok && fread(&size, sizeof(size), 1, file) == 1 && size <= IAOFFLINE_MAX_SESSION_TEXT;\n"
+    "            if (!ok) break;\n"
+    "            part->resize(size);\n"
+    "            ok = size == 0 || fread(&(*part)[0], 1, size, file) == size;\n"
+    "        }\n"
+    "        if (ok) msgs.push_back(std::move(msg));\n"
+    "    }\n"
+    "    fclose(file);\n"
+    "    return ok;\n"
+    "}\n\n"
+    "static std::string iaoffline_jstring(JNIEnv *env, jstring value) {\n"
+    "    const auto *chars = env->GetStringUTFChars(value, nullptr);\n"
+    "    std::string text(chars);\n"
+    "    env->ReleaseStringUTFChars(value, chars);\n"
+    "    return text;\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_saveSessionState(JNIEnv *env, jobject /*unused*/, jstring jpath) {\n"
+    "    const std::string path = iaoffline_jstring(env, jpath);\n"
+    "    const std::string meta = path + \".meta\";\n"
+    "    const std::string partial = path + \".partial\";\n"
+    "    const std::string meta_partial = meta + \".partial\";\n"
+    "    // Both written aside and renamed, so a write cut short never leaves a state with the wrong turns.\n"
+    "    unlink(meta.c_str());\n"
+    "    if (current_position <= 0 || llama_state_seq_save_file(g_context, partial.c_str(), 0, nullptr, 0) == 0 ||\n"
+    "        !iaoffline_write_session_meta(meta_partial) || rename(partial.c_str(), path.c_str()) != 0 ||\n"
+    "        rename(meta_partial.c_str(), meta.c_str()) != 0) {\n"
+    "        unlink(partial.c_str());\n"
+    "        unlink(meta_partial.c_str());\n"
+    "        unlink(meta.c_str());\n"
+    "        LOGw(\"%s: could not save the conversation\", __func__);\n"
+    "        return 1;\n"
+    "    }\n"
+    "    LOGi(\"%s: saved the conversation (%d tokens, %zu turns)\", __func__, (int) current_position, chat_msgs.size());\n"
+    "    return 0;\n"
+    "}\n\n"
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_restoreSessionState(JNIEnv *env, jobject /*unused*/, jstring jpath) {\n"
+    "    const std::string path = iaoffline_jstring(env, jpath);\n"
+    "    reset_long_term_states();\n"
+    "    reset_short_term_states();\n"
+    "    // Repetition penalties must not carry over from another conversation.\n"
+    "    common_sampler_reset(g_sampler);\n"
+    "    setenv(\"IAOFFLINE_SESSION_CLEAN\", \"0\", 1);\n"
+    "    iaoffline_session_header header{};\n"
+    "    std::vector<common_chat_msg> msgs;\n"
+    "    llama_token unused = 0;\n"
+    "    size_t n_tokens = 0;\n"
+    "    if (!iaoffline_read_session_meta(path + \".meta\", header, msgs) ||\n"
+    "        llama_state_seq_load_file(g_context, path.c_str(), 0, &unused, 1, &n_tokens) == 0 ||\n"
+    "        llama_memory_seq_pos_max(llama_get_memory(g_context), 0) + 1 != header.position) {\n"
+    "        LOGw(\"%s: the saved conversation does not fit this context; reading it instead\", __func__);\n"
+    "        reset_long_term_states();\n"
+    "        return -1;\n"
+    "    }\n"
+    "    chat_msgs = std::move(msgs);\n"
+    "    current_position = header.position;\n"
+    "    system_prompt_position = header.system_prompt_position;\n"
+    "    g_kv_ends_with_newline = header.ends_with_newline != 0;\n"
+    "    g_template_mode = (iaoffline_template_mode) header.template_mode;\n"
+    "    LOGi(\"%s: restored the conversation (%d tokens, %zu turns)\", __func__, (int) current_position, chat_msgs.size());\n"
+    "    return current_position;\n"
+    "}\n\n"
+    "static bool is_valid_utf8(const char *string) {",
 )
 
 path.write_text(text)

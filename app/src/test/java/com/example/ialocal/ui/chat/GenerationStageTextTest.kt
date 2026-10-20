@@ -34,6 +34,21 @@ class GenerationStageTextTest {
             "Aguardando a IA terminar a resposta de outra conversa",
             stageText(GenerationStage(Kind.WAITING_FOR_AI, GenerationStage.BUSY_ANSWER), finished = false),
         )
+        assertEquals(
+            "Aguardando a IA salvar a conversa anterior",
+            stageText(GenerationStage(Kind.WAITING_FOR_AI, GenerationStage.BUSY_SAVE), finished = false),
+        )
+    }
+
+    @Test
+    fun aConversationBackFromStorageSaysSo() {
+        val stage = GenerationStage(Kind.CONTEXT_REUSED, GenerationStage.REUSED_STORAGE)
+        assertEquals("Restaurando a conversa salva no armazenamento", stageText(stage, finished = false))
+        assertEquals("Conversa restaurada do armazenamento, sem lê-la de novo", stageText(stage, finished = true))
+        assertEquals(
+            "Conversa já está na memória da IA",
+            stageText(GenerationStage(Kind.CONTEXT_REUSED, GenerationStage.REUSED_SESSION), finished = true),
+        )
     }
 
     @Test

@@ -27,6 +27,8 @@ internal fun stageText(stage: GenerationStage, finished: Boolean): String {
                 if (finished) "Teste de outra IA concluído" else "Aguardando o teste de outra IA terminar"
             GenerationStage.BUSY_LOAD ->
                 if (finished) "Carregamento anterior concluído" else "Aguardando a IA terminar de carregar um modelo"
+            GenerationStage.BUSY_SAVE ->
+                if (finished) "Conversa anterior salva" else "Aguardando a IA salvar a conversa anterior"
             else ->
                 if (finished) "Resposta de outra conversa concluída"
                 else "Aguardando a IA terminar a resposta de outra conversa"
@@ -42,9 +44,13 @@ internal fun stageText(stage: GenerationStage, finished: Boolean): String {
         Kind.READING_HISTORY ->
             if (finished) "Conversa lida (${messagesText(stage.total)})"
             else "Lendo a conversa: mensagem ${stage.done} de ${stage.total}"
-        Kind.CONTEXT_REUSED ->
-            if (detail == GenerationStage.REUSED_PREFILL) "Conversa já lida enquanto você escrevia"
-            else "Conversa já está na memória da IA"
+        Kind.CONTEXT_REUSED -> when (detail) {
+            GenerationStage.REUSED_PREFILL -> "Conversa já lida enquanto você escrevia"
+            GenerationStage.REUSED_STORAGE ->
+                if (finished) "Conversa restaurada do armazenamento, sem lê-la de novo"
+                else "Restaurando a conversa salva no armazenamento"
+            else -> "Conversa já está na memória da IA"
+        }
         Kind.CONSULTING_WIKIPEDIA ->
             if (finished) "Wikipédia offline consultada" else "Consultando a Wikipédia offline"
         Kind.READING_MESSAGE -> when {

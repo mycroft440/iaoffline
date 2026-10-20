@@ -13,7 +13,10 @@ import com.example.ialocal.models.ModelCatalog
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +26,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -59,6 +63,10 @@ class LlamaCppRuntime(
     @Volatile private var busyWith: String? = null
     /** Cores the native threads fill in with only up to 4, read once from /proc/cpuinfo. */
     private val efficiencyCpus by lazy { CpuCores.efficiencyCpus() }
+    /** The last conversation answered, kept on storage with its native context. */
+    private val savedSessions = SessionStore.of(appContext)
+    /** Writes [savedSessions] after an answer, once the model is free. */
+    private val background = CoroutineScope(SupervisorJob() + nativeDispatcher)
 
     private data class Primed(val modelId: String, val key: String, val history: List<AiChatMessage>)
 
@@ -169,6 +177,12 @@ class LlamaCppRuntime(
             } else if (ready == Primed(model.id, sessionKey, prepared.history)) {
                 onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_PREFILL))
                 logger?.info("PROMPT_TEMPLATE", "Instruções e ${prepared.history.size} turnos já processados antes do envio")
+            } else if (
+                restoreSaved(model, sessionKey, prepared.conversation, onStage) { saved ->
+                    saved.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)
+                } != null
+            ) {
+                // The context holds the conversation again, as right after its last answer.
             } else {
                 if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
                 setSystemPrompt(model, prepared.systemPrompt, turn, onStage)
@@ -202,18 +216,21 @@ class LlamaCppRuntime(
             require(reply.isNotEmpty()) { "O modelo terminou sem produzir texto." }
             val ended = runCatching { Os.getenv(SESSION_CLEAN_ENV) == "1" }.getOrDefault(false)
             val tokens = runCatching { Os.getenv(SESSION_TOKENS_ENV)?.toIntOrNull() }.getOrNull()
+            val answerSpeed = AnswerSpeed.parse(runCatching { Os.getenv(PERF_ENV) }.getOrNull())
             if (ended && tokens != null) {
-                session = ChatSession(
+                val finished = ChatSession(
                     modelId = model.id,
                     key = sessionKey,
                     conversation = prepared.conversation + AiChatMessage(PromptContextBuilder.USER, prepared.latestUser),
                     reply = reply.toString(),
                     tokens = tokens,
                 )
+                session = finished
+                if (SessionStore.worthSaving(tokens, answerSpeed)) saveWhenFree(finished)
             }
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Resposta concluída (${reply.length} caracteres)")
-            AnswerSpeed.parse(runCatching { Os.getenv(PERF_ENV) }.getOrNull())?.let { speed ->
+            answerSpeed?.let { speed ->
                 logger?.info("SPEED", speed.describe(ioBefore, ProcessIo.read()))
                 onStage(
                     GenerationStage(
@@ -276,6 +293,10 @@ class LlamaCppRuntime(
         primed = null
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         try {
+            restoreSaved(model, key, prepared.conversation)?.let { saved ->
+                session = saved
+                return
+            }
             runCatching { Os.setenv(THINKING_ENV, if (prefill.turn.templateThinking) "1" else "0", true) }
             setSystemPrompt(model, prepared.systemPrompt, prefill.turn)
             for (message in prepared.history) {
@@ -326,6 +347,67 @@ class LlamaCppRuntime(
             ),
         )
         engine.setSystemPrompt(systemPrompt)
+    }
+
+    /**
+     * Restores the conversation saved on storage when [conversation] (the turns before the next
+     * message) continues it and [fits] it, instead of reading it again. Returns it when the native
+     * context holds it again, as right after its last answer.
+     */
+    private suspend fun restoreSaved(
+        model: AiModelEntity,
+        key: String,
+        conversation: List<AiChatMessage>,
+        onStage: (GenerationStage) -> Unit = {},
+        fits: (ChatSession) -> Boolean = { true },
+    ): ChatSession? {
+        val saved = savedSessions.load()
+            ?.takeIf { it.continuesWith(model.id, key, conversation) && fits(it) }
+            ?: return null
+        val tokens = try {
+            engine.restoreSession(savedSessions.stateFile.path)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            logger?.error("PROMPT_TEMPLATE", "Falha ao restaurar a conversa salva", t)
+            -1
+        }
+        if (tokens != saved.tokens) {
+            logger?.info("PROMPT_TEMPLATE", "A conversa salva não coube no contexto carregado; lendo a conversa")
+            return null
+        }
+        onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_STORAGE))
+        logger?.info("PROMPT_TEMPLATE", "Conversa restaurada do armazenamento ($tokens tokens), sem lê-la de novo")
+        return saved
+    }
+
+    /**
+     * Writes [finished] to storage shortly after the answer, unless something else used the context
+     * first: a tool's result or the next message continues it live, and saves its own answer.
+     */
+    private fun saveWhenFree(finished: ChatSession) {
+        background.launch {
+            delay(SAVE_DELAY_MS)
+            mutex.withLock {
+                if (session !== finished || loadedModelId != finished.modelId) return@withLock
+                busyWith = GenerationStage.BUSY_SAVE
+                try {
+                    val file = savedSessions.beginSave()
+                    if (engine.saveSession(file.path)) {
+                        savedSessions.finishSave(finished)
+                        logger?.info("PROMPT_TEMPLATE", "Conversa salva no armazenamento (${finished.tokens} tokens)")
+                    } else {
+                        logger?.info("PROMPT_TEMPLATE", "Não foi possível salvar a conversa no armazenamento")
+                    }
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (t: Throwable) {
+                    logger?.error("PROMPT_TEMPLATE", "Falha ao salvar a conversa no armazenamento", t)
+                } finally {
+                    busyWith = null
+                }
+            }
+        }
     }
 
     private fun sessionKey(systemPrompt: String, templateThinking: Boolean) =
@@ -530,6 +612,8 @@ class LlamaCppRuntime(
         private const val SYSTEM_PROMPT_TAIL_ENV = "IAOFFLINE_SYSTEM_PROMPT_TAIL"
         private const val EFFICIENCY_CPUS_ENV = "IAOFFLINE_EFFICIENCY_CPUS"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
+        /** A tool round starts right after the answer that asked for it; then there is nothing to save. */
+        private const val SAVE_DELAY_MS = 1_500L
         private const val MB = 1024L * 1024
     }
 }

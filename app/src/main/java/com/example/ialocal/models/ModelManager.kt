@@ -9,6 +9,7 @@ import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.PromptCache
 import com.example.ialocal.runtime.RuntimeState
+import com.example.ialocal.runtime.SessionStore
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -469,6 +470,7 @@ class ModelManager(
         repository.deleteModel(modelId)
         crashGuard?.forget(modelId)
         PromptCache.forget(appContext, modelId)
+        SessionStore.of(appContext).forget(modelId)
     }
 
     suspend fun unload() = runtime.unload()

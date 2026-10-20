@@ -23,7 +23,7 @@ data class GenerationStage(
         VERIFYING,
         /** The AI process or its native engine is starting. */
         STARTING_AI,
-        /** The AI is busy ([detail]: [BUSY_PREFILL], [BUSY_LOAD], [BUSY_ANSWER] or [BUSY_VERIFY]). */
+        /** The AI is busy ([detail]: [BUSY_PREFILL], [BUSY_LOAD], [BUSY_ANSWER], [BUSY_VERIFY] or [BUSY_SAVE]). */
         WAITING_FOR_AI,
         LOADING_MODEL,
         /** The profile's instructions, already processed for this model, come from the saved cache. */
@@ -31,7 +31,10 @@ data class GenerationStage(
         READING_INSTRUCTIONS,
         /** The earlier turns of the conversation: [done] of [total]. */
         READING_HISTORY,
-        /** The conversation is already in the model's memory ([detail]: [REUSED_SESSION] or [REUSED_PREFILL]). */
+        /**
+         * The conversation is already in the model's memory ([detail]: [REUSED_SESSION] or
+         * [REUSED_PREFILL]), or comes back to it from storage ([REUSED_STORAGE]).
+         */
         CONTEXT_REUSED,
         CONSULTING_WIKIPEDIA,
         /** The new message ([detail] [MESSAGE_TOOL_RESULT] for a tool's result) before the first word. */
@@ -61,8 +64,11 @@ data class GenerationStage(
         const val BUSY_ANSWER = "answer"
         const val BUSY_VERIFY = "verify"
         const val BUSY_LOAD = "load"
+        /** Writing the conversation it just answered to storage. */
+        const val BUSY_SAVE = "save"
         const val REUSED_SESSION = "session"
         const val REUSED_PREFILL = "prefill"
+        const val REUSED_STORAGE = "storage"
         const val MESSAGE_TOOL_RESULT = "tool"
 
         /** Null for anything that is not a stage, such as one from a newer version of the app. */
