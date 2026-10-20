@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class RemoteDraftAttachment(val id: String, val name: String, val extractedText: String)
@@ -67,6 +69,7 @@ class ExternalApiViewModel(
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
     private var answerJob: Job? = null
+    private val historyWriteMutex = Mutex()
 
     fun clearNotice() { _notice.value = null }
 
@@ -332,10 +335,12 @@ class ExternalApiViewModel(
     }
 
     private fun writeHistory() {
-        val snapshot = _conversations.value
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { store.save(snapshot) }
-                .onFailure { _notice.value = "Não foi possível salvar o histórico online." }
+            runCatching {
+                // Read the latest snapshot only after acquiring the write lock. Otherwise a
+                // slow previous save could overwrite newer streamed tokens or newer chats.
+                historyWriteMutex.withLock { store.save(_conversations.value) }
+            }.onFailure { _notice.value = "Não foi possível salvar o histórico online." }
         }
     }
 
