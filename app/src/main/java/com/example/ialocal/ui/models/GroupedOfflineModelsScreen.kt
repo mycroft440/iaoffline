@@ -105,7 +105,7 @@ fun GroupedOfflineModelsScreen(
     viewModel: ModelsViewModel,
     adsEnabled: Boolean,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
-    onDownloadStarted: () -> Unit,
+    onRequestRewardedDownload: (String, () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
@@ -163,7 +163,9 @@ fun GroupedOfflineModelsScreen(
             installedModel = installed,
             onInstall = {
                 onEnsureStorageAccess {
-                    if (viewModel.downloadCatalogModel(catalogModel.id)) onDownloadStarted()
+                    onRequestRewardedDownload(catalogModel.displayName) {
+                        viewModel.downloadCatalogModel(catalogModel.id)
+                    }
                 }
             },
             onPause = viewModel::cancelDownload,
@@ -904,7 +906,7 @@ private fun HtmlCatalogInstallCard(
 
                 else -> {
                     CatalogActionButton(
-                        text = if (compatibility.canRunComfortably) "↓  Instalar I.A" else "↓  Instalar (Alta Exigência)",
+                        text = if (compatibility.canRunComfortably) "▶  Anúncio e instalar" else "▶  Anúncio e instalar (RAM alta)",
                         modifier = Modifier.weight(1f),
                         background = if (compatibility.canRunComfortably) {
                             Brush.horizontalGradient(listOf(CatalogCyan, Color(0xFF3B82F6)))
