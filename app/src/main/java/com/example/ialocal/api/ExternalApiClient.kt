@@ -23,6 +23,10 @@ data class RemoteChatTurn(val role: String, val content: String)
  * Auth is sent only to the explicitly configured HTTPS host; redirects are never followed.
  */
 class ExternalApiClient {
+    @Volatile private var activeChatConnection: HttpURLConnection? = null
+
+    fun cancelChat() { activeChatConnection?.disconnect() }
+
     suspend fun fetchModels(connection: RemoteApiConnection, apiKey: String): List<RemoteApiModel> =
         withContext(Dispatchers.IO) {
             require(apiKey.isNotBlank()) { "Configure sua chave de API primeiro." }
@@ -52,6 +56,7 @@ class ExternalApiClient {
         require(apiKey.isNotBlank()) { "Configure sua chave de API primeiro." }
         require(connection.modelId.isNotBlank()) { "Escolha um modelo da API." }
         val http = open(connection, apiKey, "/chat/completions", "POST")
+        activeChatConnection = http
         val job = currentCoroutineContext()[Job]
         val cancellation = job?.invokeOnCompletion { http.disconnect() }
         try {
@@ -87,6 +92,7 @@ class ExternalApiClient {
         } finally {
             cancellation?.dispose()
             http.disconnect()
+            if (activeChatConnection === http) activeChatConnection = null
         }
     }.flowOn(Dispatchers.IO)
 
