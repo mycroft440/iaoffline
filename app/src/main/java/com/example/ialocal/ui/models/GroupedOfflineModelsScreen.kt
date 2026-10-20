@@ -1,6 +1,5 @@
 package com.example.ialocal.ui.models
 
-import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -61,7 +60,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,9 +77,9 @@ import com.example.ialocal.models.DownloadEntryStatus
 import com.example.ialocal.models.ModelDownloadPhase
 import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelProvider
-import com.example.ialocal.runtime.DeviceMemory
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.formatAdvertisedGb
+import com.example.ialocal.ui.rememberLiveMemory
 import kotlinx.coroutines.launch
 
 private data class CatalogHardwareSnapshot(
@@ -112,8 +110,12 @@ fun GroupedOfflineModelsScreen(
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val context = LocalContext.current
-    val hardware = remember(context) { readCatalogHardwareSnapshot(context) }
+    // Read Android's available RAM again while the screen is visible, instead of only on entry.
+    val liveMemory = rememberLiveMemory()
+    val hardware = CatalogHardwareSnapshot(
+        advertisedRamGb = liveMemory.advertisedGigabytes,
+        availableRamBytes = liveMemory.availableBytes,
+    )
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
@@ -140,13 +142,8 @@ fun GroupedOfflineModelsScreen(
         }.toMap()
     }
     val downloadsByCatalogId = remember(downloads) { downloads.associateBy { it.model.id } }
-    val recommendation = remember(catalog, hardware, installedByCatalogId) {
-        recommendedModels(
-            catalog = catalog,
-            freeRamBytes = hardware.availableRamBytes,
-            deviceRamBytes = deviceRamBytes,
-            installedIds = installedByCatalogId.keys,
-        )
+    val recommendation = remember(catalog, hardware.availableRamBytes) {
+        recommendedModels(catalog = catalog, freeRamBytes = hardware.availableRamBytes)
     }
     // The banner, then the recommendations with their heading.
     val selectorIndex = 1 + if (recommendation.models.isEmpty()) 0 else 1 + recommendation.models.size
@@ -237,6 +234,7 @@ fun GroupedOfflineModelsScreen(
                     RecommendedSectionHeader(
                         freeRamBytes = hardware.availableRamBytes,
                         fitFreeRam = recommendation.fitFreeRam,
+                        modelCount = recommendation.models.size,
                     )
                 }
                 items(
@@ -456,7 +454,7 @@ private fun CompanyFilterChip(
 
 /** Opens the recommendations: the models that fit the RAM free right now. */
 @Composable
-private fun RecommendedSectionHeader(freeRamBytes: Long, fitFreeRam: Boolean) {
+private fun RecommendedSectionHeader(freeRamBytes: Long, fitFreeRam: Boolean, modelCount: Int) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = Modifier
@@ -472,7 +470,7 @@ private fun RecommendedSectionHeader(freeRamBytes: Long, fitFreeRam: Boolean) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "Recomendadas para o seu telefone",
+                text = "Recomendadas para sua RAM livre",
                 color = CatalogText,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -487,9 +485,11 @@ private fun RecommendedSectionHeader(freeRamBytes: Long, fitFreeRam: Boolean) {
         }
         Text(
             text = if (fitFreeRam) {
-                "As mais capazes que cabem na RAM livre agora."
+                "Todas as $modelCount I.As com RAM estimada dentro da memória livre agora, sem " +
+                    "limite por fabricante. A lista é atualizada automaticamente."
             } else {
-                "Pouca RAM livre agora: feche apps em segundo plano. Estas são as mais leves."
+                "Nenhuma I.A cabe na RAM livre atual. Estas são as $modelCount de menor consumo " +
+                    "estimado: talvez não caibam agora. Feche outros apps para liberar memória."
             },
             color = if (fitFreeRam) CatalogMuted else CatalogAmber,
             fontSize = 11.sp,
@@ -996,12 +996,8 @@ private fun ModelSpecsGrid(
                 .background(CatalogBorder),
         )
         SpecCell(
-            label = if (model.isMoe) "RAM (EST.)" else if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
-            value = if (model.isMoe) {
-                "~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))}"
-            } else {
-                "${formatRamRequirement(model.recommendedRamBytes)} RAM"
-            },
+            label = "RAM (EST.)",
+            value = "~${formatRamEstimate(estimatedCatalogRamBytes(model))}",
             valueColor = requirementAccent,
             modifier = Modifier.weight(1f),
         )
@@ -1102,7 +1098,7 @@ private fun ModelDetailsDialog(
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
                 if (model.isMoe) {
                     Text(
-                        "RAM estimada com os pesos residentes: ~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))} " +
+                        "RAM estimada com os pesos residentes: ~${formatRamEstimate(estimatedFullMoeRamBytes(model))} " +
                             "(arquivo GGUF + 256 MiB de contexto mínimo + 512 MiB de buffers). " +
                             "É uma referência, não consumo medido nem pico garantido."
                     )
@@ -1113,7 +1109,11 @@ private fun ModelDetailsDialog(
                             "e levando mais tempo. Contextos maiores ou repacking podem elevar o consumo."
                     )
                 } else {
-                    Text("Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM")
+                    Text(
+                        "RAM estimada com os pesos residentes: ~${formatRamEstimate(estimatedCatalogRamBytes(model))} " +
+                            "(GGUF + contexto mínimo e buffers). Estimativa, não consumo medido."
+                    )
+                    Text("RAM recomendada do aparelho: ${formatRamRequirement(model.recommendedRamBytes)}.")
                 }
                 Text(
                     text = compatibility.label,
@@ -1128,57 +1128,28 @@ private fun ModelDetailsDialog(
     )
 }
 
-private fun readCatalogHardwareSnapshot(context: Context): CatalogHardwareSnapshot {
-    val memory = DeviceMemory.read(context)
-    return CatalogHardwareSnapshot(
-        advertisedRamGb = memory.advertisedGigabytes,
-        availableRamBytes = memory.availableBytes,
-    )
-}
-
 private fun catalogCompatibility(
     model: CatalogModel,
     hardware: CatalogHardwareSnapshot,
 ): CatalogCompatibility {
-    // Phone RAM is a recommendation; the estimate below is the GGUF plus the smallest KV cache
-    // and compute buffers. MoE weights may remain file-backed with mmap, but no catalog estimate
-    // proves that the model will load or predicts its measured resident memory.
-    val deviceRamBytes = hardware.deviceRamBytes
+    // Same free-RAM criterion as recommendations, with no guarantee of successful loading.
     return when {
-        model.isMoe && deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
-            label = "RAM abaixo da ideal",
-            accent = CatalogAmber,
-            canRunComfortably = false,
-        )
-
-        model.isMoe && hardware.availableRamBytes < estimatedFullMoeRamBytes(model) -> CatalogCompatibility(
-            label = "Pode usar armazenamento",
-            accent = CatalogAmber,
-            canRunComfortably = false,
-        )
-
-        model.isMoe -> CatalogCompatibility(
+        hardware.availableRamBytes >= estimatedCatalogRamBytes(model) -> CatalogCompatibility(
             label = "RAM estimada suficiente",
             accent = CatalogEmerald,
             canRunComfortably = true,
         )
 
-        deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
-            label = "Requer ${formatRamRequirement(model.recommendedRamBytes)} RAM",
-            accent = CatalogRose,
+        model.isMoe -> CatalogCompatibility(
+            label = "Pode usar armazenamento",
+            accent = CatalogAmber,
             canRunComfortably = false,
         )
 
-        hardware.availableRamBytes < model.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES -> CatalogCompatibility(
-            label = "Atenção: RAM Justa",
-            accent = CatalogAmber,
-            canRunComfortably = true,
-        )
-
         else -> CatalogCompatibility(
-            label = "100% Compatível",
-            accent = CatalogEmerald,
-            canRunComfortably = true,
+            label = "RAM livre insuficiente",
+            accent = CatalogRose,
+            canRunComfortably = false,
         )
     }
 }
@@ -1202,8 +1173,8 @@ private fun groupedFormatParameters(value: Double): String =
         "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
     }
 
-/** Decimal GB for MoE RAM estimates, consistent with phone RAM capacities. */
-private fun formatMoeRamEstimate(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
+/** Decimal GB for full-weight RAM estimates of MoE and dense GGUF models. */
+private fun formatRamEstimate(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
 
 /** Catalog requirements are written in the gigabytes phones are sold with: 12_000_000_000 is "12 GB". */
 private fun formatRamRequirement(bytes: Long): String = formatAdvertisedGb(bytes / 1_000_000_000.0)
