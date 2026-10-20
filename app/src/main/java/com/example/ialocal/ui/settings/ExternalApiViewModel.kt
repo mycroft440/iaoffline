@@ -1,6 +1,8 @@
 package com.example.ialocal.ui.settings
 
+import android.content.Context
 import android.net.Uri
+import com.example.ialocal.api.RemoteApiResponseService
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -43,6 +45,7 @@ class ExternalApiViewModel(
     private val importer: AttachmentImporter,
     private val processor: AttachmentContentProcessor,
     private val modelRepository: ModelRepository,
+    private val appContext: Context,
     private val client: ExternalApiClient = ExternalApiClient(),
 ) : ViewModel() {
     private val _config = MutableStateFlow(settings.read())
@@ -289,6 +292,9 @@ class ExternalApiViewModel(
         if (_busy.value) return
         _messages.value = _messages.value + SavedRemoteMessage(role = "assistant", content = "")
         _busy.value = true
+        // App-wide controller + foreground service: leaving this composable does not cancel the
+        // in-flight HTTP stream; the notification returns to this exact online conversation.
+        RemoteApiResponseService.start(appContext, _currentId.value.orEmpty())
         val answerId = _messages.value.last().id
         val previous = _messages.value.dropLast(1)
         val systemPrompt = availableProfiles.value.firstOrNull { it.displayName == _profile.value }?.systemPrompt.orEmpty()
@@ -318,6 +324,7 @@ class ExternalApiViewModel(
                 _busy.value = false
                 answerJob = null
                 persistCurrent()
+                RemoteApiResponseService.finish(appContext)
             }
         }
     }
@@ -350,10 +357,11 @@ class ExternalApiViewModel(
         private val importer: AttachmentImporter,
         private val processor: AttachmentContentProcessor,
         private val modelRepository: ModelRepository,
+        private val appContext: Context,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            ExternalApiViewModel(settings, store, importer, processor, modelRepository) as T
+            ExternalApiViewModel(settings, store, importer, processor, modelRepository, appContext) as T
     }
 
 
