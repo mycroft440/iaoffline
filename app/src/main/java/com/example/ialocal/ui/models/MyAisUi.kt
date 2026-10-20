@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.ads.rememberInlineAdBannerState
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.DownloadEntryStatus
 import com.example.ialocal.models.ModelDownloadPhase
@@ -429,6 +430,12 @@ private fun MyAiDetailedCard(
     val parameter = resolveParameter(model, catalogModel)
     val providerName = provider?.brandName() ?: model.architecture?.takeIf { it.isNotBlank() } ?: "Modelo local"
     val displayName = compactModelName(model.name, parameter)
+    val (verificationLabel, verificationColor) = when (model.verificationStatus) {
+        ModelVerificationStatus.VERIFIED.name -> "Pronta para conversar" to MyAiActive
+        ModelVerificationStatus.VERIFYING.name -> "Testando" to Color(0xFFFBBF24)
+        ModelVerificationStatus.ERROR.name -> "Erro na verificação" to MyAiDanger
+        else -> "Ainda não testada" to MyAiMuted
+    }
 
     Row(
         modifier = Modifier
@@ -475,6 +482,33 @@ private fun MyAiDetailedCard(
                 if (model.isActive) {
                     Text("  •  ativa", color = MyAiActive, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
                 }
+            }
+            // Home is only a compact preview; this page exposes the downloaded file size
+            // and verification status without requiring another tap.
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text(groupedFormatBytes(model.sizeBytes), color = MyAiMuted, fontSize = 10.sp)
+                Box(Modifier.size(5.dp).background(verificationColor, CircleShape))
+                Text(
+                    verificationLabel,
+                    color = verificationColor,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (model.verificationStatus == ModelVerificationStatus.ERROR.name && !model.lastError.isNullOrBlank()) {
+                Text(
+                    model.lastError,
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = MyAiDanger,
+                    fontSize = 9.5.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
 
