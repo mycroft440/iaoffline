@@ -32,6 +32,13 @@ data class AnswerSpeed(
     val promptMillis: Long,
     val answerTokens: Int,
     val answerMillis: Long,
+    /**
+     * Experts of a mixture of experts read from storage that the native side guessed a layer ahead
+     * while writing the answer, and how many of them the layer then picked (step 15 c of
+     * scripts/prepare_llama_android.sh). Zero for other models.
+     */
+    val guessedExperts: Int = 0,
+    val guessedRight: Int = 0,
 ) {
     /** One line for the log; [before] and [after] are the process counters around the answer. */
     fun describe(before: ProcessIo, after: ProcessIo): String = buildString {
@@ -45,14 +52,27 @@ data class AnswerSpeed(
         if (before.majorFaults != null && after.majorFaults != null) {
             append("; ${(after.majorFaults - before.majorFaults).coerceAtLeast(0L)} esperas por leitura do armazenamento")
         }
+        if (guessedExperts > 0) {
+            append("; especialistas previstos uma camada antes: ${guessedRight * 100 / guessedExperts}% certos")
+        }
     }
 
     companion object {
-        /** "prompt_tokens prompt_ms answer_tokens answer_ms", as the native side publishes it. */
+        /**
+         * "prompt_tokens prompt_ms answer_tokens answer_ms guessed_experts guessed_right", as the
+         * native side publishes it; the last two are missing in builds from before them.
+         */
         fun parse(raw: String?): AnswerSpeed? {
             val fields = raw?.trim()?.split(' ')?.map { it.toLongOrNull() ?: return null } ?: return null
-            if (fields.size != 4) return null
-            return AnswerSpeed(fields[0].toInt(), fields[1], fields[2].toInt(), fields[3])
+            if (fields.size != 4 && fields.size != 6) return null
+            return AnswerSpeed(
+                promptTokens = fields[0].toInt(),
+                promptMillis = fields[1],
+                answerTokens = fields[2].toInt(),
+                answerMillis = fields[3],
+                guessedExperts = fields.getOrNull(4)?.toInt() ?: 0,
+                guessedRight = fields.getOrNull(5)?.toInt() ?: 0,
+            )
         }
 
         private fun seconds(millis: Long) = format("%.1f s", millis / 1000.0)
