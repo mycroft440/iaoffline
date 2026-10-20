@@ -350,6 +350,15 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         accent = Color(0xFF2DD4BF),
     )
 
+    ModelProvider.ARCEE -> ProviderUiMeta(
+        selectorName = "Trinity",
+        selectorSubtitle = "Arcee AI",
+        sectionName = "Arcee AI (Trinity)",
+        badge = "MoE",
+        tagline = "Modelos esparsos da família Trinity, incluindo versões experimentais",
+        accent = Color(0xFF38BDF8),
+    )
+
     ModelProvider.SBER -> ProviderUiMeta(
         selectorName = "GigaChat",
         selectorSubtitle = "Sber",
