@@ -94,39 +94,35 @@ private fun sectionOf(model: CatalogModel, deviceRamBytes: Long): CatalogSection
     else -> CatalogSection.MOE_NEEDS_MORE_RAM
 }
 
-/** The models recommended for the RAM free right now. */
+/** Minimum planning estimate: complete quantized GGUF, minimum KV cache, and work buffers. */
+internal fun estimatedCatalogRamBytes(model: CatalogModel): Long =
+    model.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES
+
+/** How many least-RAM-hungry alternatives to show if nothing fits the currently free RAM. */
+internal const val LOW_RAM_FALLBACK_MODEL_COUNT = 5
+
+/** Recommendations recalculated using the memory Android currently reports as available. */
 internal data class CatalogRecommendation(
     val models: List<CatalogModel>,
-    /** False when nothing fits the free RAM: [models] are then the lightest ones. */
+    /** False means none fits now: [models] are the lightest alternatives. */
     val fitFreeRam: Boolean,
 )
 
 /**
- * Up to [limit] models for the phone as it is now: the largest ones (the more capable) whose file,
- * context and working memory fit [freeRamBytes], one per company so the list is not four versions
- * of the same model. Experimental MoE models (slow, from storage) and the [installedIds] are left
- * out. When nothing fits, the lightest models the phone can run are suggested instead.
+ * Recommends ALL catalog models whose full-resident minimum estimate fits in [freeRamBytes].
+ * Never drop models because of vendor, an arbitrary maximum, installed state, active MoE parameter
+ * count, or the marketed RAM capacity. This is a planning estimate, not proven runtime support.
+ * When none fit, show the five lowest estimated-RAM models as alternatives.
  */
 internal fun recommendedModels(
     catalog: List<CatalogModel>,
     freeRamBytes: Long,
-    deviceRamBytes: Long,
-    installedIds: Set<String> = emptySet(),
-    limit: Int = 3,
 ): CatalogRecommendation {
-    val candidates = catalog.filter {
-        it.id !in installedIds && !it.isExperimental && it.recommendedRamBytes <= deviceRamBytes
-    }
-    val fitting = candidates.filter { it.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES <= freeRamBytes }
-    return if (fitting.isNotEmpty()) {
-        CatalogRecommendation(
-            models = fitting.sortedByDescending { it.approximateSizeBytes }.distinctBy { it.provider }.take(limit),
-            fitFreeRam = true,
-        )
-    } else {
-        CatalogRecommendation(
-            models = candidates.sortedBy { it.approximateSizeBytes }.distinctBy { it.provider }.take(limit),
-            fitFreeRam = false,
-        )
-    }
+    val available = freeRamBytes.coerceAtLeast(0L)
+    val fits = catalog.filter { estimatedCatalogRamBytes(it) <= available }
+        .sortedWith(compareByDescending<CatalogModel> { estimatedCatalogRamBytes(it) }.thenBy { it.id })
+    if (fits.isNotEmpty()) return CatalogRecommendation(models = fits, fitFreeRam = true)
+    val smallest = catalog.sortedWith(compareBy<CatalogModel> { estimatedCatalogRamBytes(it) }.thenBy { it.id })
+        .take(LOW_RAM_FALLBACK_MODEL_COUNT)
+    return CatalogRecommendation(models = smallest, fitFreeRam = false)
 }
