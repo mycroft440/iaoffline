@@ -15,18 +15,23 @@ import com.example.ialocal.MainActivity
 import com.example.ialocal.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Keeps the process in the foreground and the CPU awake while [ChatGenerationManager] is producing
- * an answer, so switching apps or turning the screen off does not pause or kill the inference.
- * The service stops itself as soon as no conversation is generating.
+ * Gives the app foreground priority and renews a partial CPU wake lock throughout generation.
+ * Going Home, locking the screen or switching apps must not cancel ongoing/queued answers.
+ * The OS can still stop a process for critical memory or an explicit user force-stop.
  */
 class ChatGenerationService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wakeLock: PowerManager.WakeLock? = null
+    private var renewalJob: Job? = null
     private var lastStartId = 0
     private var observing = false
 
@@ -42,12 +47,11 @@ class ChatGenerationService : Service() {
         // Android gives a started foreground service only a short window to publish its notification.
         startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
 
+        // Acquire only after a generation is active. With a time-limited lease Android can
+        // release it if our process dies; a renewal coroutine keeps long answers awake.
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IAOffline:ChatGeneration")
-            .apply {
-                setReferenceCounted(false)
-                acquire(WAKE_LOCK_TIMEOUT_MS)
-            }
+            .apply { setReferenceCounted(false) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -59,23 +63,57 @@ class ChatGenerationService : Service() {
         if (!observing) {
             observing = true
             serviceScope.launch {
-                manager.activeGenerations.collect { active ->
-                    // stopSelfResult keeps the service alive if a newer start arrived meanwhile.
-                    if (active <= 0 && stopSelfResult(lastStartId)) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
+                manager.activeGenerations.collectLatest { active ->
+                    if (ChatGenerationKeepAlive.needsCpuWakeLock(active)) {
+                        keepCpuAwake()
+                    } else {
+                        releaseCpuGuard()
+                        // Service.onStartCommand can run before the sender increments its active
+                        // count. Give it time rather than immediately killing the foreground
+                        // service with an initial flow value of zero.
+                        delay(ChatGenerationKeepAlive.SERVICE_IDLE_GRACE_MS)
+                        if (manager.activeGenerations.value == 0 && stopSelfResult(lastStartId)) {
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                        }
                     }
                 }
             }
         }
-        // An answer cannot be resumed after the process dies, so there is nothing to redeliver.
+        // If Android kills the whole process, old coroutine/native state cannot be restored.
+        // Never start an unrequested new response on a sticky service restart.
         return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun onDestroy() {
-        serviceScope.cancel()
+    /**
+     * Foreground-service protection alone does not keep the CPU running during deep sleep.
+     * Refresh the timed PARTIAL_WAKE_LOCK while active, including when the screen is off and
+     * a reply takes longer than an hour. The lease expires safely if the service is killed.
+     */
+    private fun keepCpuAwake() {
+        val lock = wakeLock ?: return
+        if (!lock.isHeld) lock.acquire(ChatGenerationKeepAlive.WAKE_LOCK_LEASE_MS)
+        if (renewalJob?.isActive == true) return
+        renewalJob = serviceScope.launch {
+            while (isActive) {
+                delay(ChatGenerationKeepAlive.WAKE_LOCK_RENEW_MS)
+                // These changes run on the main dispatcher, serialized with releaseCpuGuard.
+                if (lock.isHeld) lock.release()
+                lock.acquire(ChatGenerationKeepAlive.WAKE_LOCK_LEASE_MS)
+            }
+        }
+    }
+
+    private fun releaseCpuGuard() {
+        renewalJob?.cancel()
+        renewalJob = null
         wakeLock?.takeIf { it.isHeld }?.release()
+    }
+
+    override fun onDestroy() {
+        releaseCpuGuard()
+        serviceScope.cancel()
         wakeLock = null
         super.onDestroy()
     }
@@ -113,7 +151,6 @@ class ChatGenerationService : Service() {
         private const val NOTIFICATION_ID = 4401
         private const val REQUEST_OPEN_APP = 4402
         private const val REQUEST_STOP = 4403
-        private const val WAKE_LOCK_TIMEOUT_MS = 60L * 60L * 1000L
         private const val ACTION_STOP = "com.example.ialocal.action.STOP_CHAT_GENERATION"
 
         /** Called while the user is interacting with the chat, so the foreground start is allowed. */
