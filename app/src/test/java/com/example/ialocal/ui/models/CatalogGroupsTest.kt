@@ -112,6 +112,29 @@ class CatalogGroupsTest {
     }
 
     @Test
+    fun moeRamEstimateUsesTheWholeGgufAndNotOnlyActiveParameters() {
+        val moe = ModelCatalog.requireById("lfm2-8b-a1b-q4-k-m")
+        assertTrue(moe.isMoe)
+        assertEquals(
+            moe.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES,
+            estimatedFullMoeRamBytes(moe),
+        )
+        assertTrue(estimatedFullMoeRamBytes(moe) > 5_700_000_000L)
+        assertTrue(moe.activeParametersBillions!! < moe.totalParametersBillions)
+    }
+
+    @Test
+    fun moeRamEstimateAccountsForTheQuantizedGgufFileNotParameterNames() {
+        val small = ModelCatalog.requireById("granite3.1-1b-a400m-q4-k-m")
+        val large = ModelCatalog.requireById("gpt-oss-13.1b-pruned-q5-k-m")
+        assertEquals(
+            large.approximateSizeBytes - small.approximateSizeBytes,
+            estimatedFullMoeRamBytes(large) - estimatedFullMoeRamBytes(small),
+        )
+        assertTrue(estimatedFullMoeRamBytes(large) > estimatedFullMoeRamBytes(small))
+    }
+
+    @Test
     fun compactNamesDropTheFileDetails() {
         val gemma = ModelCatalog.entries.first { it.displayName == "Gemma 4 26B-A4B QAT" }
         assertEquals("Gemma 4 26B-A4B QAT", compactModelName(model(gemma.apiIdPrefix + "abc", "qualquer nome")))
