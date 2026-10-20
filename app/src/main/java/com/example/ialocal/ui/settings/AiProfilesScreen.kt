@@ -56,6 +56,7 @@ import com.example.ialocal.models.CustomProfiles
 @Composable
 fun AiProfilesScreen(
     viewModel: AiProfilesViewModel,
+    onRequestRewardedAction: (String, () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
@@ -119,7 +120,7 @@ fun AiProfilesScreen(
             item {
                 SectionTitle("Meus perfis")
                 Text(
-                    "Escreva as instruções que a IA deve seguir, como um professor paciente ou um revisor de textos.",
+                    "Crie instruções personalizadas para a IA. Cada novo perfil pede um anúncio recompensado; editar perfis existentes não.",
                     modifier = Modifier.padding(horizontal = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -132,7 +133,7 @@ fun AiProfilesScreen(
                     modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
-                    Text(" Criar novo perfil")
+                    Text(" Criar perfil · anúncio recompensado")
                 }
             }
             if (custom.isEmpty()) {
@@ -170,9 +171,19 @@ fun AiProfilesScreen(
                 editing = null
             },
             onSave = { name, description, prompt ->
-                viewModel.save(initial?.id, name, description, prompt)
-                creating = false
-                editing = null
+                if (initial == null) {
+                    // Validate in the editor first, grant exactly this creation after reward.
+                    onRequestRewardedAction("a criação do perfil ${name}") {
+                        viewModel.save(null, name, description, prompt)
+                        creating = false
+                        editing = null
+                    }
+                } else {
+                    // Editing existing profiles stays available without another advertisement.
+                    viewModel.save(initial.id, name, description, prompt)
+                    creating = false
+                    editing = null
+                }
             },
         )
     }
@@ -338,7 +349,7 @@ private fun ProfileEditorDialog(
             TextButton(onClick = {
                 error = CustomProfiles.validate(name, description, prompt, profiles, editingId = initial?.id)
                 if (error == null) onSave(name, description, prompt)
-            }) { Text("Salvar") }
+            }) { Text(if (initial == null) "Assistir anúncio e criar" else "Salvar alterações") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancelar") }
