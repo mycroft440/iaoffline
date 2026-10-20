@@ -24,6 +24,7 @@ fun providerFromName(name: String): ModelProvider? {
         "north mini" in text || "north-mini" in text || "cohere" in text -> ModelProvider.COHERE
         "laguna" in text || "poolside" in text -> ModelProvider.POOLSIDE
         "gigachat" in text -> ModelProvider.SBER
+        "trinity" in text || "arcee" in text || "afmoe" in text -> ModelProvider.ARCEE
         "deepseek" in text -> ModelProvider.DEEPSEEK
         // Bonsai is built on Qwen, so it must be recognized before the Qwen check.
         "bonsai" in text || "prism" in text -> ModelProvider.PRISMML

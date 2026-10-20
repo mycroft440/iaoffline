@@ -528,8 +528,8 @@ private fun MoeSectionHeader(modelCount: Int) {
             )
         }
         Text(
-            text = "Modelos MoE são divididos em especialistas e só alguns trabalham a cada palavra: " +
-                "respondem rápido mesmo sendo grandes.",
+            text = "Só alguns especialistas calculam cada palavra, mas os pesos de todos podem ocupar RAM. " +
+                "Confira a estimativa abaixo; usar o armazenamento economiza RAM e pode reduzir a velocidade.",
             color = Color(0xFFCBD5E1),
             fontSize = 11.sp,
             lineHeight = 15.sp,
@@ -548,7 +548,8 @@ private fun MoeNeedsMoreRamHeader(deviceRamGb: Double) {
             fontWeight = FontWeight.ExtraBold,
         )
         Text(
-            text = "Precisam de mais RAM do que os ${formatAdvertisedGb(deviceRamGb)} deste telefone.",
+            text = "A RAM recomendada supera os ${formatAdvertisedGb(deviceRamGb)} deste telefone. " +
+                "Alguns podem funcionar lentamente com especialistas lidos do armazenamento.",
             color = CatalogMuted,
             fontSize = 11.sp,
             lineHeight = 16.sp,
@@ -759,7 +760,7 @@ private fun HtmlCatalogInstallCard(
                 CatalogTag("MoE", accent = CatalogViolet)
             }
             if (model.isExperimental) {
-                CatalogTag("Experimental – lento", accent = CatalogAmber)
+                CatalogTag("MoE grande", accent = CatalogAmber)
             }
             if (installed) {
                 CatalogTag("Instalada", accent = CatalogEmerald)
@@ -773,8 +774,9 @@ private fun HtmlCatalogInstallCard(
 
         if (model.isExperimental) {
             Text(
-                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento. " +
-                    "Espere poucas palavras por segundo ou menos, e ${groupedFormatBytes(model.approximateSizeBytes)} livres para o download.",
+                text = "MoE grande: se os pesos não couberem na RAM livre, o runtime pode ler " +
+                    "especialistas pelo armazenamento (mmap). Isso pode ser muito lento ou falhar, " +
+                    "dependendo do GGUF, do aparelho e do contexto.",
                 color = CatalogAmber,
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
@@ -992,9 +994,12 @@ private fun ModelSpecsGrid(
                 .background(CatalogBorder),
         )
         SpecCell(
-            // Experimental MoE models run on less, slowly from storage; this is what they need to run well.
-            label = if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
-            value = "${formatRamRequirement(model.recommendedRamBytes)} RAM",
+            label = if (model.isMoe) "RAM (EST.)" else if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
+            value = if (model.isMoe) {
+                "~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))}"
+            } else {
+                "${formatRamRequirement(model.recommendedRamBytes)} RAM"
+            },
             valueColor = requirementAccent,
             modifier = Modifier.weight(1f),
         )
@@ -1093,13 +1098,21 @@ private fun ModelDetailsDialog(
                     } ?: "Tipo: denso, todos os parâmetros usados em cada palavra",
                 )
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
-                Text(
-                    if (model.isExperimental) {
-                        "RAM ideal: ${formatRamRequirement(model.recommendedRamBytes)}; com menos, roda lento lendo do armazenamento"
-                    } else {
-                        "Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM"
-                    },
-                )
+                if (model.isMoe) {
+                    Text(
+                        "RAM estimada com os pesos residentes: ~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))} " +
+                            "(arquivo GGUF + 256 MiB de contexto mínimo + 512 MiB de buffers). " +
+                            "É uma referência, não consumo medido nem pico garantido."
+                    )
+                    Text(
+                        "RAM recomendada do aparelho: ${formatRamRequirement(model.recommendedRamBytes)}. " +
+                            "Os parâmetros ativos não reduzem automaticamente a RAM dos pesos; com mmap, " +
+                            "parte dos especialistas pode ficar no armazenamento, consumindo menos RAM " +
+                            "e levando mais tempo. Contextos maiores ou repacking podem elevar o consumo."
+                    )
+                } else {
+                    Text("Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM")
+                }
                 Text(
                     text = compatibility.label,
                     color = compatibility.accent,
@@ -1125,16 +1138,27 @@ private fun catalogCompatibility(
     model: CatalogModel,
     hardware: CatalogHardwareSnapshot,
 ): CatalogCompatibility {
-    // Android reports less RAM than the phone is sold with (a 12 GB phone shows about 11 GB), so
-    // the requirement is compared with the advertised size, and the free RAM with what the model
-    // itself needs (its file plus working memory), not with the whole requirement.
+    // Phone RAM is a recommendation; the estimate below is the GGUF plus the smallest KV cache
+    // and compute buffers. MoE weights may remain file-backed with mmap, but no catalog estimate
+    // proves that the model will load or predicts its measured resident memory.
     val deviceRamBytes = hardware.deviceRamBytes
     return when {
-        // Experimental MoE models run on any phone, reading their weights from storage.
-        model.isExperimental && deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
-            label = "Roda lento",
+        model.isMoe && deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
+            label = "RAM abaixo da ideal",
             accent = CatalogAmber,
             canRunComfortably = false,
+        )
+
+        model.isMoe && hardware.availableRamBytes < estimatedFullMoeRamBytes(model) -> CatalogCompatibility(
+            label = "Pode usar armazenamento",
+            accent = CatalogAmber,
+            canRunComfortably = false,
+        )
+
+        model.isMoe -> CatalogCompatibility(
+            label = "RAM estimada suficiente",
+            accent = CatalogEmerald,
+            canRunComfortably = true,
         )
 
         deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
@@ -1175,6 +1199,9 @@ private fun groupedFormatParameters(value: Double): String =
     } else {
         "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
     }
+
+/** Decimal GB for MoE RAM estimates, consistent with phone RAM capacities. */
+private fun formatMoeRamEstimate(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
 
 /** Catalog requirements are written in the gigabytes phones are sold with: 12_000_000_000 is "12 GB". */
 private fun formatRamRequirement(bytes: Long): String = formatAdvertisedGb(bytes / 1_000_000_000.0)
