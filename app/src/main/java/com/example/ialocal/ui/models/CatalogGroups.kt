@@ -44,14 +44,25 @@ internal val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.COHERE,
     ModelProvider.POOLSIDE,
     ModelProvider.SBER,
+    ModelProvider.ARCEE,
 )
 
-/** Context, compute buffers and the app itself, on top of the model file. */
+/** Minimum native overhead: 256 MiB of KV cache + 512 MiB for compute and runtime. */
 internal const val CATALOG_WORKING_MEMORY_BYTES = 768L * 1024 * 1024
 
 /**
- * Whether a phone with [deviceRamBytes] (the RAM it is sold with) can run [model]: it has the RAM
- * the model asks for, or the model is an experimental MoE, which runs slowly from storage.
+ * Planning estimate for a MoE with its GGUF weights in RAM (without disk paging).
+ * The active-parameter count measures compute, not resident weights. This estimate assumes the
+ * entire GGUF may become resident and only the minimum context; it is not a measured RSS/peak.
+ * Larger contexts, repacked tensors and device-specific buffers can use more, while mmap can keep
+ * only some experts resident and trade RAM for slower storage reads.
+ */
+internal fun estimatedFullMoeRamBytes(model: CatalogModel): Long =
+    model.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES
+
+/**
+ * Catalog grouping by the RAM recommended for the phone. Large MoE models are still listed
+ * because mmap may allow their experts to be paged from storage; actual loading is not guaranteed.
  */
 internal fun runsOnPhone(model: CatalogModel, deviceRamBytes: Long): Boolean =
     model.isExperimental || model.recommendedRamBytes <= deviceRamBytes

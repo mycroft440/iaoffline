@@ -15,6 +15,7 @@ import android.widget.TextView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -37,6 +38,9 @@ import com.google.android.gms.ads.nativead.NativeAdView
 class NativeAdSlots(private val context: Context, private val adUnitId: String) {
     val ads = mutableStateMapOf<Int, NativeAd>()
     private val requested = hashSetOf<Int>()
+    // The card of each slot is kept too: built again whenever it scrolled back into view, with its
+    // media view, it made the list stutter.
+    private val cards = hashMapOf<Int, NativeAdCardView>()
     private var destroyed = false
 
     fun request(slot: Int) {
@@ -55,8 +59,13 @@ class NativeAdSlots(private val context: Context, private val adUnitId: String) 
             .loadAd(AdRequest.Builder().build())
     }
 
+    /** The card of [slot], taken out of the list item that showed it before. */
+    internal fun card(slot: Int): NativeAdCardView =
+        cards.getOrPut(slot) { NativeAdCardView(context) }.also { (it.parent as? ViewGroup)?.removeView(it) }
+
     fun destroy() {
         destroyed = true
+        cards.clear()
         ads.values.forEach { it.destroy() }
         ads.clear()
     }
@@ -79,14 +88,16 @@ fun rememberNativeAdSlots(enabled: Boolean): NativeAdSlots? {
 fun NativeAdCard(slots: NativeAdSlots, slot: Int, modifier: Modifier = Modifier) {
     LaunchedEffect(slots, slot) { slots.request(slot) }
     val ad = slots.ads[slot] ?: return
-    AndroidView(
-        factory = ::NativeAdCardView,
-        update = { it.bind(ad) },
-        modifier = modifier,
-    )
+    key(slot) {
+        AndroidView(
+            factory = { slots.card(slot) },
+            update = { it.bind(ad) },
+            modifier = modifier,
+        )
+    }
 }
 
-private class NativeAdCardView(context: Context) : FrameLayout(context) {
+internal class NativeAdCardView(context: Context) : FrameLayout(context) {
     private val root = NativeAdView(context)
     private val density = context.resources.displayMetrics.density
     private val icon = ImageView(context)
@@ -94,6 +105,7 @@ private class NativeAdCardView(context: Context) : FrameLayout(context) {
     private val body = TextView(context)
     private val media = MediaView(context)
     private val callToAction = Button(context)
+    private var boundAd: NativeAd? = null
 
     init {
         val content = LinearLayout(context).apply {
@@ -157,6 +169,9 @@ private class NativeAdCardView(context: Context) : FrameLayout(context) {
     }
 
     fun bind(ad: NativeAd) {
+        // A card back in view keeps its ad, and its video where it was.
+        if (boundAd === ad) return
+        boundAd = ad
         headline.text = ad.headline
         body.text = ad.body
         body.visibility = if (ad.body.isNullOrBlank()) View.GONE else View.VISIBLE

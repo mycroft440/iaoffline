@@ -2,12 +2,18 @@ package com.example.ialocal.ui.models
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,20 +24,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,6 +47,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,12 +55,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,6 +71,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.CatalogAdSlots
 import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.ads.NativeAdCard
+import com.example.ialocal.ads.rememberInlineAdBannerState
 import com.example.ialocal.ads.rememberNativeAdSlots
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.CatalogModel
@@ -107,35 +118,48 @@ fun GroupedOfflineModelsScreen(
     val scope = rememberCoroutineScope()
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
     val nativeAds = rememberNativeAdSlots(enabled = adsEnabled)
+    // Kept above the list: a banner scrolled out of view and back keeps its ad.
+    val topBanner = rememberInlineAdBannerState(enabled = adsEnabled)
+    val bottomBanner = rememberInlineAdBannerState(enabled = adsEnabled)
 
+    val catalog = viewModel.catalog
     val deviceRamBytes = hardware.deviceRamBytes
-    val visibleGroups = remember(viewModel.catalog, selectedProvider, deviceRamBytes) {
-        catalogGroups(viewModel.catalog, onlyProvider = selectedProvider, deviceRamBytes = deviceRamBytes)
+    val visibleGroups = remember(catalog, selectedProvider, deviceRamBytes) {
+        catalogGroups(catalog, onlyProvider = selectedProvider, deviceRamBytes = deviceRamBytes)
     }
-    val visibleCount = visibleGroups.sumOf { it.models.size }
-    val sectionCounts = visibleGroups.groupBy { it.section }.mapValues { (_, groups) -> groups.sumOf { it.models.size } }
-    val installedCatalogIds = remember(installedModels, viewModel.catalog) {
-        viewModel.catalog.filter { entry -> installedModels.any { it.apiModelId.startsWith(entry.apiIdPrefix) } }
-            .map { it.id }
-            .toSet()
+    val visibleCount = remember(visibleGroups) { visibleGroups.sumOf { it.models.size } }
+    val sectionCounts = remember(visibleGroups) {
+        visibleGroups.groupBy { it.section }.mapValues { (_, groups) -> groups.sumOf { it.models.size } }
     }
-    val recommendation = remember(viewModel.catalog, hardware, installedCatalogIds) {
+    val providerCounts = remember(catalog) { catalog.groupingBy { it.provider }.eachCount() }
+    // Looked up once per change instead of in every card: during a download the list updates
+    // several times a second.
+    val installedByCatalogId = remember(installedModels, catalog) {
+        catalog.mapNotNull { entry ->
+            installedModels.firstOrNull { it.apiModelId.startsWith(entry.apiIdPrefix) }?.let { entry.id to it }
+        }.toMap()
+    }
+    val downloadsByCatalogId = remember(downloads) { downloads.associateBy { it.model.id } }
+    val recommendation = remember(catalog, hardware, installedByCatalogId) {
         recommendedModels(
-            catalog = viewModel.catalog,
+            catalog = catalog,
             freeRamBytes = hardware.availableRamBytes,
             deviceRamBytes = deviceRamBytes,
-            installedIds = installedCatalogIds,
+            installedIds = installedByCatalogId.keys,
         )
+    }
+    // The banner, then the recommendations with their heading.
+    val selectorIndex = 1 + if (recommendation.models.isEmpty()) 0 else 1 + recommendation.models.size
+    val selectorOutOfView by remember(selectorIndex) {
+        derivedStateOf { listState.firstVisibleItemIndex > selectorIndex }
     }
     // One card per model, in the recommendations and again in its company's section.
     val catalogCard: @Composable (CatalogModel) -> Unit = { catalogModel ->
-        val installed = installedModels.firstOrNull {
-            it.apiModelId.startsWith(catalogModel.apiIdPrefix)
-        }
+        val installed = installedByCatalogId[catalogModel.id]
         HtmlCatalogInstallCard(
             model = catalogModel,
             hardware = hardware,
-            download = downloads.firstOrNull { it.model.id == catalogModel.id },
+            download = downloadsByCatalogId[catalogModel.id],
             installedModel = installed,
             onInstall = {
                 onEnsureStorageAccess {
@@ -168,7 +192,7 @@ fun GroupedOfflineModelsScreen(
                 title = { Text("Baixar I.As offline") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -177,6 +201,18 @@ fun GroupedOfflineModelsScreen(
                     navigationIconContentColor = CatalogText,
                 ),
             )
+        },
+        floatingActionButton = {
+            // Back to the companies from anywhere in the list, to filter by another one.
+            AnimatedVisibility(
+                visible = selectorOutOfView,
+                enter = fadeIn() + scaleIn(initialScale = 0.8f),
+                exit = fadeOut() + scaleOut(targetScale = 0.8f),
+            ) {
+                BackToCompaniesButton(
+                    onClick = { scope.launch { listState.animateScrollToItem(selectorIndex) } },
+                )
+            }
         },
     ) { padding ->
         LazyColumn(
@@ -188,30 +224,34 @@ fun GroupedOfflineModelsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item(key = "catalog-ad-top") {
-                InlineAdBanner(enabled = adsEnabled)
+            // Every item says what it is, so the list reuses a card that scrolled away for the next
+            // card instead of building it again.
+            item(key = "catalog-ad-top", contentType = CatalogItem.BANNER) {
+                InlineAdBanner(state = topBanner)
             }
 
             if (recommendation.models.isNotEmpty()) {
-                item(key = "section-recommended") {
+                item(key = "section-recommended", contentType = CatalogItem.SECTION_HEADER) {
                     RecommendedSectionHeader(
                         freeRamBytes = hardware.availableRamBytes,
                         fitFreeRam = recommendation.fitFreeRam,
                     )
                 }
-                items(items = recommendation.models, key = { "recommended-${it.id}" }) { catalogCard(it) }
+                items(
+                    items = recommendation.models,
+                    key = { "recommended-${it.id}" },
+                    contentType = { CatalogItem.MODEL_CARD },
+                ) { catalogCard(it) }
             }
 
-            item(key = "company-selector") {
+            item(key = "company-selector", contentType = CatalogItem.SELECTOR) {
                 CompanySelectorSection(
-                    catalog = viewModel.catalog,
+                    catalog = catalog,
+                    providerCounts = providerCounts,
                     selectedProvider = selectedProvider,
                     visibleCount = visibleCount,
                     onSelect = { provider ->
                         selectedProvider = if (provider != null && selectedProvider == provider) null else provider
-                    },
-                    onScrollTop = {
-                        scope.launch { listState.animateScrollToItem(0) }
                     },
                 )
             }
@@ -220,7 +260,7 @@ fun GroupedOfflineModelsScreen(
                 val provider = group.provider
                 // Each section opens with its heading, before its first company.
                 if (groupIndex == 0 || visibleGroups[groupIndex - 1].section != group.section) {
-                    item(key = "section-${group.section.name}") {
+                    item(key = "section-${group.section.name}", contentType = CatalogItem.SECTION_HEADER) {
                         when (group.section) {
                             CatalogSection.MOE -> MoeSectionHeader(modelCount = sectionCounts[group.section] ?: 0)
                             CatalogSection.DENSE -> DenseSectionHeader()
@@ -229,7 +269,7 @@ fun GroupedOfflineModelsScreen(
                     }
                 }
 
-                item(key = "provider-${group.section.name}-${provider.name}") {
+                item(key = "provider-${group.section.name}-${provider.name}", contentType = CatalogItem.PROVIDER_HEADER) {
                     ProviderCatalogHeader(
                         provider = provider,
                         modelCount = group.models.size,
@@ -240,124 +280,131 @@ fun GroupedOfflineModelsScreen(
                 items(
                     items = group.models,
                     key = { it.id },
+                    contentType = { CatalogItem.MODEL_CARD },
                 ) { catalogCard(it) }
 
                 if (nativeAds != null && CatalogAdSlots.showsAfterGroup(groupIndex, visibleGroups.size)) {
-                    item(key = "catalog-native-ad-$groupIndex") {
+                    item(key = "catalog-native-ad-$groupIndex", contentType = CatalogItem.NATIVE_AD) {
                         NativeAdCard(slots = nativeAds, slot = groupIndex)
                     }
                 }
             }
 
-            item(key = "catalog-ad-bottom") {
-                InlineAdBanner(enabled = adsEnabled)
+            item(key = "catalog-ad-bottom", contentType = CatalogItem.BANNER) {
+                InlineAdBanner(state = bottomBanner)
             }
 
-            item { Spacer(Modifier.height(18.dp)) }
+            // Room for the button back to the companies over the last card.
+            item(key = "catalog-end", contentType = CatalogItem.SPACER) { Spacer(Modifier.height(72.dp)) }
         }
+    }
+}
+
+/** The kinds of items of the catalog list. */
+private enum class CatalogItem { BANNER, SECTION_HEADER, SELECTOR, PROVIDER_HEADER, MODEL_CARD, NATIVE_AD, SPACER }
+
+@Composable
+private fun BackToCompaniesButton(onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Row(
+        modifier = Modifier
+            .shadow(8.dp, shape)
+            .background(Color(0xF21E293B), shape)
+            .border(1.dp, CatalogCyan.copy(alpha = 0.45f), shape)
+            .clip(shape)
+            .clickable(onClickLabel = "Voltar às empresas", role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "↑  Empresas",
+            color = CatalogCyanLight,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
 @Composable
 private fun CompanySelectorSection(
     catalog: List<CatalogModel>,
+    providerCounts: Map<ModelProvider, Int>,
     selectedProvider: ModelProvider?,
     visibleCount: Int,
     onSelect: (ModelProvider?) -> Unit,
-    onScrollTop: () -> Unit,
 ) {
-    val selectorProviders = listOf(
-        ModelProvider.PRISMML,
-        ModelProvider.DEEPSEEK,
-        ModelProvider.ALIBABA,
-        ModelProvider.MISTRAL,
-        ModelProvider.META,
-        ModelProvider.GOOGLE,
-        ModelProvider.MICROSOFT,
-    ).filter { provider -> catalog.any { it.provider == provider } }
-    val cells: List<ModelProvider?> = selectorProviders + listOf(null)
+    // Every company of the catalog, in its order; before, only the first seven could be chosen.
+    val cells: List<ModelProvider?> = remember(providerCounts) {
+        listOf(null) + CATALOG_PROVIDER_ORDER.filter { (providerCounts[it] ?: 0) > 0 }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    Text(
-                        text = "ORGANIZADO POR EMPRESA",
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.7.sp,
-                    )
-                    CatalogPill(
-                        text = "$visibleCount IAs",
-                        foreground = CatalogCyanLight,
-                        background = Color(0x2622D3EE),
-                        border = CatalogCyan.copy(alpha = 0.35f),
-                    )
-                }
-                Text(
-                    text = "Exibindo catálogo completo de modelos (todos os tamanhos)",
-                    color = CatalogMuted,
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .background(Color(0xCC1E293B), RoundedCornerShape(8.dp))
-                    .border(1.dp, CatalogBorderLight.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
-                    .clickable(onClick = onScrollTop)
-                    .padding(horizontal = 9.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center,
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 Text(
-                    text = "↑  Topo",
-                    color = CatalogCyanLight,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
+                    text = "ORGANIZADO POR EMPRESA",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.7.sp,
+                )
+                CatalogPill(
+                    text = "$visibleCount IAs",
+                    foreground = CatalogCyanLight,
+                    background = Color(0x2622D3EE),
+                    border = CatalogCyan.copy(alpha = 0.35f),
                 )
             }
+            Text(
+                text = selectedProvider?.let { "Exibindo só os modelos de ${providerUiMeta(it).sectionName}" }
+                    ?: "Exibindo o catálogo completo: deslize para escolher uma empresa",
+                color = CatalogMuted,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            cells.chunked(2).forEach { rowCells ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    rowCells.forEach { provider ->
-                        val count = if (provider == null) catalog.size else catalog.count { it.provider == provider }
-                        CompanyFilterCard(
-                            provider = provider,
-                            count = count,
-                            selected = selectedProvider == provider,
-                            modifier = Modifier.weight(1f),
-                            onClick = { onSelect(provider) },
-                        )
-                    }
-                    if (rowCells.size == 1) {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
+        // From edge to edge of the screen, past the list's side margins, so the chips are not cut
+        // 16 dp before the border while they scroll.
+        LazyRow(
+            modifier = Modifier.layout { measurable, constraints ->
+                val margin = if (constraints.hasBoundedWidth) SELECTOR_BLEED.roundToPx() else 0
+                val placeable = measurable.measure(
+                    constraints.copy(
+                        minWidth = constraints.minWidth + 2 * margin,
+                        maxWidth = constraints.maxWidth + 2 * margin,
+                    ),
+                )
+                layout(constraints.maxWidth, placeable.height) { placeable.place(-margin, 0) }
+            },
+            contentPadding = PaddingValues(horizontal = SELECTOR_BLEED),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(items = cells, key = { it?.name ?: "all" }) { provider ->
+                CompanyFilterChip(
+                    provider = provider,
+                    count = if (provider == null) catalog.size else providerCounts[provider] ?: 0,
+                    selected = selectedProvider == provider,
+                    onClick = { onSelect(provider) },
+                )
             }
         }
     }
 }
 
+/** The list's side margin, which the company chips scroll past. */
+private val SELECTOR_BLEED = 16.dp
+
 @Composable
-private fun CompanyFilterCard(
+private fun CompanyFilterChip(
     provider: ModelProvider?,
     count: Int,
     selected: Boolean,
-    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val meta = provider?.let(::providerUiMeta)
@@ -367,43 +414,35 @@ private fun CompanyFilterCard(
     val border = if (selected) CatalogCyan.copy(alpha = 0.55f) else CatalogBorder
 
     Row(
-        modifier = modifier
+        modifier = Modifier
             .background(background, shape)
             .border(1.dp, border, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+            .clip(shape)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (provider != null) {
-                ProviderLogo(provider = provider, size = 24.dp)
-            } else {
-                Text(text = "🌐", fontSize = 17.sp)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = meta?.selectorName ?: "Todas as IAs",
-                    color = if (selected) CatalogCyanLight else CatalogText,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = meta?.selectorSubtitle ?: "Catálogo Geral",
-                    color = if (selected) CatalogCyanLight.copy(alpha = 0.8f) else CatalogMuted,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+        if (provider != null) {
+            ProviderLogo(provider = provider, size = 24.dp)
+        } else {
+            Text(text = "🌐", fontSize = 17.sp)
         }
-
+        Column {
+            Text(
+                text = meta?.selectorName ?: "Todas as IAs",
+                color = if (selected) CatalogCyanLight else CatalogText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Text(
+                text = meta?.selectorSubtitle ?: "Catálogo Geral",
+                color = if (selected) CatalogCyanLight.copy(alpha = 0.8f) else CatalogMuted,
+                fontSize = 9.sp,
+                maxLines = 1,
+            )
+        }
         CatalogPill(
             text = count.toString(),
             foreground = accent,
@@ -489,8 +528,8 @@ private fun MoeSectionHeader(modelCount: Int) {
             )
         }
         Text(
-            text = "Modelos MoE são divididos em especialistas e só alguns trabalham a cada palavra: " +
-                "respondem rápido mesmo sendo grandes.",
+            text = "Só alguns especialistas calculam cada palavra, mas os pesos de todos podem ocupar RAM. " +
+                "Confira a estimativa abaixo; usar o armazenamento economiza RAM e pode reduzir a velocidade.",
             color = Color(0xFFCBD5E1),
             fontSize = 11.sp,
             lineHeight = 15.sp,
@@ -509,7 +548,8 @@ private fun MoeNeedsMoreRamHeader(deviceRamGb: Double) {
             fontWeight = FontWeight.ExtraBold,
         )
         Text(
-            text = "Precisam de mais RAM do que os ${formatAdvertisedGb(deviceRamGb)} deste telefone.",
+            text = "A RAM recomendada supera os ${formatAdvertisedGb(deviceRamGb)} deste telefone. " +
+                "Alguns podem funcionar lentamente com especialistas lidos do armazenamento.",
             color = CatalogMuted,
             fontSize = 11.sp,
             lineHeight = 16.sp,
@@ -709,14 +749,18 @@ private fun HtmlCatalogInstallCard(
             )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Wrapped: five tags do not fit in one line on a narrow phone or with a large font.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             CatalogTag(model.quantization)
             CatalogTag("GGUF")
             if (model.isMoe) {
                 CatalogTag("MoE", accent = CatalogViolet)
             }
             if (model.isExperimental) {
-                CatalogTag("Experimental – lento", accent = CatalogAmber)
+                CatalogTag("MoE grande", accent = CatalogAmber)
             }
             if (installed) {
                 CatalogTag("Instalada", accent = CatalogEmerald)
@@ -730,8 +774,9 @@ private fun HtmlCatalogInstallCard(
 
         if (model.isExperimental) {
             Text(
-                text = "Maior que a RAM do celular: roda lendo os pesos do armazenamento. " +
-                    "Espere poucas palavras por segundo ou menos, e ${groupedFormatBytes(model.approximateSizeBytes)} livres para o download.",
+                text = "MoE grande: se os pesos não couberem na RAM livre, o runtime pode ler " +
+                    "especialistas pelo armazenamento (mmap). Isso pode ser muito lento ou falhar, " +
+                    "dependendo do GGUF, do aparelho e do contexto.",
                 color = CatalogAmber,
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
@@ -949,9 +994,12 @@ private fun ModelSpecsGrid(
                 .background(CatalogBorder),
         )
         SpecCell(
-            // Experimental MoE models run on less, slowly from storage; this is what they need to run well.
-            label = if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
-            value = "${formatRamRequirement(model.recommendedRamBytes)} RAM",
+            label = if (model.isMoe) "RAM (EST.)" else if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
+            value = if (model.isMoe) {
+                "~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))}"
+            } else {
+                "${formatRamRequirement(model.recommendedRamBytes)} RAM"
+            },
             valueColor = requirementAccent,
             modifier = Modifier.weight(1f),
         )
@@ -1050,13 +1098,21 @@ private fun ModelDetailsDialog(
                     } ?: "Tipo: denso, todos os parâmetros usados em cada palavra",
                 )
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
-                Text(
-                    if (model.isExperimental) {
-                        "RAM ideal: ${formatRamRequirement(model.recommendedRamBytes)}; com menos, roda lento lendo do armazenamento"
-                    } else {
-                        "Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM"
-                    },
-                )
+                if (model.isMoe) {
+                    Text(
+                        "RAM estimada com os pesos residentes: ~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))} " +
+                            "(arquivo GGUF + 256 MiB de contexto mínimo + 512 MiB de buffers). " +
+                            "É uma referência, não consumo medido nem pico garantido."
+                    )
+                    Text(
+                        "RAM recomendada do aparelho: ${formatRamRequirement(model.recommendedRamBytes)}. " +
+                            "Os parâmetros ativos não reduzem automaticamente a RAM dos pesos; com mmap, " +
+                            "parte dos especialistas pode ficar no armazenamento, consumindo menos RAM " +
+                            "e levando mais tempo. Contextos maiores ou repacking podem elevar o consumo."
+                    )
+                } else {
+                    Text("Requisitos: ${formatRamRequirement(model.recommendedRamBytes)} RAM")
+                }
                 Text(
                     text = compatibility.label,
                     color = compatibility.accent,
@@ -1082,16 +1138,27 @@ private fun catalogCompatibility(
     model: CatalogModel,
     hardware: CatalogHardwareSnapshot,
 ): CatalogCompatibility {
-    // Android reports less RAM than the phone is sold with (a 12 GB phone shows about 11 GB), so
-    // the requirement is compared with the advertised size, and the free RAM with what the model
-    // itself needs (its file plus working memory), not with the whole requirement.
+    // Phone RAM is a recommendation; the estimate below is the GGUF plus the smallest KV cache
+    // and compute buffers. MoE weights may remain file-backed with mmap, but no catalog estimate
+    // proves that the model will load or predicts its measured resident memory.
     val deviceRamBytes = hardware.deviceRamBytes
     return when {
-        // Experimental MoE models run on any phone, reading their weights from storage.
-        model.isExperimental && deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
-            label = "Roda lento",
+        model.isMoe && deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
+            label = "RAM abaixo da ideal",
             accent = CatalogAmber,
             canRunComfortably = false,
+        )
+
+        model.isMoe && hardware.availableRamBytes < estimatedFullMoeRamBytes(model) -> CatalogCompatibility(
+            label = "Pode usar armazenamento",
+            accent = CatalogAmber,
+            canRunComfortably = false,
+        )
+
+        model.isMoe -> CatalogCompatibility(
+            label = "RAM estimada suficiente",
+            accent = CatalogEmerald,
+            canRunComfortably = true,
         )
 
         deviceRamBytes < model.recommendedRamBytes -> CatalogCompatibility(
@@ -1132,6 +1199,9 @@ private fun groupedFormatParameters(value: Double): String =
     } else {
         "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
     }
+
+/** Decimal GB for MoE RAM estimates, consistent with phone RAM capacities. */
+private fun formatMoeRamEstimate(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
 
 /** Catalog requirements are written in the gigabytes phones are sold with: 12_000_000_000 is "12 GB". */
 private fun formatRamRequirement(bytes: Long): String = formatAdvertisedGb(bytes / 1_000_000_000.0)

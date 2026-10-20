@@ -100,7 +100,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -140,7 +139,7 @@ import com.example.ialocal.ui.rememberLiveMemory
 import com.example.ialocal.ui.branding.ProviderLogo
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
-import com.example.ialocal.ui.branding.logoRes
+import com.example.ialocal.ui.branding.providerLogoPainter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -1244,7 +1243,7 @@ private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modif
         Box(contentAlignment = Alignment.Center) {
             if (provider != null) {
                 Image(
-                    painter = painterResource(provider.logoRes()),
+                    painter = providerLogoPainter(provider),
                     contentDescription = provider.brandName(),
                     modifier = Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)),
                     contentScale = ContentScale.Fit,

@@ -121,6 +121,46 @@ class ModelCatalogTest {
     }
 
     @Test
+    fun additionalSmallMoeModelsHaveUniqueDownloadableEntries() {
+        val ids = setOf("ling3.0-tiny-q4-k-m", "trinity-nano-preview-q4-k-m", "phi-mini-moe-7.6b-q4-k-m", "phi-tiny-moe-3.8b-q8-0", "olmoe-1b-7b-0924-instruct-q4-k-m", "granite3.1-3b-a800m-q4-k-m", "granite3.1-1b-a400m-q4-k-m")
+        val added = ModelCatalog.entries.filter { it.id in ids }
+        assertEquals(7, added.size)
+        assertEquals(ids, added.map { it.id }.toSet())
+        added.forEach {
+            assertTrue(it.isMoe)
+            assertTrue(it.totalParametersBillions <= 14.0)
+            assertFalse(it.isExperimental)
+            assertTrue(it.sha256.matches(Regex("^[0-9a-f]{64}$")))
+        }
+        assertEquals(ModelProvider.ARCEE, ModelCatalog.requireById("trinity-nano-preview-q4-k-m").provider)
+    }
+
+    @Test
+    fun eightAdditionalMoeModelsArePinnedAndUnder14B() {
+        val ids = setOf(
+            "lfm2-8b-a1b-q4-k-m",
+            "olmoe-1b-7b-0125-instruct-q4-k-m",
+            "mellum2-12b-a2.5b-instruct-q4-k-m",
+            "qwen2.5-moe-2x1.5b-community-q4-k-m",
+            "granite-guardian-3.2-3b-a800m-q4-k-m",
+            "gpt-oss-6.6b-pruned-q5-k-m",
+            "gpt-oss-10.2b-pruned-science-q5-k-m",
+            "gpt-oss-13.1b-pruned-q5-k-m",
+        )
+        val added = ModelCatalog.entries.filter { it.id in ids }
+        assertEquals(8, added.size)
+        assertEquals(ids, added.map { it.id }.toSet())
+        added.forEach { model ->
+            assertTrue(model.isMoe)
+            assertTrue(model.totalParametersBillions <= 14.0)
+            assertFalse(model.isExperimental)
+            assertTrue(model.downloadUrl.startsWith("https://huggingface.co/"))
+            assertTrue(model.sha256.matches(Regex("^[0-9a-f]{64}$")))
+        }
+        assertEquals(ModelProvider.IBM, ModelCatalog.requireById("granite-guardian-3.2-3b-a800m-q4-k-m").provider)
+    }
+
+    @Test
     fun onlyLargeMoeModelsAreExperimental() {
         val experimental = ModelCatalog.entries.filter { it.isExperimental }.map { it.id }.toSet()
         assertTrue("gemma4-26b-a4b-it-q4-0" in experimental)

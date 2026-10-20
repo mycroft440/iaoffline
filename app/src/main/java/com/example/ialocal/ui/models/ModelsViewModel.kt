@@ -21,11 +21,13 @@ import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.models.ModelManager
 import com.example.ialocal.models.ModelRepository
 import com.example.ialocal.runtime.RuntimeState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -51,13 +53,17 @@ class ModelsViewModel(
     val runtimeState: StateFlow<RuntimeState> = manager.runtimeState
     val downloadState = manager.downloadState
 
-    /** Every requested download with what to show for it; the live state feeds the active one. */
+    /**
+     * Every requested download with what to show for it; the live state feeds the active one. Built
+     * off the main thread: it reads the size of the partial files at every progress update.
+     */
     val downloads: StateFlow<List<DownloadItemUi>> = combine(manager.downloadQueue, manager.downloadState) { queue, live ->
         queue.entries.mapNotNull { entry ->
             val catalogModel = manager.catalog.firstOrNull { it.id == entry.catalogId } ?: return@mapNotNull null
             DownloadItemUi(catalogModel, entry.status, displayState(entry, catalogModel, live))
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }.flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     // Large models are hidden, except the MoE ones that can run slowly from storage (experimental).
     val catalog = manager.catalog.filter {
         it.totalParametersBillions < CatalogModel.EXPERIMENTAL_MIN_TOTAL_BILLIONS || it.isExperimental

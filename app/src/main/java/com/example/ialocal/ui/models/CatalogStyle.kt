@@ -15,8 +15,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -153,7 +155,9 @@ internal fun CatalogActionButton(
             .height(40.dp)
             .background(background, shape)
             .border(1.dp, border, shape)
-            .clickable(enabled = enabled, onClick = onClick)
+            // The ripple follows the rounded corners instead of filling a rectangle.
+            .clip(shape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -348,6 +352,15 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         badge = "Código",
         tagline = "Modelos da Poolside para programar com agentes",
         accent = Color(0xFF2DD4BF),
+    )
+
+    ModelProvider.ARCEE -> ProviderUiMeta(
+        selectorName = "Trinity",
+        selectorSubtitle = "Arcee AI",
+        sectionName = "Arcee AI (Trinity)",
+        badge = "MoE",
+        tagline = "Modelos esparsos da família Trinity, incluindo versões experimentais",
+        accent = Color(0xFF38BDF8),
     )
 
     ModelProvider.SBER -> ProviderUiMeta(

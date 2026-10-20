@@ -12,6 +12,9 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,9 +27,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -263,7 +268,14 @@ private fun LocalAiApp(
 ) {
     val navController = rememberNavController()
 
-    NavHost(navController = navController, startDestination = "ai-home") {
+    // Short fades: the default 700 ms cross-fade kept both screens drawing for most of a second,
+    // so opening a screen felt slow and stuttered on heavy screens like the catalog.
+    NavHost(
+        navController = navController,
+        startDestination = "ai-home",
+        enterTransition = { fadeIn(tween(SCREEN_FADE_MS)) },
+        exitTransition = { fadeOut(tween(SCREEN_FADE_MS)) },
+    ) {
         composable("ai-home") {
             val vm: ModelsViewModel = viewModel(
                 key = "ai-home-models",
@@ -357,7 +369,7 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
-            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
+            PreloadDownloadAd(adsManager)
             GroupedOfflineModelsScreen(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
@@ -444,7 +456,7 @@ private fun LocalAiApp(
                     container.integrationSelfTest,
                 ),
             )
-            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
+            PreloadDownloadAd(adsManager)
             ModelsScreen(
                 viewModel = vm,
                 onEnsureStorageAccess = onEnsureStorageAccess,
@@ -529,13 +541,27 @@ private fun LocalAiApp(
         }
 
         composable("wikipedia") {
-            LaunchedEffect(adsManager.adsReady) { adsManager.preloadDownloadAd() }
+            PreloadDownloadAd(adsManager)
             WikipediaScreen(
                 wikipedia = container.offlineWikipedia,
                 onDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }
+    }
+}
+
+private const val SCREEN_FADE_MS = 220
+
+/**
+ * Loads the download ad ahead of time, once the screen has finished opening: loading it during the
+ * transition made the transition stutter. A screen is resumed only when its transition ends.
+ */
+@Composable
+private fun PreloadDownloadAd(adsManager: AdsManager) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(adsManager.adsReady, lifecycleOwner) {
+        lifecycleOwner.withResumed { adsManager.preloadDownloadAd() }
     }
 }
 

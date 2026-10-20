@@ -1,5 +1,7 @@
 package com.example.ialocal.ui.branding
 
+import android.content.res.Resources
+import android.util.TypedValue
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -8,10 +10,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -42,6 +50,7 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.COHERE -> "Cohere"
     ModelProvider.POOLSIDE -> "Poolside"
     ModelProvider.SBER -> "Sber / GigaChat"
+    ModelProvider.ARCEE -> "Arcee AI / Trinity"
 }
 
 /** Every company has its own logo, shown in the catalog and next to its model's replies in the chat. */
@@ -67,6 +76,33 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.COHERE -> R.drawable.provider_cohere
     ModelProvider.POOLSIDE -> R.drawable.provider_poolside
     ModelProvider.SBER -> R.drawable.provider_sber
+    ModelProvider.ARCEE -> R.drawable.provider_arcee
+}
+
+/** The logos drawn as pictures (WebP), decoded once; null for the vector logos. */
+private val rasterLogos = HashMap<Int, ImageBitmap?>()
+
+private fun rasterLogo(resources: Resources, id: Int): ImageBitmap? {
+    synchronized(rasterLogos) {
+        if (id in rasterLogos) return rasterLogos[id]
+        val path = TypedValue().also { resources.getValue(id, it, true) }.string
+        val bitmap = if (path?.endsWith(".xml") == true) null else ImageBitmap.imageResource(resources, id)
+        rasterLogos[id] = bitmap
+        return bitmap
+    }
+}
+
+/**
+ * The company's logo. painterResource decodes a WebP logo again in every list item that comes into
+ * view, on the main thread, which made the catalog and the chat stutter while scrolling; Compose
+ * already keeps the vector ones.
+ */
+@Composable
+fun providerLogoPainter(provider: ModelProvider): Painter {
+    val id = provider.logoRes()
+    val resources = LocalResources.current
+    val bitmap = remember(id, resources) { rasterLogo(resources, id) }
+    return if (bitmap != null) remember(bitmap) { BitmapPainter(bitmap) } else painterResource(id)
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =
@@ -85,7 +121,7 @@ fun ProviderLogo(
     ) {
         Box(contentAlignment = Alignment.Center) {
             Image(
-                painter = painterResource(provider.logoRes()),
+                painter = providerLogoPainter(provider),
                 contentDescription = null,
                 // Rounded like the frame: most logos are square pictures with their own background.
                 // The margin follows the size, so small logos (in chips and filters) stay legible.
