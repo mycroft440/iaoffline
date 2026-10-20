@@ -101,8 +101,11 @@ fun ExternalApiScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (showSettings) {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Card(Modifier.fillMaxWidth().weight(1f)) {
+                    Column(
+                        Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Text("Conectar uma IA pela internet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         Text(
                             "Use sua própria conta e chave do provedor. As mensagens desta conversa serão enviadas ao serviço escolhido. As IAs instaladas continuam 100% offline.",
@@ -153,7 +156,10 @@ fun ExternalApiScreen(
                             Button(
                                 enabled = !busy,
                                 onClick = {
-                                    if (viewModel.save(provider, url, modelId, newKey)) newKey = ""
+                                    if (viewModel.save(provider, url, modelId, newKey)) {
+                                        newKey = ""
+                                        if (viewModel.config.value.hasKey && modelId.isNotBlank()) showSettings = false
+                                    }
                                 },
                             ) { Text("Salvar conexão") }
                             OutlinedButton(
@@ -197,6 +203,7 @@ fun ExternalApiScreen(
                 )
             }
 
+            if (!showSettings) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Conversa online", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 TextButton(onClick = viewModel::newConversation, enabled = !busy) { Text("Nova conversa") }
@@ -256,6 +263,7 @@ fun ExternalApiScreen(
                     }
                 }
             }
+            }
         }
     }
 
@@ -266,6 +274,7 @@ fun ExternalApiScreen(
                 viewModel.selectModel(choice.id)
                 modelId = choice.id
                 chooseModel = false
+                showSettings = false
             },
             onDismiss = { chooseModel = false },
         )
