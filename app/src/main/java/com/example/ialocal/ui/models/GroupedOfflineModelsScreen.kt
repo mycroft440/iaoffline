@@ -51,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,6 +121,8 @@ fun GroupedOfflineModelsScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var selectedProvider by remember { mutableStateOf<ModelProvider?>(null) }
+    // Hidden by default; explicit opt-in restores the existing full recommendation cards.
+    var showRecommendations by rememberSaveable { mutableStateOf(false) }
     val nativeAds = rememberNativeAdSlots(enabled = adsEnabled)
     // Kept above the list: a banner scrolled out of view and back keeps its ad.
     val topBanner = rememberInlineAdBannerState(enabled = adsEnabled)
@@ -151,10 +154,11 @@ fun GroupedOfflineModelsScreen(
     }
     // The same IA is Free in the recommendation and in its company section.
     val freeDownloadModelId = recommendation.freeDownloadModelId
-    // The banner, then the recommendations with their heading.
-    val selectorIndex = 1 +
-        (if (featuredMoe.isEmpty()) 0 else 1 + featuredMoe.size) +
-        (if (recommendation.models.isEmpty()) 0 else 1 + recommendation.models.size)
+    // Ad, compact advice, optionally expanded recommendation cards, then the unchanged MoE
+    // sections and company chooser. Include only actually emitted LazyColumn items.
+    val selectorIndex = 2 +
+        (if (showRecommendations && recommendation.models.isNotEmpty()) 1 + recommendation.models.size else 0) +
+        (if (featuredMoe.isEmpty()) 0 else 1 + featuredMoe.size)
     val selectorOutOfView by remember(selectorIndex) {
         derivedStateOf { listState.firstVisibleItemIndex > selectorIndex }
     }
@@ -244,18 +248,18 @@ fun GroupedOfflineModelsScreen(
                 InlineAdBanner(state = topBanner)
             }
 
-            if (featuredMoe.isNotEmpty()) {
-                item(key = "section-featured-moe", contentType = CatalogItem.SECTION_HEADER) {
-                    FeaturedMoeHeader(featuredMoe.size, hardware.availableRamBytes)
-                }
-                items(
-                    items = featuredMoe,
-                    key = { "featured-moe-${it.id}" },
-                    contentType = { CatalogItem.MODEL_CARD },
-                ) { catalogCard(it) }
+            // The short recommendation notice is always visible near the top. Expanding it
+            // restores exactly the same full list/cards as before; company and MoE sections
+            // remain untouched, and recommendation calculations keep updating with live RAM.
+            item(key = "recommendation-notice", contentType = CatalogItem.SECTION_HEADER) {
+                RecommendationNotice(
+                    freeRamBytes = hardware.availableRamBytes,
+                    modelCount = recommendation.models.size,
+                    expanded = showRecommendations,
+                    onToggle = { showRecommendations = !showRecommendations },
+                )
             }
-
-            if (recommendation.models.isNotEmpty()) {
+            if (showRecommendations && recommendation.models.isNotEmpty()) {
                 item(key = "section-recommended", contentType = CatalogItem.SECTION_HEADER) {
                     RecommendedSectionHeader(
                         freeRamBytes = hardware.availableRamBytes,
@@ -266,6 +270,17 @@ fun GroupedOfflineModelsScreen(
                 items(
                     items = recommendation.models,
                     key = { "recommended-${it.id}" },
+                    contentType = { CatalogItem.MODEL_CARD },
+                ) { catalogCard(it) }
+            }
+
+            if (featuredMoe.isNotEmpty()) {
+                item(key = "section-featured-moe", contentType = CatalogItem.SECTION_HEADER) {
+                    FeaturedMoeHeader(featuredMoe.size, hardware.availableRamBytes)
+                }
+                items(
+                    items = featuredMoe,
+                    key = { "featured-moe-${it.id}" },
                     contentType = { CatalogItem.MODEL_CARD },
                 ) { catalogCard(it) }
             }
@@ -475,6 +490,74 @@ private fun CompanyFilterChip(
             background = accent.copy(alpha = 0.12f),
             border = accent.copy(alpha = 0.35f),
         )
+    }
+}
+
+/**
+ * Explanation near the top of the catalog. The numerical RAM limit comes from the Android live
+ * available-memory reading, never a hard-coded 5 GB threshold or phone's advertised capacity.
+ */
+internal fun catalogPerformanceNotice(freeRamBytes: Long): String =
+    "Em geral, quanto mais parâmetros uma I.A tem, mais processamento ela exige e mais lenta " +
+        "pode ficar. Para este celular, prefira modelos MoE abaixo de 14 bilhões de parâmetros " +
+        "ou I.As que precisem de até ${groupedFormatBytes(freeRamBytes.coerceAtLeast(0L))} de RAM estimada, " +
+        "conforme a memória livre agora. Em MoE, os pesos completos também ocupam memória: " +
+        "confira a estimativa de RAM de cada modelo."
+
+@Composable
+private fun RecommendationNotice(
+    freeRamBytes: Long,
+    modelCount: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CatalogSurface, shape)
+            .border(1.dp, CatalogBorderLight.copy(alpha = 0.75f), shape)
+            .padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Dica para escolher sua I.A",
+                modifier = Modifier.weight(1f),
+                color = CatalogText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            CatalogPill(
+                text = "${groupedFormatBytes(freeRamBytes.coerceAtLeast(0L))} livres",
+                foreground = CatalogEmerald,
+                background = CatalogEmerald.copy(alpha = 0.12f),
+                border = CatalogEmerald.copy(alpha = 0.4f),
+            )
+        }
+        Text(
+            text = catalogPerformanceNotice(freeRamBytes),
+            color = CatalogMuted,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+        if (modelCount > 0) {
+            TextButton(
+                onClick = onToggle,
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text(
+                    text = if (expanded) "Ocultar recomendadas" else "Ver recomendadas ($modelCount)",
+                    color = CatalogEmerald,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }
 
