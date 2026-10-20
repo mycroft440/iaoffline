@@ -148,6 +148,7 @@ class ChatViewModel(
                 _selectedModelId.value = agent.modelId
                 _selectedAgentId.value = agent.id
                 modelRepository.recordAgentUse(agent.id)
+                modelRepository.rememberChatModel(agent.modelId)
                 repository.setConversationAgent(conversationId, agent.id)
             }.onFailure {
                 _error.value = it.message ?: "Não foi possível selecionar este perfil."
@@ -181,7 +182,10 @@ class ChatViewModel(
         val agent = modelAgents.firstOrNull { it.name == selectedProfile.value.displayName }
             ?: throw IllegalStateException("Nenhum perfil foi encontrado para este modelo.")
         _selectedAgentId.value = agent.id
-        if (recordUsage) modelRepository.recordAgentUse(agent.id)
+        if (recordUsage) {
+            modelRepository.recordAgentUse(agent.id)
+            modelRepository.rememberChatModel(modelId)
+        }
         repository.setConversationAgent(conversationId, agent.id)
     }
 
