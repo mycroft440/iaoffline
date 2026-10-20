@@ -94,6 +94,21 @@ private fun sectionOf(model: CatalogModel, deviceRamBytes: Long): CatalogSection
     else -> CatalogSection.MOE_NEEDS_MORE_RAM
 }
 
+/** MoE models below 14B total parameters get their own featured section at the very top.
+ * This is a discovery list, NOT a claim that every model fits this device.
+ * Sort truly fitting models first, then the 8B family before other sizes.
+ */
+internal const val FEATURED_MOE_MAX_BILLIONS = 14.0
+
+internal fun featuredMoeModels(catalog: List<CatalogModel>, freeRamBytes: Long): List<CatalogModel> =
+    catalog.filter { it.isMoe && it.totalParametersBillions < FEATURED_MOE_MAX_BILLIONS }
+        .sortedWith(
+            compareByDescending<CatalogModel> { estimatedCatalogRamBytes(it) <= freeRamBytes }
+                .thenBy { if (it.totalParametersBillions in 7.5..8.5) 0 else 1 }
+                .thenBy { estimatedCatalogRamBytes(it) }
+                .thenBy { it.id },
+        )
+
 /** Minimum planning estimate: complete quantized GGUF, minimum KV cache, and work buffers. */
 internal fun estimatedCatalogRamBytes(model: CatalogModel): Long =
     model.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES
