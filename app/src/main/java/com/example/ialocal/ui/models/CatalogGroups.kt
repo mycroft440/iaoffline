@@ -106,9 +106,10 @@ internal data class CatalogRecommendation(
     val models: List<CatalogModel>,
     /** False means none fits now: [models] are the lightest alternatives. */
     val fitFreeRam: Boolean,
+) {
     /** Only the first recommendation is offered as Free in the catalog. */
     val freeDownloadModelId: String? get() = models.firstOrNull()?.id
-)
+}
 
 /**
  * Recommends ALL catalog models whose full-resident minimum estimate fits in [freeRamBytes].
