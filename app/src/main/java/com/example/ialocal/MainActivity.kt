@@ -452,9 +452,14 @@ private fun LocalAiApp(
                     modelRepository = container.modelRepository,
                 ),
             )
+            val installedLanguageIds by container.codeLanguagePacks.installedIds.collectAsStateWithLifecycle()
             ChatWithDeepThinkScreen(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
+                installedLanguageIds = installedLanguageIds,
+                onOpenCompilers = { languageId ->
+                    navController.navigate("compilers?languageId=${languageId}")
+                },
                 onOpenConversation = { targetId ->
                     if (targetId != id) {
                         navController.navigate("chat/$targetId") {
@@ -563,7 +568,17 @@ private fun LocalAiApp(
             )
         }
 
-        composable("compilers") {
+        composable(
+            route = "compilers?languageId={languageId}",
+            arguments = listOf(
+                navArgument("languageId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { entry ->
+            val focusedLanguageId = entry.arguments?.getString("languageId")
             val vm: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.Factory(
                     container.themeRepository,
@@ -573,6 +588,7 @@ private fun LocalAiApp(
             PreloadRewardedSectionEntry(adsManager)
             CompilersScreen(
                 viewModel = vm,
+                focusedLanguageId = focusedLanguageId,
                 onRequestRewardedAction = onRequestRewardedDownload,
                 onBack = { navController.popBackStack() },
             )
