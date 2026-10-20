@@ -132,6 +132,7 @@ class MainActivity : ComponentActivity() {
                     onEnsureStorageAccess = ::requestStorageAccess,
                     onPrivacyOptions = { adsManager.showPrivacyOptions(this) },
                     onDownloadStarted = ::showDownloadAd,
+                    onRequestRewardedDownload = ::requestRewardedDownload,
                     onExitApp = { finish() },
                 )
                 lastExitReport?.let { report ->
@@ -218,6 +219,36 @@ class MainActivity : ComponentActivity() {
         adsManager.showDownloadAd(this)
     }
 
+    /** New model downloads use opt-in rewarded ads; Wikipedia keeps its old interstitial. */
+    private fun requestRewardedDownload(modelName: String, onAuthorized: () -> Unit) {
+        if (container.chatGenerationManager.activeGenerations.value > 0) {
+            Toast.makeText(this, "Termine a resposta da IA antes de assistir ao anúncio.", Toast.LENGTH_LONG).show()
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Liberar download de ${modelName}?")
+            .setMessage(
+                "Assista a um anúncio recompensado para liberar o download desta IA. " +
+                    "Se você fechar antes de receber a recompensa, o download não começa. " +
+                    "Se não houver anúncio disponível, o download será liberado gratuitamente.",
+            )
+            .setPositiveButton("Assistir anúncio") { _, _ ->
+                adsManager.requestRewardedDownload(
+                    activity = this,
+                    onReward = onAuthorized,
+                    onUnavailable = {
+                        Toast.makeText(this, "Anúncio indisponível. Download liberado sem anúncio.", Toast.LENGTH_LONG).show()
+                        onAuthorized()
+                    },
+                    onBusy = {
+                        Toast.makeText(this, "Já há um anúncio sendo preparado ou exibido.", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
     private fun runInitialStorageScanOnce() {
         val preferences = getSharedPreferences(STORAGE_SCAN_PREFS, MODE_PRIVATE)
         if (preferences.getBoolean(KEY_INITIAL_STORAGE_SCAN_HANDLED, false)) return
@@ -264,6 +295,7 @@ private fun LocalAiApp(
     onEnsureStorageAccess: (() -> Unit) -> Unit,
     onPrivacyOptions: () -> Unit,
     onDownloadStarted: () -> Unit,
+    onRequestRewardedDownload: (String, () -> Unit) -> Unit,
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -374,7 +406,7 @@ private fun LocalAiApp(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
                 onEnsureStorageAccess = onEnsureStorageAccess,
-                onDownloadStarted = onDownloadStarted,
+                onRequestRewardedDownload = onRequestRewardedDownload,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -460,7 +492,7 @@ private fun LocalAiApp(
             ModelsScreen(
                 viewModel = vm,
                 onEnsureStorageAccess = onEnsureStorageAccess,
-                onDownloadStarted = onDownloadStarted,
+                onRequestRewardedDownload = onRequestRewardedDownload,
                 onBack = { navController.popBackStack() },
             )
         }
