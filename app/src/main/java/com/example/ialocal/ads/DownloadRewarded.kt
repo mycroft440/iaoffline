@@ -102,13 +102,13 @@ class DownloadRewarded(appContext: Context) {
 
             override fun onAdDismissedFullScreenContent() {
                 showing = false
-                preload()
+                // Do not automatically request another ad during the 30-minute entry cooldown.
+                // The next explicit rewarded action will load on demand if needed.
             }
 
             override fun onAdFailedToShowFullScreenContent(error: AdError) {
                 showing = false
                 if (!grant.granted) onUnavailable()
-                preload()
             }
         }
         ready.show(activity) { grant.earn() }
