@@ -17,13 +17,13 @@ internal fun chatModelLabel(model: AiModelEntity): String {
     }
 }
 
-private val CHAT_PARAMETER_COUNT = Regex("""(?i)(?<![a-z0-9])\\d+(?:[.,]\\d+)?\\s*b(?![a-z0-9])""")
-private val CHAT_FILE_EXTENSION = Regex("""(?i)\\.gguf$""")
+private val CHAT_PARAMETER_COUNT = Regex("""(?i)(?<![a-z0-9])\d+(?:[.,]\d+)?\s*b(?![a-z0-9])""")
+private val CHAT_FILE_EXTENSION = Regex("""(?i)\.gguf$""")
 private val CHAT_QUANT_TAIL = Regex(
-    """(?i)(?:[-_.\\s]+)(?:IQ[1-4][A-Z0-9_-]*|Q[1-8](?:_[A-Z0-9]+)*|BF16|F16|FP16|F32)(?:\\.gguf)?$""",
+    """(?i)(?:[-_.\s]+)(?:IQ[1-4][A-Z0-9_-]*|Q[1-8](?:_[A-Z0-9]+)*|BF16|F16|FP16|F32)(?:\.gguf)?$""",
 )
 private val CHAT_VARIANT_WORDS = Regex(
-    """(?i)\\b(?:tern[aá]rio|ternary|instruct|reasoning|thinking|preview|pruned|qat|gguf|uncensored|censored|experimental)\\b""",
+    """(?i)\b(?:tern[aá]rio|ternary|instruct|reasoning|thinking|preview|pruned|qat|gguf|uncensored|censored|experimental)\b""",
 )
 
 /** Also handles manually imported GGUF file names that have no pinned catalog entry. */
@@ -37,8 +37,8 @@ internal fun chatModelLabel(rawName: String, totalParametersBillions: Double? = 
         withoutFile
     }
     val clean = CHAT_VARIANT_WORDS.replace(base, " ")
-        .replace(Regex("""(?<=\\p{L})-(?=\\d)"""), " ")
-        .replace(Regex("""\\s+"""), " ")
+        .replace(Regex("""-(?=\d)"""), " ")
+        .replace(Regex("""\s+"""), " ")
         .trim(' ', '-', '_', '.')
     val label = clean.ifBlank { "Modelo local" }
     if (CHAT_PARAMETER_COUNT.containsMatchIn(label) || totalParametersBillions == null) return label
