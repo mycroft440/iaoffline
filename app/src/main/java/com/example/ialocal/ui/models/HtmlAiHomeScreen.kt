@@ -93,8 +93,20 @@ import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.providerLogoPainter
 import com.example.ialocal.ui.rememberLiveMemory
 
-/** Installed AIs listed one per row on the home screen; the others share the box side by side. */
-private const val HOME_MODEL_ROWS = 3
+/** A short home preview; full information and management live in "Ver todas baixadas". */
+internal const val HOME_MODEL_PREVIEW_LIMIT = 8
+
+internal data class HomeAiPreview(val models: List<AiModelEntity>, val remainingCount: Int)
+
+internal fun homeAiPreview(installed: List<AiModelEntity>): HomeAiPreview {
+    val ordered = installed.sortedWith(
+        compareByDescending<AiModelEntity> { it.isActive }.thenByDescending { it.importedAt },
+    )
+    return HomeAiPreview(
+        models = ordered.take(HOME_MODEL_PREVIEW_LIMIT),
+        remainingCount = (ordered.size - HOME_MODEL_PREVIEW_LIMIT).coerceAtLeast(0),
+    )
+}
 
 private data class HomeDeviceSnapshot(
     val freeStorageBytes: Long,
@@ -570,26 +582,47 @@ private fun HomeMyAisSection(
     onOpenModel: (AiModelEntity) -> Unit,
     onOpenOfflineModels: () -> Unit,
 ) {
-    // The AI in use first, then the newest; past the first rows, the rest share the box side by side.
-    val ordered = remember(models) {
-        models.sortedWith(compareByDescending<AiModelEntity> { it.isActive }.thenByDescending { it.importedAt })
-    }
-    val rows = ordered.take(HOME_MODEL_ROWS)
-    val compact = ordered.drop(HOME_MODEL_ROWS)
+    val preview = remember(models) { homeAiPreview(models) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        HomeSectionHeader(
-            title = "Minhas I.As",
-            badge = "Offline",
-            tagline = when (models.size) {
-                0 -> "Baixe uma IA para usar sem internet"
-                1 -> "1 IA no aparelho"
-                else -> "${models.size} IAs no aparelho"
-            },
-            icon = Icons.Default.Memory,
-            accent = CatalogEmerald,
+        // A single compact header instead of a large header, three full rows and separate chips.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
-            if (models.isNotEmpty()) HomeHeaderButton("Ver todas baixadas", onClick = onOpenMyAis)
+            val iconShape = RoundedCornerShape(10.dp)
+            Box(
+                modifier = Modifier
+                    .size(35.dp)
+                    .background(CatalogEmerald.copy(alpha = 0.12f), iconShape)
+                    .border(1.dp, CatalogEmerald.copy(alpha = 0.45f), iconShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Memory, contentDescription = null, tint = CatalogEmerald, modifier = Modifier.size(19.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Minhas I.As",
+                    color = CatalogText,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+                Text(
+                    text = when (models.size) {
+                        0 -> "Nenhuma IA instalada"
+                        1 -> "1 IA no aparelho · offline"
+                        else -> "${models.size} IAs no aparelho · offline"
+                    },
+                    color = CatalogMuted,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
+            }
+            if (models.isNotEmpty()) {
+                HomeHeaderButton("Ver todas baixadas", onClick = onOpenMyAis)
+            }
         }
 
         val shape = RoundedCornerShape(12.dp)
@@ -598,24 +631,48 @@ private fun HomeMyAisSection(
                 .fillMaxWidth()
                 .background(CatalogCard, shape)
                 .border(1.dp, CatalogBorder.copy(alpha = 0.9f), shape)
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+                .padding(7.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (ordered.isEmpty()) {
+            if (preview.models.isEmpty()) {
                 Text(
-                    text = "Nenhuma IA baixada ainda. Ela aparece aqui assim que for instalada.",
+                    text = "Nenhuma IA baixada ainda. Baixe uma para começar a conversar sem internet.",
                     color = CatalogMuted,
                     fontSize = 11.sp,
                     lineHeight = 15.sp,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(8.dp),
                 )
-            }
-            rows.forEachIndexed { index, model ->
-                if (index > 0) HorizontalDivider(color = CatalogBorder.copy(alpha = 0.7f), modifier = Modifier.padding(horizontal = 8.dp))
-                HomeModelRow(model, onClick = { onOpenModel(model) })
-            }
-            if (compact.isNotEmpty()) {
-                HorizontalDivider(color = CatalogBorder.copy(alpha = 0.7f), modifier = Modifier.padding(horizontal = 8.dp))
-                HomeCompactModels(compact, onOpenModel)
+            } else {
+                // All featured models use the same compact two-column tile, including test/error
+                // states. For many installed models, the full library remains one tap away.
+                preview.models.chunked(2).forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        row.forEach { model ->
+                            HomeAiPreviewTile(
+                                model = model,
+                                modifier = Modifier.weight(1f),
+                                onClick = { onOpenModel(model) },
+                            )
+                        }
+                        if (row.size == 1) Box(Modifier.weight(1f))
+                    }
+                }
+                if (preview.remainingCount > 0) {
+                    Text(
+                        text = "+${preview.remainingCount} outra${if (preview.remainingCount == 1) "" else "s"} IA${if (preview.remainingCount == 1) "" else "s"} instalada${if (preview.remainingCount == 1) "" else "s"} · Ver todas",
+                        color = CatalogEmerald,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(7.dp))
+                            .clickable(onClick = onOpenMyAis)
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                    )
+                }
             }
         }
 
@@ -630,56 +687,76 @@ private fun HomeMyAisSection(
     }
 }
 
-/** An installed AI in one slim row: logo, name, size and, once tested, whether it is ready. */
+/** Consistent, space-efficient mini-cards: provider, readable name, status and GGUF file size. */
 @Composable
-private fun HomeModelRow(model: AiModelEntity, onClick: () -> Unit) {
+private fun HomeAiPreviewTile(
+    model: AiModelEntity,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val provider = remember(model.id, model.name) { model.provider() }
-    // An AI not tested yet is tested on its first message; it gets no label until then.
-    val status = when (model.verificationStatus) {
+    val (statusLabel, statusColor) = when (model.verificationStatus) {
         ModelVerificationStatus.VERIFIED.name -> "Pronta" to CatalogEmerald
         ModelVerificationStatus.VERIFYING.name -> "Testando" to CatalogAmber
         ModelVerificationStatus.ERROR.name -> "Erro" to CatalogRose
-        else -> null
+        else -> "Não testada" to CatalogMuted
     }
+    val tileShape = RoundedCornerShape(9.dp)
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+    Column(
+        modifier = modifier
+            .height(59.dp)
+            .background(CatalogSurface.copy(alpha = 0.85f), tileShape)
+            .border(
+                1.dp,
+                if (statusLabel == "Erro") CatalogRose.copy(alpha = 0.48f)
+                else CatalogBorderLight.copy(alpha = 0.58f),
+                tileShape,
+            )
+            .clip(tileShape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 7.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        HomeModelLogo(provider, size = 20.dp)
-        Text(
-            text = compactModelName(model),
-            color = CatalogText,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = groupedFormatBytes(model.sizeBytes),
-            color = CatalogMuted,
-            fontSize = 10.sp,
-            maxLines = 1,
-        )
-        if (status != null) {
-            CatalogPill(
-                text = status.first,
-                foreground = status.second,
-                background = status.second.copy(alpha = 0.10f),
-                border = status.second.copy(alpha = 0.32f),
-                leadingDot = true,
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            HomeModelLogo(provider, size = 16.dp)
+            Text(
+                text = compactModelName(model),
+                color = CatalogText,
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 22.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(Modifier.size(5.dp).background(statusColor, CircleShape))
+                Text(statusLabel, color = statusColor, fontSize = 9.sp, maxLines = 1)
+            }
+            Text(
+                text = groupedFormatBytes(model.sizeBytes),
+                color = CatalogMuted,
+                fontSize = 9.sp,
+                maxLines = 1,
             )
         }
     }
 }
 
-/** A company logo without a frame, small enough for a row or a chip; the robot when unknown. */
+/** Small company logo for a mini-card; a robot if the model was imported without a known brand. */
 @Composable
 private fun HomeModelLogo(provider: ModelProvider?, size: Dp) {
     if (provider != null) {
@@ -691,45 +768,6 @@ private fun HomeModelLogo(provider: ModelProvider?, size: Dp) {
         )
     } else {
         Icon(Icons.Default.SmartToy, contentDescription = null, tint = CatalogMuted, modifier = Modifier.size(size))
-    }
-}
-
-/** The AIs past the first rows, side by side: logo and name with its size in parameters. */
-@Composable
-private fun HomeCompactModels(models: List<AiModelEntity>, onOpenModel: (AiModelEntity) -> Unit) {
-    FlowRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        models.forEach { model ->
-            val provider = remember(model.id, model.name) { model.provider() }
-            val chipShape = RoundedCornerShape(8.dp)
-            val failed = model.verificationStatus == ModelVerificationStatus.ERROR.name
-            Row(
-                modifier = Modifier
-                    .background(CatalogSurface.copy(alpha = 0.95f), chipShape)
-                    .border(1.dp, if (failed) CatalogRose.copy(alpha = 0.45f) else CatalogBorderLight.copy(alpha = 0.6f), chipShape)
-                    .clip(chipShape)
-                    .clickable { onOpenModel(model) }
-                    .padding(horizontal = 7.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                HomeModelLogo(provider, size = 13.dp)
-                Text(
-                    text = compactModelName(model),
-                    color = if (failed) CatalogRose else CatalogText,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 170.dp),
-                )
-            }
-        }
     }
 }
 
