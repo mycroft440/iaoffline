@@ -43,6 +43,16 @@ class ExternalApiSettings(context: Context) {
 
     fun save(provider: RemoteApiProvider, baseUrl: String, modelId: String, newKey: String?) {
         val safeUrl = remoteApiBaseUrl(baseUrl)
+        val previous = read()
+        // Never re-use a bearer token for a different API host/provider by accident.
+        // Changing only the model is safe; switching the server requires a new key.
+        require(
+            !previous.hasKey ||
+                (previous.provider == provider && remoteApiBaseUrl(previous.baseUrl) == safeUrl) ||
+                !newKey.isNullOrBlank()
+        ) {
+            "Ao trocar de provedor ou URL, informe uma nova chave para proteger suas credenciais."
+        }
         val changes = prefs.edit()
             .putString("provider", provider.name)
             .putString("base_url", safeUrl)
