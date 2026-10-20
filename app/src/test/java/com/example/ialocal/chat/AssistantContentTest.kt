@@ -97,6 +97,29 @@ class AssistantContentTest {
     }
 
     @Test
+    fun savesActualAnsweringModelNameWithoutLeakingMetadataIntoTheAnswer() {
+        val raw = "<think>analisando</think>Resposta"
+        val saved = AssistantContent.withTimings(
+            raw,
+            responseMs = 123,
+            reasoningMs = 99,
+            modelName = "Bonsai 2 Ternário 27B",
+        )
+        assertEquals("Bonsai 2 Ternário 27B", AssistantContent.parse(saved).modelName)
+        assertEquals("Resposta", AssistantContent.answerForHistory(saved))
+        assertFalse(AssistantContent.answerForHistory(saved).contains("nexus_model_name"))
+    }
+
+    @Test
+    fun regeneratingWithAnotherModelReplacesOldName() {
+        val first = AssistantContent.withTimings("Oi", 12, null, modelName = "Mistral 3 4B")
+        val second = AssistantContent.withTimings(first, 15, null, modelName = "Bonsai 2 27B")
+        assertEquals("Bonsai 2 27B", AssistantContent.parse(second).modelName)
+        assertEquals(1, Regex("nexus_model_name").findAll(second).count())
+        assertNull(AssistantContent.parse("Texto antigo sem identificação").modelName)
+    }
+
+    @Test
     fun repliesSavedBeforeHaveNoCompany() {
         assertNull(AssistantContent.parse("Resposta\n\n<!--nexus_response_ms:10-->").provider)
         assertNull(AssistantContent.parse("Resposta<!--nexus_provider:DESCONHECIDA-->").provider)
