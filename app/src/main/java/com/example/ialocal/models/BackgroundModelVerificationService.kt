@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.PowerManager
 import com.example.ialocal.LocalAiApplication
 import com.example.ialocal.MainActivity
 import com.example.ialocal.R
@@ -31,6 +32,8 @@ import kotlinx.coroutines.launch
 class BackgroundModelVerificationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var testJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wakeRenewal: Job? = null
     private lateinit var notifications: NotificationManager
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
@@ -78,12 +81,15 @@ class BackgroundModelVerificationService : Service() {
                         }
                         prefs.edit().putInt("attempt_$id", previousAttempts + 1).apply()
                         notifications.notify(ID, notification("Testando ${model.name} em segundo plano…"))
+                        keepCpuAwakeDuringTest()
                         try {
                             container.modelManager.verifyAndActivate(id)
                         } catch (cancel: CancellationException) {
                             throw cancel
                         } catch (_: Throwable) {
                             // ModelManager already saves ERROR and keeps the installed GGUF.
+                        } finally {
+                            releaseCpuGuard()
                         }
                         remove(id)
                     }
@@ -100,8 +106,33 @@ class BackgroundModelVerificationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /** Keep the CPU awake for actual inference, not while waiting for other active operations. */
+    private fun keepCpuAwakeDuringTest() {
+        val lock = wakeLock ?: getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IAOffline:VerifyImportedModel")
+            .apply { setReferenceCounted(false) }
+            .also { wakeLock = it }
+        if (!lock.isHeld) lock.acquire(15L * 60_000L)
+        if (wakeRenewal?.isActive != true) {
+            wakeRenewal = scope.launch {
+                while (isActive) {
+                    delay(5L * 60_000L)
+                    if (lock.isHeld) lock.release()
+                    lock.acquire(15L * 60_000L)
+                }
+            }
+        }
+    }
+
+    private fun releaseCpuGuard() {
+        wakeRenewal?.cancel()
+        wakeRenewal = null
+        wakeLock?.takeIf { it.isHeld }?.release()
+    }
+
     override fun onDestroy() {
         testJob?.cancel()
+        releaseCpuGuard()
         scope.cancel()
         super.onDestroy()
     }
