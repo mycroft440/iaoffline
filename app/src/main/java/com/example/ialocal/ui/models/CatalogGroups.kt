@@ -44,6 +44,7 @@ internal val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.COHERE,
     ModelProvider.POOLSIDE,
     ModelProvider.SBER,
+    ModelProvider.ARCEE,
 )
 
 /** Context, compute buffers and the app itself, on top of the model file. */
