@@ -1,6 +1,7 @@
 package com.example.ialocal.ui.models
 
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelCatalog
 import com.example.ialocal.models.ModelProvider
 import org.junit.Assert.assertEquals
@@ -68,47 +69,70 @@ class CatalogGroupsTest {
     }
 
     @Test
-    fun recommendationsAreTheLargestThatFitTheFreeRamOnePerCompany() {
+    fun recommendsEveryModelThatFitsCurrentFreeRamWithoutLimitsPerCompany() {
         val free = 6L * 1024 * 1024 * 1024
-        val twelveGb = 12_000_000_000L
-        val recommended = recommendedModels(ModelCatalog.entries, freeRamBytes = free, deviceRamBytes = twelveGb)
-
+        val recommended = recommendedModels(ModelCatalog.entries, freeRamBytes = free)
+        val fitting = ModelCatalog.entries.filter { estimatedCatalogRamBytes(it) <= free }
         assertTrue(recommended.fitFreeRam)
-        assertEquals(3, recommended.models.size)
-        assertEquals(recommended.models.map { it.provider }.distinct(), recommended.models.map { it.provider })
-        recommended.models.forEach { model ->
-            assertTrue(model.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES <= free)
-            assertTrue(model.recommendedRamBytes <= twelveGb)
-            assertFalse(model.isExperimental)
-        }
+        assertTrue(fitting.size > 3)
+        assertEquals(fitting.toSet(), recommended.models.toSet())
+        assertEquals(fitting.size, recommended.models.size)
         assertEquals(
-            recommended.models.sortedByDescending { it.approximateSizeBytes },
+            fitting.sortedWith(compareByDescending<CatalogModel> { estimatedCatalogRamBytes(it) }.thenBy { it.id }),
             recommended.models,
         )
-        // Nothing that fits is larger than the smallest recommendation from another company.
-        val fitting = ModelCatalog.entries.filter {
-            !it.isExperimental && it.recommendedRamBytes <= twelveGb &&
-                it.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES <= free
-        }
-        val best = fitting.maxBy { it.approximateSizeBytes }
-        assertEquals(best, recommended.models.first())
+        assertTrue(recommended.models.groupingBy { it.provider }.eachCount().values.any { it > 1 })
+        recommended.models.forEach { assertTrue(estimatedCatalogRamBytes(it) <= free) }
     }
 
     @Test
-    fun installedModelsAreNotRecommendedAgain() {
-        val free = 6L * 1024 * 1024 * 1024
-        val first = recommendedModels(ModelCatalog.entries, free, 12_000_000_000L).models.first()
-        val next = recommendedModels(ModelCatalog.entries, free, 12_000_000_000L, installedIds = setOf(first.id))
-        assertFalse(next.models.contains(first))
+    fun includesEvenInstalledAndExperimentalModelsWhenTheirRamEstimateFits() {
+        val result = recommendedModels(ModelCatalog.entries, freeRamBytes = Long.MAX_VALUE)
+        assertTrue(result.fitFreeRam)
+        assertEquals(ModelCatalog.entries.size, result.models.size)
+        assertEquals(ModelCatalog.entries.toSet(), result.models.toSet())
+        assertTrue(result.models.any { it.isExperimental })
     }
 
     @Test
-    fun withAlmostNoFreeRamTheLightestModelsAreSuggested() {
-        val recommended = recommendedModels(ModelCatalog.entries, freeRamBytes = 200L * 1024 * 1024, deviceRamBytes = 4_000_000_000L)
+    fun changesInFreeRamChangeTheNumberOfModelsRecommended() {
+        val lowBytes = 2_000_000_000L
+        val highBytes = 5_000_000_000L
+        val low = recommendedModels(ModelCatalog.entries, freeRamBytes = lowBytes)
+        val high = recommendedModels(ModelCatalog.entries, freeRamBytes = highBytes)
+        assertTrue(low.fitFreeRam)
+        assertTrue(high.fitFreeRam)
+        assertTrue(high.models.size > low.models.size)
+        assertTrue(high.models.containsAll(low.models))
+        assertEquals(ModelCatalog.entries.count { estimatedCatalogRamBytes(it) <= lowBytes }, low.models.size)
+        assertEquals(ModelCatalog.entries.count { estimatedCatalogRamBytes(it) <= highBytes }, high.models.size)
+    }
+
+    @Test
+    fun whenNoneFitsSuggestsTheFiveLowestRamEstimates() {
+        val free = 200L * 1024 * 1024
+        val recommended = recommendedModels(ModelCatalog.entries, freeRamBytes = free)
         assertFalse(recommended.fitFreeRam)
-        assertEquals(3, recommended.models.size)
-        val lightest = ModelCatalog.entries.filter { it.recommendedRamBytes <= 4_000_000_000L }.minBy { it.approximateSizeBytes }
-        assertEquals(lightest, recommended.models.first())
+        assertEquals(LOW_RAM_FALLBACK_MODEL_COUNT, recommended.models.size)
+        assertEquals(
+            ModelCatalog.entries.sortedWith(
+                compareBy<CatalogModel> { estimatedCatalogRamBytes(it) }.thenBy { it.id },
+            ).take(LOW_RAM_FALLBACK_MODEL_COUNT),
+            recommended.models,
+        )
+        assertTrue(recommended.models.all { estimatedCatalogRamBytes(it) > free })
+    }
+
+    @Test
+    fun exactlyEnoughRamIncludesAllTiesAndEmptyCatalogIsHandled() {
+        val minBytes = ModelCatalog.entries.minOf { estimatedCatalogRamBytes(it) }
+        val exact = recommendedModels(ModelCatalog.entries, freeRamBytes = minBytes)
+        val below = recommendedModels(ModelCatalog.entries, freeRamBytes = minBytes - 1)
+        assertTrue(exact.fitFreeRam)
+        assertEquals(ModelCatalog.entries.filter { estimatedCatalogRamBytes(it) <= minBytes }.toSet(), exact.models.toSet())
+        assertFalse(below.fitFreeRam)
+        assertFalse(recommendedModels(emptyList(), freeRamBytes = 0).fitFreeRam)
+        assertTrue(recommendedModels(emptyList(), freeRamBytes = 0).models.isEmpty())
     }
 
     @Test
