@@ -15,7 +15,7 @@ internal object ModelDownloadRetryPolicy {
         if (failures <= 1) 0L else RETRY_INTERVAL_MS
 
     /** Bound the count so an hours-long disconnected phone cannot overflow Int. */
-    fun nextFailureCount(previous: Int): Int = (previous + 1).coerceAtMost(2)
+    fun nextFailureCount(previous: Int): Int = if (previous >= 2) 2 else (previous + 1).coerceAtLeast(1)
 
     /** Local storage failures require user action, not repeated network connections. */
     fun isStorageFailure(error: IOException): Boolean {
