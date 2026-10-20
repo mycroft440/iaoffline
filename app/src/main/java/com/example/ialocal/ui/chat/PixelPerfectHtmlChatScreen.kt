@@ -678,6 +678,7 @@ private fun ExactChatBody(
     }
     // The model answering now; also stands in for replies saved before their company was recorded.
     val selectedProvider = remember(selectedModel) { selectedModel?.provider() }
+    val selectedModelLabel = remember(selectedModel) { selectedModel?.let(::chatModelLabel) }
     // The code block open full screen; it is looked up again as the reply grows, so it follows the code being written.
     var openCanvas by remember { mutableStateOf<CanvasRef?>(null) }
     val canvas = remember(openCanvas, messages) {
@@ -698,7 +699,7 @@ private fun ExactChatBody(
     Column(Modifier.fillMaxSize().background(PBg)) {
         ExactTopBar(
             agent = profileName,
-            model = selectedModel?.name ?: "Modelo",
+            model = selectedModelLabel ?: "Modelo",
             onMenu = onMenu,
             onProfile = onProfile,
             onModel = onModel,
@@ -727,11 +728,17 @@ private fun ExactChatBody(
                 ) {
                     items(messages, key = { it.message.id }) { item ->
                         if (item.message.id == sendingAssistantId && item.message.content.isBlank()) {
-                            ExactLoading(provider = selectedProvider, progress = progress, startedAt = item.message.createdAt)
+                            ExactLoading(
+                                provider = selectedProvider,
+                                modelLabel = selectedModelLabel,
+                                progress = progress,
+                                startedAt = item.message.createdAt,
+                            )
                         } else {
                             ExactMessage(
                                 item = item,
                                 fallbackProvider = selectedProvider,
+                                fallbackModelLabel = selectedModelLabel,
                                 reasoningStartedAt = if (item.message.id == sendingAssistantId) {
                                     progress?.steps?.lastOrNull { it.stage.kind == GenerationStage.Kind.REASONING }?.startedAt
                                 } else {
@@ -746,7 +753,9 @@ private fun ExactChatBody(
                         }
                     }
                     if (generating && sendingAssistantId == null) {
-                        item { ExactLoading(provider = selectedProvider, progress = progress) }
+                        item {
+                            ExactLoading(provider = selectedProvider, modelLabel = selectedModelLabel, progress = progress)
+                        }
                     }
                 }
             }
@@ -921,6 +930,7 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
 private fun ExactMessage(
     item: MessageWithAttachments,
     fallbackProvider: ModelProvider?,
+    fallbackModelLabel: String?,
     reasoningStartedAt: Long?,
     onOpenCanvas: (CanvasRef) -> Unit,
     canRerun: Boolean,
@@ -930,7 +940,7 @@ private fun ExactMessage(
     if (item.message.role == MessageRole.USER.name) {
         ExactUserMessage(item)
     } else {
-        ExactAssistantMessage(item, fallbackProvider, reasoningStartedAt, onOpenCanvas, canRerun, showAd, onRerun)
+        ExactAssistantMessage(item, fallbackProvider, fallbackModelLabel, reasoningStartedAt, onOpenCanvas, canRerun, showAd, onRerun)
     }
 }
 
@@ -997,6 +1007,7 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
 private fun ExactAssistantMessage(
     item: MessageWithAttachments,
     fallbackProvider: ModelProvider?,
+    fallbackModelLabel: String?,
     /** When the answer being written started reasoning; the time before it was loading and reading. */
     reasoningStartedAt: Long?,
     onOpenCanvas: (CanvasRef) -> Unit,
@@ -1007,6 +1018,11 @@ private fun ExactAssistantMessage(
     val parsed = remember(item.message.content) { AssistantContent.parse(item.message.content) }
     val sending = item.message.status == MessageStatus.SENDING.name
     val thinking = sending && parsed.reasoningInProgress
+    // Finished replies retain the model that generated them, even after changing the selection.
+    // Old messages may record only their company: do not fabricate a parameter count for them.
+    val replyModelLabel = parsed.modelName?.let(::chatModelLabel)
+        ?: (if (sending) fallbackModelLabel else parsed.provider?.brandName())
+        ?: "IA local"
     // While the model thinks, only its last two lines show unless the user opens the whole
     // reasoning; everything folds once it is done.
     var reasoningOpen by remember(item.message.id) { mutableStateOf(false) }
@@ -1021,6 +1037,7 @@ private fun ExactAssistantMessage(
         AssistantAvatar(parsed.provider ?: fallbackProvider, Modifier.padding(top = 1.dp))
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistantModelHeading(replyModelLabel)
             if (parsed.reasoning != null) {
                 val accent = Color(0xFFFBBF24)
                 val elapsed = if (thinking) rememberElapsedMs(reasoningStartedAt ?: item.message.createdAt) else null
@@ -1231,6 +1248,19 @@ private fun ReasoningTail(reasoning: String) {
     }
 }
 
+/** The short family, generation and total-parameter count above thinking and answers. */
+@Composable
+private fun AssistantModelHeading(label: String) {
+    Text(
+        text = label,
+        color = PText,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
 /** The logo of the company behind the model that answered; the robot when it is not known. */
 @Composable
 private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modifier) {
@@ -1260,7 +1290,12 @@ private fun AssistantAvatar(provider: ModelProvider?, modifier: Modifier = Modif
  * and the current one with its running time.
  */
 @Composable
-private fun ExactLoading(provider: ModelProvider?, progress: GenerationProgress?, startedAt: Long? = null) {
+private fun ExactLoading(
+    provider: ModelProvider?,
+    modelLabel: String?,
+    progress: GenerationProgress?,
+    startedAt: Long? = null,
+) {
     val now = rememberNow(progress?.current?.startedAt ?: startedAt ?: 0L)
     Row(
         modifier = Modifier.fillMaxWidth(0.96f),
@@ -1268,7 +1303,9 @@ private fun ExactLoading(provider: ModelProvider?, progress: GenerationProgress?
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         AssistantAvatar(provider)
-        Surface(shape = RoundedCornerShape(12.dp), color = PCard, border = BorderStroke(1.dp, PBorder)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            AssistantModelHeading(modelLabel ?: provider?.brandName() ?: "IA local")
+            Surface(shape = RoundedCornerShape(12.dp), color = PCard, border = BorderStroke(1.dp, PBorder)) {
             Column(
                 Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1316,6 +1353,7 @@ private fun ExactLoading(provider: ModelProvider?, progress: GenerationProgress?
                     )
                 }
             }
+        }
         }
     }
 }
