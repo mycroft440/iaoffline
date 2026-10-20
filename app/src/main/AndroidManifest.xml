@@ -41,6 +41,16 @@
         </activity>
 
         <service
+            android:name=".models.BackgroundModelVerificationService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Automatically validating imported local GGUF models with inference in the background after installation." />
+        </service>
+
+        <service
             android:name=".models.ModelDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
