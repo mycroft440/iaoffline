@@ -20,6 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -63,7 +64,11 @@ class ChatGenerationService : Service() {
         if (!observing) {
             observing = true
             serviceScope.launch {
-                manager.activeGenerations.collectLatest { active ->
+                combine(manager.activeGenerations, manager.notificationConversationId) { active, id ->
+                    active to id
+                }.collectLatest { (active, _) ->
+                    // Rebuild contentIntent whenever the answering conversation changes.
+                    startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                     if (ChatGenerationKeepAlive.needsCpuWakeLock(active)) {
                         keepCpuAwake()
                     } else {
@@ -122,9 +127,12 @@ class ChatGenerationService : Service() {
         val openApp = PendingIntent.getActivity(
             this,
             REQUEST_OPEN_APP,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
+            ResponseNotificationRoute.openConversation(
+                this,
+                ResponseNotificationRoute.OFFLINE,
+                (application as LocalAiApplication).container.chatGenerationManager
+                    .notificationConversationId.value.orEmpty(),
+            ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stop = PendingIntent.getService(
@@ -135,8 +143,8 @@ class ChatGenerationService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_download_notification)
-            .setContentTitle("I.A Offline")
-            .setContentText("Gerando resposta…")
+            .setContentTitle("I.A offline respondendo")
+            .setContentText("Toque para voltar à conversa e acompanhar a resposta.")
             .setContentIntent(openApp)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
