@@ -82,7 +82,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.BuildConfig
 import com.example.ialocal.ads.InlineAdBanner
-import com.example.ialocal.api.ApiServerStatus
+import com.example.ialocal.api.ExternalApiSettings
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.models.ModelCatalog
@@ -136,8 +136,8 @@ fun HtmlAiHomeScreen(
     onExitApp: () -> Unit,
 ) {
     val context = LocalContext.current
+    val remoteApiConnected = remember(context) { ExternalApiSettings(context).read().hasKey }
     val installedModels by viewModel.models.collectAsStateWithLifecycle()
-    val server by viewModel.serverState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val storageAndBattery = remember(context) { readHomeDeviceSnapshot(context) }
@@ -231,7 +231,7 @@ fun HtmlAiHomeScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 HomeActionsSection(
-                    apiRunning = server.status == ApiServerStatus.RUNNING,
+                    remoteApiConnected = remoteApiConnected,
                     onStartChat = onStartChat,
                     onOpenApi = onOpenApi,
                 )
@@ -291,13 +291,13 @@ private fun HomeIconButton(icon: ImageVector, description: String, tint: Color, 
 /** The app in one line, then its two ways in: the chat, centered, and the local API. */
 @Composable
 private fun HomeActionsSection(
-    apiRunning: Boolean,
+    remoteApiConnected: Boolean,
     onStartChat: () -> Unit,
     onOpenApi: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         HomeStartChatButton(onClick = onStartChat)
-        HomeApiButton(running = apiRunning, onClick = onOpenApi)
+        HomeApiButton(connected = remoteApiConnected, onClick = onOpenApi)
     }
 }
 
@@ -434,11 +434,11 @@ private val ChatCtaCyan = Color(0xFF0E7490)
 private val ChatCtaBlue = Color(0xFF2563EB)
 private val ChatCtaViolet = Color(0xFF7C3AED)
 
-/** The local API, under the chat: shows whether it is running. */
+/** Remote providers such as OpenRouter, independent of the localhost server. */
 @Composable
-private fun HomeApiButton(running: Boolean, onClick: () -> Unit) {
+private fun HomeApiButton(connected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(12.dp)
-    val accent = if (running) CatalogAmber else CatalogMuted
+    val accent = if (connected) CatalogEmerald else CatalogCyan
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -467,7 +467,7 @@ private fun HomeApiButton(running: Boolean, onClick: () -> Unit) {
                 maxLines = 1,
             )
             Text(
-                text = if (running) "API local ligada neste aparelho" else "API local do aparelho, para outros apps",
+                text = if (connected) "API externa configurada · conversar online" else "Conectar OpenRouter, OpenAI ou outra API",
                 color = CatalogMuted,
                 fontSize = 10.sp,
                 maxLines = 1,
@@ -475,7 +475,7 @@ private fun HomeApiButton(running: Boolean, onClick: () -> Unit) {
             )
         }
         CatalogPill(
-            text = if (running) "ON" else "OFF",
+            text = if (connected) "Pronta" else "Conectar",
             foreground = accent,
             background = accent.copy(alpha = 0.12f),
             border = accent.copy(alpha = 0.35f),
