@@ -123,6 +123,28 @@ jobs:
             grep -m 1 'versionCode=' "$RUNNER_TEMP/emulator-installed-package.txt"
             echo "APK installed successfully in a clean Android environment."
 
+      # Newer ARM phones can use 16 KB memory pages. A normal x86_64 emulator uses
+      # 4 KB pages and cannot detect all OEM installation failures. The experimental
+      # Android 15 16-KB system image tests a second, materially different installer.
+      - name: Smoke test APK installation on Android 15 (16 KB pages)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis_ps16k
+          arch: x86_64
+          profile: pixel_6
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            PAGE_SIZE=$(adb shell getconf PAGESIZE | tr -d '\r')
+            echo "Emulator page size: $PAGE_SIZE"
+            test "$PAGE_SIZE" = "16384"
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm path com.example.ialocal | grep -q '^package:'
+            echo "Verified installation with 16 KB system pages."
+
       # The APK itself, not a ZIP (archive: false): the artifact is named after the file and
       # downloads as IA-Local-debug-0.1.N.apk, ready to install on a phone. A ZIP had to be
       # extracted first, and Android's ZIP reader rejected the uncompressed ones Actions used to
