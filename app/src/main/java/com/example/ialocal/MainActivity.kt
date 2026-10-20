@@ -47,6 +47,8 @@ import com.example.ialocal.knowledge.WikipediaPackStatus
 import com.example.ialocal.models.AutomaticModelImportEvent
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.models.PublicModelDownloads
+import com.example.ialocal.chat.ResponseNotificationRoute
+import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.runtime.RuntimeStatus
 import com.example.ialocal.ui.chat.ChatViewModel
 import com.example.ialocal.ui.chat.ChatWithDeepThinkScreen
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var adsManager: AdsManager
     private var pendingStorageAction: (() -> Unit)? = null
     private var lastExitReport by mutableStateOf<LastExitReport?>(null)
+    private var pendingResponseNavigation by mutableStateOf<ResponseNotificationRoute.Destination?>(null)
 
     // Coming back from a screen the app opened itself (a file picker, Android settings, an ad's
     // page) is not a return to the app, so it never shows the app open ad.
@@ -112,6 +115,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         container = (application as LocalAiApplication).container
         adsManager = container.adsManager
+        pendingResponseNavigation = ResponseNotificationRoute.parse(intent)
         val processLifecycle = ProcessLifecycleOwner.get().lifecycle
         // A recreated activity registers while the app is in the foreground; that replays ON_START.
         skipReplayedForeground = processLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
@@ -135,6 +139,8 @@ class MainActivity : ComponentActivity() {
                     onPrivacyOptions = { adsManager.showPrivacyOptions(this) },
                     onDownloadStarted = ::showDownloadAd,
                     onRequestRewardedDownload = ::requestRewardedDownload,
+                    responseNotificationDestination = pendingResponseNavigation,
+                    onNotificationConsumed = { pendingResponseNavigation = null },
                     onExitApp = { finish() },
                 )
                 lastExitReport?.let { report ->
@@ -182,6 +188,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         returningFromOwnActivity = false
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingResponseNavigation = ResponseNotificationRoute.parse(intent)
     }
 
     override fun onDestroy() {
@@ -298,9 +310,24 @@ private fun LocalAiApp(
     onPrivacyOptions: () -> Unit,
     onDownloadStarted: () -> Unit,
     onRequestRewardedDownload: (String, () -> Unit) -> Unit,
+    responseNotificationDestination: ResponseNotificationRoute.Destination?,
+    onNotificationConsumed: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
+    LaunchedEffect(responseNotificationDestination) {
+        val destination = responseNotificationDestination ?: return@LaunchedEffect
+        val target = when (destination.kind) {
+            ResponseNotificationRoute.OFFLINE -> "chat/${Uri.encode(destination.conversationId)}"
+            ResponseNotificationRoute.ONLINE -> "external-api?conversationId=${Uri.encode(destination.conversationId)}"
+            else -> return@LaunchedEffect
+        }
+        navController.navigate(target) {
+            popUpTo("ai-home") { inclusive = false }
+            launchSingleTop = true
+        }
+        onNotificationConsumed()
+    }
 
     // Short fades: the default 700 ms cross-fade kept both screens drawing for most of a second,
     // so opening a screen felt slow and stuttered on heavy screens like the catalog.
