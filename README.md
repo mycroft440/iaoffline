@@ -152,15 +152,16 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 ### Anúncios AdMob
 
-**Download de I.As (anúncio recompensado).** Na tela **Baixar I.As offline** e em **Modelos e API**, cada novo download abre um convite explícito para assistir a um anúncio recompensado. Ao aceitar, o app exibe o anúncio e **só inicia o download após o callback `onUserEarnedReward`**. Fechar o anúncio antes da recompensa não libera o download. O AdMob pode veicular vídeo, anúncio interativo ou outros criativos recompensados; não é garantido que seja sempre um vídeo.
+**Download de I.As (primeira Free + demais recompensadas).** A primeira IA recomendada para a RAM livre é destacada com o selo **FREE · GRÁTIS** e botão verde **Baixar GRÁTIS**. O download é iniciado imediatamente, e só depois o aplicativo tenta mostrar um intersticial comum. Se não houver anúncio, continua sem interrupção. O mesmo modelo mantém o selo Free na lista da empresa e na tela **Modelos e API**. As demais I.As só iniciam o download ao receber o callback `onUserEarnedReward` de um anúncio recompensado que a pessoa aceitou assistir.
 
-- O anúncio é pré-carregado ao abrir a tela; se ainda estiver carregando após o aceite, o app aguarda o carregamento.
-- **Continuar** e **Tentar novamente** em downloads pausados/falhos não exigem outro anúncio. Modelos já instalados, importações e consultas à IA não são afetados.
-- Se a rede, o consentimento ou o inventário do AdMob impedirem o anúncio de aparecer, o app mantém o comportamento anterior e permite baixar a IA sem anúncio. Não há bloqueio permanente por falta de publicidade.
-- O anúncio recompensado não é apresentado enquanto uma IA responde, para não competir pela RAM do aparelho.
-- IDs de teste não geram receita; para remunerar os downloads em uma release de produção, crie um bloco do tipo **Recompensado** no AdMob e configure `ADMOB_REWARDED_AD_UNIT_ID`.
+- O catálogo continua exibindo **todas** as recomendações que cabem na RAM livre. Se nenhuma couber, a primeira da lista das cinco mais leves aparece Free, mesmo que não caiba na RAM disponível naquele momento.
+- O anúncio recompensado só autoriza o download após a recompensa; fechar antes não o inicia. **Continuar** ou **Tentar novamente** num download parcial não exige novo anúncio.
+- Quando o AdMob não pode mostrar anúncio, o aplicativo libera a ação sem publicidade. Criativos recompensados podem ser vídeos ou outros formatos elegíveis; não são necessariamente só vídeos.
+- O intersticial comum da IA Free só é exibido se já estiver preparado e o limite entre anúncios permitir; não impede o download.
 
-**Download da Wikipédia (intersticial).** Continua com o comportamento anterior: o download começa normalmente e o intersticial pode aparecer em seguida. Esse anúncio é mostrado no máximo uma vez a cada 3 minutos (`DownloadAdPacing.MIN_GAP_MS`), e só quando há anúncio disponível. A Wikipédia não usa o novo fluxo recompensado.
+**Compiladores, Wikipédia e criação de perfis (anúncios recompensados).** Cada pacote de linguagem/compilador do editor de código e **cada edição da Wikipédia** pede recompensa para iniciar seu próprio download. A Wikipédia continua pedindo confirmação de tamanho e da opção de baixar só por Wi-Fi antes do anúncio. Cada **novo perfil personalizado** exige uma recompensa, validando antes o nome e as instruções; editar, excluir ou usar perfis existentes não requer anúncio. Modelos e recursos já instalados continuam utilizáveis sem anúncios adicionais.
+
+**Preparo dos anúncios nas telas.** Ao entrar em **Wikipédia**, **Baixar compiladores** ou **Perfis de I.A**, o aplicativo prepara um anúncio recompensado, mas somente **uma vez por intervalo de 30 minutos compartilhado entre as três telas**, persistindo o horário entre aberturas do aplicativo. Isso **não exibe um anúncio automaticamente** ao abrir uma tela. Ações escolhidas pelo usuário podem buscar e exibir anúncios recompensados a qualquer momento, mesmo durante esse intervalo. O controle de 30 minutos limita apenas o pré-carregamento motivado pela entrada nas telas.
 
 **Anúncio de abertura (tela cheia).** Aparece quando a pessoa volta ao app (pelo ícone ou pelos recentes), com estas regras (`AppOpenAdPacing`):
 
@@ -181,7 +182,7 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 | Aplicativo | `ca-app-pub-3940256099942544~3347511713` |
 | Banner adaptável | `ca-app-pub-3940256099942544/9214589741` |
 | Intersticial (Wikipédia, vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
-| Recompensado (download de I.As) | `ca-app-pub-3940256099942544/5224354917` |
+| Recompensado (I.As, Wikipédia, compiladores e perfis) | `ca-app-pub-3940256099942544/5224354917` |
 | Nativo | `ca-app-pub-3940256099942544/2247696110` |
 | Abertura do app | `ca-app-pub-3940256099942544/9257395921` |
 
@@ -190,8 +191,8 @@ Para trocar pelos anúncios reais (que geram receita) em um build `release`, con
 ```bash
 export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
 export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
-export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # downloads da Wikipédia
-export ADMOB_REWARDED_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/RRRRRRRRRR'     # baixar I.As mediante recompensa
+export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # IA Free
+export ADMOB_REWARDED_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/RRRRRRRRRR'     # I.As extras, Wikipédia, compiladores e perfis
 export ADMOB_NATIVE_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN'         # cards do catálogo
 export ADMOB_APP_OPEN_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/AAAAAAAAAA'       # abertura do app
 ```
