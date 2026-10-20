@@ -1,6 +1,8 @@
 package com.example.ialocal.chat
 
 import com.example.ialocal.models.ModelProvider
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Locale
 
 /**
@@ -21,10 +23,13 @@ data class AssistantContent(
     val provider: ModelProvider? = null,
     /** Tokens per second while writing; null when not measured (older replies, a cancelled answer). */
     val tokensPerSecond: Double? = null,
+    /** Actual model recorded when the reply was generated; older messages have none. */
+    val modelName: String? = null,
 ) {
     companion object {
         private val METADATA = Regex("(?is)<!--nexus_(reasoning|response)_ms:(\\d+)-->")
         private val PROVIDER = Regex("(?is)<!--nexus_provider:(\\w+)-->")
+        private val MODEL_NAME = Regex("(?is)<!--nexus_model_name:([A-Za-z0-9%+_.-]+)-->")
         private val SPEED = Regex("(?is)<!--nexus_tokens_per_second:(\\d+(?:\\.\\d+)?)-->")
         private val OPEN = Regex("(?is)<(?:think(?:ing)?|reasoning|analysis)>|\\[THINK]|<\\|channel>thought")
         private val CLOSE = Regex("(?is)</(?:think(?:ing)?|reasoning|analysis)>|\\[/THINK]|<channel\\|>")
@@ -39,6 +44,9 @@ data class AssistantContent(
             val providerName = PROVIDER.find(raw)?.groupValues?.get(1)
             val provider = ModelProvider.entries.firstOrNull { it.name == providerName }
             val tokensPerSecond = SPEED.find(raw)?.groupValues?.get(1)?.toDoubleOrNull()
+            val modelName = MODEL_NAME.find(raw)?.groupValues?.get(1)?.let {
+                runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull()
+            }
             val clean = withoutMetadata(raw).trim()
             val open = OPEN.find(clean)
             val close = CLOSE.find(clean)
@@ -67,7 +75,7 @@ data class AssistantContent(
                 )
                 else -> AssistantContent(null, clean, false, reasoningMs, responseMs)
             }
-            return content.copy(provider = provider, tokensPerSecond = tokensPerSecond)
+            return content.copy(provider = provider, tokensPerSecond = tokensPerSecond, modelName = modelName)
         }
 
         /**
@@ -80,6 +88,7 @@ data class AssistantContent(
             reasoningMs: Long?,
             provider: ModelProvider? = null,
             tokensPerSecond: Double? = null,
+            modelName: String? = null,
         ): String = buildString {
             append(withoutMetadata(content).trimEnd())
             append("\n\n<!--nexus_response_ms:").append(responseMs.coerceAtLeast(0L)).append("-->")
@@ -88,10 +97,15 @@ data class AssistantContent(
                 append("<!--nexus_tokens_per_second:").append(String.format(Locale.ROOT, "%.2f", tokensPerSecond)).append("-->")
             }
             if (provider != null) append("<!--nexus_provider:").append(provider.name).append("-->")
+            if (!modelName.isNullOrBlank()) {
+                append("<!--nexus_model_name:")
+                    .append(URLEncoder.encode(modelName, "UTF-8"))
+                    .append("-->")
+            }
         }
 
         private fun withoutMetadata(content: String): String =
-            SPEED.replace(PROVIDER.replace(METADATA.replace(content, ""), ""), "")
+            MODEL_NAME.replace(SPEED.replace(PROVIDER.replace(METADATA.replace(content, ""), ""), ""), "")
 
         /** The answer alone, as sent back to the model in later turns. */
         fun answerForHistory(raw: String): String = parse(raw).answer
