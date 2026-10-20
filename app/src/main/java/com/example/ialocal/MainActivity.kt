@@ -51,6 +51,7 @@ import com.example.ialocal.knowledge.WikipediaPackStatus
 import com.example.ialocal.models.AutomaticModelImportEvent
 import com.example.ialocal.models.AutomaticModelScanMode
 import com.example.ialocal.models.PublicModelDownloads
+import com.example.ialocal.models.BackgroundModelVerificationService
 import com.example.ialocal.chat.ResponseNotificationRoute
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.runtime.RuntimeStatus
@@ -200,6 +201,17 @@ class MainActivity : ComponentActivity() {
         }
         // Downloads interrupted by the app being killed pick up from their partial files.
         container.modelManager.resumeQueueAfterRestart()
+        // Any GGUF whose automatic test was interrupted (or a scanned file not yet tested)
+        // is requeued. The service itself serializes tests after downloads/conversations.
+        lifecycleScope.launch(Dispatchers.IO) {
+            container.modelRepository.getModels()
+                .filter {
+                    it.verificationStatus == ModelVerificationStatus.IMPORTED.name ||
+                        it.verificationStatus == ModelVerificationStatus.VERIFYING.name
+                }
+                .forEach { BackgroundModelVerificationService.enqueue(applicationContext, it.id) }
+            BackgroundModelVerificationService.resumePending(applicationContext)
+        }
         runInitialStorageScanOnce()
         adsManager.start(this)
     }
