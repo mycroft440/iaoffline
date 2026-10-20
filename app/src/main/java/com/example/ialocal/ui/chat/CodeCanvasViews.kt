@@ -29,7 +29,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.ialocal.ui.codeeditor.CodeLanguagePackDescriptor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -167,9 +170,16 @@ internal fun InlineCodeBlock(part: AnswerPart.Code) {
 
 /** The code full screen, with "Código" and, when the code can be run here, "Ver resultado". */
 @Composable
-internal fun CodeCanvasDialog(canvas: CodeCanvas, onDismiss: () -> Unit) {
+internal fun CodeCanvasDialog(
+    canvas: CodeCanvas,
+    installedLanguageIds: Set<String>,
+    onOpenCompilers: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val clipboard = LocalClipboardManager.current
     val previewable = canvas.preview != null
+    val languagePack = remember(canvas.language, canvas.preview) { canvasLanguagePack(canvas) }
+    val missingLanguagePack = languagePack?.takeUnless { it.id in installedLanguageIds }
     var tab by remember { mutableStateOf(if (previewable && canvas.complete) CanvasTab.RESULT else CanvasTab.CODE) }
     var reloads by remember { mutableIntStateOf(0) }
 
@@ -191,7 +201,7 @@ internal fun CodeCanvasDialog(canvas: CodeCanvas, onDismiss: () -> Unit) {
                             fontSize = 11.sp,
                         )
                     }
-                    if (tab == CanvasTab.RESULT) {
+                    if (tab == CanvasTab.RESULT && previewable) {
                         IconButton(onClick = { reloads += 1 }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Recarregar", tint = CanvasText)
                         }
@@ -212,18 +222,9 @@ internal fun CodeCanvasDialog(canvas: CodeCanvas, onDismiss: () -> Unit) {
                     CanvasTabButton("Código", selected = tab == CanvasTab.CODE, enabled = true, modifier = Modifier.weight(1f)) {
                         tab = CanvasTab.CODE
                     }
-                    CanvasTabButton("Ver resultado", selected = tab == CanvasTab.RESULT, enabled = previewable, modifier = Modifier.weight(1f)) {
+                    CanvasTabButton("Ver resultado", selected = tab == CanvasTab.RESULT, enabled = true, modifier = Modifier.weight(1f)) {
                         tab = CanvasTab.RESULT
                     }
-                }
-                if (!previewable) {
-                    Text(
-                        "Ver resultado roda HTML, SVG e JavaScript.",
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        color = CanvasDim,
-                        fontSize = 11.sp,
-                        textAlign = TextAlign.Center,
-                    )
                 }
 
                 Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
@@ -231,20 +232,90 @@ internal fun CodeCanvasDialog(canvas: CodeCanvas, onDismiss: () -> Unit) {
                         CanvasTab.CODE -> CanvasCode(canvas.code)
                         CanvasTab.RESULT -> {
                             val document = remember(canvas) { CodeCanvases.previewDocument(canvas) }
-                            if (canvas.complete && document != null) {
-                                CanvasPreview(document, reloads)
-                            } else {
-                                Text(
+                            when {
+                                !canvas.complete -> Text(
                                     "O resultado aparece quando a IA terminar de escrever o código.",
                                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                     color = CanvasMuted,
                                     fontSize = 13.sp,
                                     textAlign = TextAlign.Center,
                                 )
+                                document != null -> CanvasPreview(document, reloads)
+                                else -> CanvasResultSupportMessage(
+                                    languageName = canvas.languageLabel,
+                                    languagePack = languagePack,
+                                    missingPack = missingLanguagePack,
+                                    modifier = Modifier.align(Alignment.Center),
+                                    onOpenCompilers = onOpenCompilers,
+                                )
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A centered explanation for languages without WebView execution.
+ * A code-language pack is guidance for the local IA, not a Python interpreter or compiler.
+ */
+@Composable
+private fun CanvasResultSupportMessage(
+    languageName: String,
+    languagePack: CodeLanguagePackDescriptor?,
+    missingPack: CodeLanguagePackDescriptor?,
+    modifier: Modifier = Modifier,
+    onOpenCompilers: (String) -> Unit,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = CanvasIndigo.copy(alpha = 0.15f),
+            border = BorderStroke(1.dp, CanvasIndigo.copy(alpha = 0.45f)),
+        ) {
+            Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Code, contentDescription = null, tint = CanvasText, modifier = Modifier.size(30.dp))
+            }
+        }
+        Text(
+            text = if (missingPack != null) {
+                "O pacote de ${missingPack.displayName} ainda não está instalado"
+            } else {
+                "Ainda não é possível executar ${languageName} no Canvas"
+            },
+            color = CanvasText,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = when {
+                missingPack != null ->
+                    "O aplicativo ainda não tem suporte de ${missingPack.displayName} instalado para este código. " +
+                        "Clique abaixo para abrir a biblioteca e baixar o pacote da linguagem. " +
+                        "O pacote ajuda a IA com o código, mas não é um interpretador para executá-lo."
+                languagePack != null ->
+                    "O pacote de ${languagePack.displayName} já está instalado, mas este Canvas ainda não executa " +
+                        "essa linguagem. A prévia de resultado funciona para HTML, SVG e JavaScript."
+                else ->
+                    "Este Canvas não tem execução disponível para essa linguagem. " +
+                        "A prévia de resultado funciona para HTML, SVG e JavaScript.",
+            },
+            color = CanvasMuted,
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            textAlign = TextAlign.Center,
+        )
+        if (missingPack != null) {
+            Button(onClick = { onOpenCompilers(missingPack.id) }) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("  Baixar compiladores")
             }
         }
     }
