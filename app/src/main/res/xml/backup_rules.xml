@@ -6,4 +6,5 @@
     <exclude domain="file" path="model-downloads/" />
     <exclude domain="sharedpref" path="local_api.xml" />
     <exclude domain="sharedpref" path="external_api.xml" />
+    <exclude domain="file" path="remote-api-conversations.json" />
 </full-backup-content>
