@@ -114,6 +114,7 @@ fun ExternalApiScreen(
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val currentId by viewModel.currentId.collectAsStateWithLifecycle()
     val profile by viewModel.profile.collectAsStateWithLifecycle()
+    val availableProfiles by viewModel.availableProfiles.collectAsStateWithLifecycle()
     val attachments by viewModel.attachments.collectAsStateWithLifecycle()
     val processing by viewModel.processingAttachment.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
@@ -544,7 +545,7 @@ fun ExternalApiScreen(
             title = { Text("Perfil da conversa online") },
             text = {
                 Column {
-                    ExternalApiViewModel.PROFILE_NAMES.forEach { name ->
+                    (listOf("Padrão") + availableProfiles.map { it.displayName }).forEach { name ->
                         TextButton(
                             onClick = { viewModel.setProfile(name); showProfile = false },
                             modifier = Modifier.fillMaxWidth(),
