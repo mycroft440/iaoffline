@@ -3,6 +3,7 @@ package com.example.ialocal.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -22,7 +23,10 @@ import kotlinx.coroutines.withContext
 fun rememberLiveMemory(intervalMillis: Long = 2_000L): MemorySnapshot {
     val context = LocalContext.current.applicationContext
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val snapshot by produceState(initialValue = DeviceMemory.read(context), context, lifecycle) {
+    // Remembered: as an argument of produceState it was read again from /proc, on the main thread,
+    // at every recomposition of the screen.
+    val initial = remember(context) { DeviceMemory.read(context) }
+    val snapshot by produceState(initialValue = initial, context, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 value = withContext(Dispatchers.IO) { DeviceMemory.read(context) }

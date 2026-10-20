@@ -102,6 +102,11 @@ android {
 
     buildTypes {
         getByName("debug") {
+            // The debug APK is the one installed on phones while the release is not signed. As a
+            // debuggable app, Android runs its code with the optimizations off and ignores the
+            // libraries' baseline profiles, so Compose screens stuttered while scrolling (the
+            // catalog the most). Test ads, the build config and the signing key stay the debug ones.
+            isDebuggable = false
             buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$testBannerAdUnitId\"")
             optionalAdUnits.forEach { buildConfigField("String", it.buildConfigField, "\"${it.testId}\"") }
             buildConfigField("boolean", "TEST_ADS", "true")

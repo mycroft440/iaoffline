@@ -42,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.ads.InlineAdBanner
+import com.example.ialocal.ads.rememberInlineAdBannerState
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.DownloadEntryStatus
@@ -62,7 +62,7 @@ import com.example.ialocal.models.CatalogModel
 import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.models.providerFromName
 import com.example.ialocal.ui.branding.brandName
-import com.example.ialocal.ui.branding.logoRes
+import com.example.ialocal.ui.branding.providerLogoPainter
 
 private val MyAiBg = Color(0xFF0C0D10)
 private val MyAiSurface = Color(0xFF15161B)
@@ -89,6 +89,9 @@ fun MyAisScreen(
     val orderedModels = remember(models) {
         models.sortedWith(compareByDescending<AiModelEntity> { it.isActive }.thenByDescending { it.importedAt })
     }
+    // Kept above the list: a banner scrolled out of view and back keeps its ad.
+    val topBanner = rememberInlineAdBannerState(enabled = adsEnabled)
+    val bottomBanner = rememberInlineAdBannerState(enabled = adsEnabled)
 
     Scaffold(containerColor = MyAiBg) { padding ->
         Column(
@@ -134,7 +137,7 @@ fun MyAisScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item(key = "my-ais-ad-top") {
-                    InlineAdBanner(enabled = adsEnabled)
+                    InlineAdBanner(state = topBanner)
                 }
                 item(key = "my-ais-storage-search") {
                     Column(
@@ -229,7 +232,7 @@ fun MyAisScreen(
                 }
 
                 item(key = "my-ais-ad-bottom") {
-                    InlineAdBanner(enabled = adsEnabled)
+                    InlineAdBanner(state = bottomBanner)
                 }
                 item { Spacer(Modifier.height(20.dp)) }
             }
@@ -535,7 +538,7 @@ private fun CircularProviderLogo(
     ) {
         if (provider != null) {
             Image(
-                painter = painterResource(provider.logoRes()),
+                painter = providerLogoPainter(provider),
                 contentDescription = provider.brandName(),
                 modifier = Modifier
                     .fillMaxSize()

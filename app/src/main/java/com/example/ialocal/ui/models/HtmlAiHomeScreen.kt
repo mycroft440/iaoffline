@@ -75,7 +75,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -94,7 +93,7 @@ import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.models.provider
 import com.example.ialocal.runtime.DeviceMemory
 import com.example.ialocal.ui.branding.brandName
-import com.example.ialocal.ui.branding.logoRes
+import com.example.ialocal.ui.branding.providerLogoPainter
 import com.example.ialocal.ui.rememberLiveMemory
 
 /** Installed AIs listed one per row on the home screen; the others share the box side by side. */
@@ -693,7 +692,7 @@ private fun HomeModelRow(model: AiModelEntity, onClick: () -> Unit) {
 private fun HomeModelLogo(provider: ModelProvider?, size: Dp) {
     if (provider != null) {
         Image(
-            painter = painterResource(provider.logoRes()),
+            painter = providerLogoPainter(provider),
             contentDescription = provider.brandName(),
             modifier = Modifier.size(size).clip(RoundedCornerShape(5.dp)),
             contentScale = ContentScale.Fit,
