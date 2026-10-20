@@ -43,6 +43,7 @@ import com.example.ialocal.ui.codeeditor.CodeLanguagePackDescriptor
 @Composable
 fun CompilersScreen(
     viewModel: SettingsViewModel,
+    onRequestRewardedAction: (String, () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val installedIds by viewModel.installedLanguageIds.collectAsStateWithLifecycle()
@@ -79,7 +80,7 @@ fun CompilersScreen(
         ) {
             item {
                 Text(
-                    "O APK não inclui compiladores nem parsers. Estes pacotes pequenos são baixados do repositório somente quando você quiser e dão contexto especializado à IA no Canvas de código.",
+                    "Os compiladores não vêm no APK. Para liberar o download de cada compilador, assista a um anúncio recompensado. Com o pacote instalado, ele pode ser usado sem anúncios.",
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -95,7 +96,11 @@ fun CompilersScreen(
                     installed = descriptor.id in installedIds,
                     busy = busyLanguageId == descriptor.id,
                     anotherBusy = busyLanguageId != null && busyLanguageId != descriptor.id,
-                    onDownload = { viewModel.downloadLanguage(descriptor.id) },
+                    onDownload = {
+                        onRequestRewardedAction("o compilador ${descriptor.displayName}") {
+                            viewModel.downloadLanguage(descriptor.id)
+                        }
+                    },
                     onRemove = { viewModel.removeLanguage(descriptor.id) },
                 )
             }
@@ -158,7 +163,7 @@ private fun LanguagePackCard(
                     enabled = !anotherBusy,
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null)
-                    Text(" Baixar")
+                    Text(" Assistir anúncio e baixar")
                 }
             }
         }
