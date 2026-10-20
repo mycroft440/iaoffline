@@ -294,12 +294,23 @@ class ModelManager(
         // Android can restart the download service after the app was killed during the final test
         // (e.g. out of memory). The model is already registered by then, so never download it again.
         installedCatalogModel(catalogModel)?.let { installed ->
+            // The Android process may have stopped between registration and the automatic
+            // inference test. Resume the test under the SAME foreground download service,
+            // without downloading another GGUF or requiring another rewarded advertisement.
+            if (installed.verificationStatus != ModelVerificationStatus.VERIFIED.name) {
+                logger?.info("MODEL_VERIFY", "Retomando teste automático da IA instalada: ${catalogModel.displayName}")
+                _downloadState.value = ModelDownloadState(
+                    catalogId = catalogId,
+                    phase = ModelDownloadPhase.VERIFYING_MODEL,
+                    message = "Retomando teste automático em segundo plano…",
+                )
+                return verifyDownloadedModel(catalogModel, installed)
+            }
             _downloadState.value = ModelDownloadState(
                 catalogId = catalogId,
                 phase = ModelDownloadPhase.COMPLETE,
-                message = "${catalogModel.displayName} já está instalada.",
+                message = "${catalogModel.displayName} já está instalada e foi testada.",
             )
-            logger?.info("MODEL_DOWNLOAD", "Download ignorado: ${catalogModel.displayName} já está instalada.")
             return installed
         }
         return try {
