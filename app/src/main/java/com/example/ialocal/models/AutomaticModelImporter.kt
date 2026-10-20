@@ -95,7 +95,8 @@ data class AutomaticModelImportProgress(
  * Searches shared Android storage for GGUF files and imports compatible models without making the
  * user pick each file manually. The first app scan can use [AutomaticModelScanMode.QUICK] to avoid
  * walking the entire shared storage; the manual scan uses [AutomaticModelScanMode.FULL].
- * Runtime verification is deliberately deferred until the user actually activates/opens a model.
+ * Newly registered GGUF models are queued for automatic inference verification in a foreground
+ * service, even when the user leaves the storage scan screen.
  */
 class AutomaticModelImporter(
     context: Context,
@@ -274,11 +275,14 @@ class AutomaticModelImporter(
                         mark(FoundModelStatus.IMPORTING)
                         _events.tryEmit(AutomaticModelImportEvent.Importing(modelName))
                         try {
-                            repository.importGguf(preview, catalogModel) { copied ->
+                            val newlyInstalled = repository.importGguf(preview, catalogModel) { copied ->
                                 _progress.value = _progress.value.copy(
                                     found = _progress.value.found.update(index) { it.copy(copiedBytes = copied) },
                                 )
                             }
+                            // Model is already installed: its real inference test must proceed even
+                            // if the scanner UI is closed or the user switches apps.
+                            BackgroundModelVerificationService.enqueue(appContext, newlyInstalled.id)
                             // Counted before the next suspension, so a cancel from here on keeps it as imported.
                             imported += 1
                             markProcessed(fingerprint)
@@ -286,7 +290,7 @@ class AutomaticModelImporter(
                             installed = repository.getModels().toMutableList()
                             logger?.info(
                                 "AUTO_MODEL_SCAN",
-                                "Modelo importado automaticamente sem carregar o runtime: ${file.absolutePath}",
+                                "Modelo importado; teste de inferência agendado em segundo plano: ${file.absolutePath}",
                             )
                         } catch (e: CancellationException) {
                             throw e
