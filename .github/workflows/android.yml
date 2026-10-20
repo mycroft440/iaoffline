@@ -130,7 +130,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             echo "Android version: $(adb shell getprop ro.build.version.release)"
             echo "Installing the exact signed APK that will be uploaded to GitHub..."
             adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -153,7 +153,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             PAGE_SIZE=$(adb shell getconf PAGESIZE | tr -d '\r')
             echo "Emulator page size: $PAGE_SIZE"
             test "$PAGE_SIZE" = "16384"
