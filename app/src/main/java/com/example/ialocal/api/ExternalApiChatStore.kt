@@ -22,6 +22,7 @@ data class SavedRemoteConversation(
     val modelId: String,
     val provider: String,
     val baseUrl: String,
+    val profile: String = "Padrão",
     val updatedAt: Long,
     val messages: List<SavedRemoteMessage>,
 )
@@ -62,6 +63,7 @@ class ExternalApiChatStore(context: Context) {
                         modelId = chat.optString("modelId"),
                         provider = chat.optString("provider"),
                         baseUrl = chat.optString("baseUrl"),
+                        profile = chat.optString("profile", "Padrão"),
                         updatedAt = chat.optLong("updatedAt"),
                         messages = parsed,
                     )
@@ -80,6 +82,7 @@ class ExternalApiChatStore(context: Context) {
                 put("modelId", chat.modelId)
                 put("provider", chat.provider)
                 put("baseUrl", chat.baseUrl)
+                put("profile", chat.profile)
                 put("updatedAt", chat.updatedAt)
                 put("messages", JSONArray().apply {
                     chat.messages.forEach { message ->
