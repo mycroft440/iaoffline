@@ -70,7 +70,13 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -f "$APK"
           ls -lh "$APK"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | tee "$RUNNER_TEMP/apk-certs.txt"
+          # A valid Gradle build is not enough: check ZIP data, Android metadata, alignment
+          # and Android 13+ signing before handing the file to a phone.
+          unzip -tq "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -v 4 "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | tee "$RUNNER_TEMP/apk-package.txt"
+          grep -q "sdkVersion:'33'" "$RUNNER_TEMP/apk-package.txt"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --min-sdk-version 33 --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apk-certs.txt"
           grep -q "certificate SHA-256 digest: $DEBUG_CERT_SHA256" "$RUNNER_TEMP/apk-certs.txt"
           mkdir -p dist-debug
           cp "$APK" "dist-debug/IA-Local-debug-${IA_VERSION_NAME}.apk"
@@ -97,6 +103,62 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+
+      # Release assets download as the APK itself, without artifact ZIP wrappers.
+      # This is a test prerelease, still signed with the project's existing debug key.
+      - name: Publish direct-install test APK
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          cp "$APK" dist-debug/IA-Local-teste.apk
+          sha256sum dist-debug/IA-Local-teste.apk > dist-debug/IA-Local-teste.apk.sha256
+          BYTES=$(stat -c %s "$APK")
+          SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          cat > "$RUNNER_TEMP/preview-notes.md" <<EOF
+          APK de teste da versão ${IA_VERSION_NAME}, compilação ${GITHUB_SHA}.
+
+          Baixe diretamente o arquivo IA-Local-teste.apk nos anexos.
+          NÃO baixe "Source code (zip)", AAB, nem um artefato ZIP.
+
+          - Android 13 ou superior (minSdk 33), processadores 64 bits arm64-v8a/x86_64.
+          - Tamanho esperado: ${BYTES} bytes.
+          - SHA-256: ${SHA}.
+          - Assinado com a chave de debug estável do projeto, não com a chave de produção.
+          - Se o app instalado tiver outra assinatura, faça backup antes de desinstalar:
+            Android não permite atualizar entre assinaturas distintas.
+          EOF
+          TAG="teste-atual"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist-debug/IA-Local-teste.apk --clobber
+            gh release upload "$TAG" dist-debug/IA-Local-teste.apk.sha256 --clobber
+            gh release edit "$TAG" --prerelease --title "IA Local - Teste ${IA_VERSION_NAME}" \
+              --notes-file "$RUNNER_TEMP/preview-notes.md"
+          else
+            gh release create "$TAG" dist-debug/IA-Local-teste.apk \
+              dist-debug/IA-Local-teste.apk.sha256 \
+              --prerelease --target "$GITHUB_SHA" \
+              --title "IA Local - Teste ${IA_VERSION_NAME}" \
+              --notes-file "$RUNNER_TEMP/preview-notes.md"
+          fi
+          # Read back the actual GitHub Release asset and compare byte-for-byte with our
+          # signed package. Detects an HTML response, ZIP envelope or damaged upload.
+          mkdir -p "$RUNNER_TEMP/preview-check"
+          gh release download "$TAG" --pattern 'IA-Local-teste.apk' \
+            --dir "$RUNNER_TEMP/preview-check" --clobber
+          cmp "$APK" "$RUNNER_TEMP/preview-check/IA-Local-teste.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
+            "$RUNNER_TEMP/preview-check/IA-Local-teste.apk"
+          {
+            echo "### APK de teste com download direto (Android 13+)"
+            echo
+            echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/teste-atual/IA-Local-teste.apk"
+            echo
+            echo "Versão: ${IA_VERSION_NAME} | ${BYTES} bytes | SHA-256: ${SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check persistent release signing
         id: signing
