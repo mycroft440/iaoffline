@@ -140,49 +140,6 @@ fun MyAisScreen(
                 item(key = "my-ais-ad-top") {
                     InlineAdBanner(state = topBanner)
                 }
-                item(key = "my-ais-storage-search") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MyAiSurface, RoundedCornerShape(14.dp))
-                            .border(1.dp, MyAiBorder, RoundedCornerShape(14.dp))
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            "Você pode ter IAs baixadas anteriormente. Clique em buscar para buscar IAs baixadas no seu telefone.",
-                            color = MyAiText,
-                            fontSize = 12.sp,
-                        )
-                        Button(onClick = onScanStorage, enabled = !importProgress.isRunning) {
-                            if (importProgress.isRunning) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Text(" Buscando...")
-                            } else {
-                                Text("Buscar")
-                            }
-                        }
-                        if (importProgress.phase == AutomaticModelImportPhase.COMPLETED) {
-                            importProgress.summary?.let { summary ->
-                                Text(
-                                    "Busca concluída: ${summary.imported} importada(s), ${summary.alreadyInstalled} já instalada(s), ${summary.invalid} inválida(s), ${summary.failures} falha(s).",
-                                    color = MyAiMuted,
-                                    fontSize = 11.sp,
-                                )
-                            }
-                        }
-                        if (importProgress.phase == AutomaticModelImportPhase.PERMISSION_REQUIRED) {
-                            Text("Permita o acesso aos arquivos do aparelho e toque em Buscar novamente.", color = MyAiMuted, fontSize = 11.sp)
-                        }
-                        if (importProgress.phase == AutomaticModelImportPhase.FAILED) {
-                            Text("A busca falhou. Tente novamente.", color = MyAiMuted, fontSize = 11.sp)
-                        }
-                        if (importProgress.phase == AutomaticModelImportPhase.CANCELLED) {
-                            Text("A busca foi cancelada. As I.As já importadas continuam instaladas.", color = MyAiMuted, fontSize = 11.sp)
-                        }
-                    }
-                }
-
                 if (downloads.isNotEmpty()) {
                     item(key = "my-ais-downloads-title") {
                         Text(
@@ -228,6 +185,49 @@ fun MyAisScreen(
                                 onOpenChat = { onOpenChat(model.id) },
                                 onDelete = { viewModel.delete(model.id) },
                             )
+                        }
+                    }
+                }
+
+                item(key = "my-ais-storage-search") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MyAiSurface, RoundedCornerShape(14.dp))
+                            .border(1.dp, MyAiBorder, RoundedCornerShape(14.dp))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Você pode ter IAs baixadas anteriormente. Clique em buscar para buscar IAs baixadas no seu telefone.",
+                            color = MyAiText,
+                            fontSize = 12.sp,
+                        )
+                        Button(onClick = onScanStorage, enabled = !importProgress.isRunning) {
+                            if (importProgress.isRunning) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Text(" Buscando...")
+                            } else {
+                                Text("Buscar")
+                            }
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.COMPLETED) {
+                            importProgress.summary?.let { summary ->
+                                Text(
+                                    "Busca concluída: ${summary.imported} importada(s), ${summary.alreadyInstalled} já instalada(s), ${summary.invalid} inválida(s), ${summary.failures} falha(s).",
+                                    color = MyAiMuted,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.PERMISSION_REQUIRED) {
+                            Text("Permita o acesso aos arquivos do aparelho e toque em Buscar novamente.", color = MyAiMuted, fontSize = 11.sp)
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.FAILED) {
+                            Text("A busca falhou. Tente novamente.", color = MyAiMuted, fontSize = 11.sp)
+                        }
+                        if (importProgress.phase == AutomaticModelImportPhase.CANCELLED) {
+                            Text("A busca foi cancelada. As I.As já importadas continuam instaladas.", color = MyAiMuted, fontSize = 11.sp)
                         }
                     }
                 }
