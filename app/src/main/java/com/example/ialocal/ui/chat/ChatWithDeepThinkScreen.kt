@@ -8,6 +8,8 @@ fun ChatWithDeepThinkScreen(
     onOpenConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
+    onOpenCompilers: (String) -> Unit,
+    installedLanguageIds: Set<String>,
     onOpenSettings: () -> Unit,
     adsEnabled: Boolean,
 ) {
@@ -16,6 +18,8 @@ fun ChatWithDeepThinkScreen(
         onOpenConversation = onOpenConversation,
         onOpenHistory = onOpenHistory,
         onOpenModels = onOpenModels,
+        onOpenCompilers = onOpenCompilers,
+        installedLanguageIds = installedLanguageIds,
         onOpenSettings = onOpenSettings,
         adsEnabled = adsEnabled,
     )
