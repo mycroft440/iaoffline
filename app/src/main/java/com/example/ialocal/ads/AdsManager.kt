@@ -24,6 +24,7 @@ class AdsManager(private val appContext: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloadInterstitial = DownloadInterstitial(appContext)
     private val downloadRewarded = DownloadRewarded(appContext)
+    private val sectionEntryPrefs = appContext.getSharedPreferences("rewarded_section_entry", Context.MODE_PRIVATE)
     private val appOpenAds = AppOpenAds(appContext)
     private var initializing = false
     private var initialized = false
@@ -62,7 +63,21 @@ class AdsManager(private val appContext: Context) {
         }
     }
 
-    /** Full-screen ad right after the user starts downloading an AI; the download goes on behind it. */
+    /**
+     * On entering Wikipedia, the compiler list or profile settings, preload at most once per
+     * thirty minutes across all three screens. This does NOT show an ad. An explicit user action
+     * can still load a rewarded ad on demand, regardless of this entry-only cooldown.
+     */
+    fun preloadRewardedOnSectionEntry() {
+        if (!adsReady) return
+        val now = System.currentTimeMillis()
+        val last = sectionEntryPrefs.getLong("last_preload_at", 0L)
+        if (!RewardedEntryPacing.canPreload(now, last)) return
+        sectionEntryPrefs.edit().putLong("last_preload_at", now).apply()
+        downloadRewarded.preload()
+    }
+
+    /** Full-screen interstitial immediately after the free IA download begins. */
     fun showDownloadAd(activity: Activity) {
         if (adsReady) downloadInterstitial.show(activity)
     }
