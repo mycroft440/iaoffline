@@ -15,6 +15,8 @@ import com.example.ialocal.api.SavedRemoteConversation
 import com.example.ialocal.api.SavedRemoteMessage
 import com.example.ialocal.files.AttachmentContentProcessor
 import com.example.ialocal.files.AttachmentImporter
+import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.models.AiProfile
 import com.example.ialocal.data.PendingAttachment
 import java.io.File
 import java.util.UUID
@@ -38,6 +40,7 @@ class ExternalApiViewModel(
     private val store: ExternalApiChatStore,
     private val importer: AttachmentImporter,
     private val processor: AttachmentContentProcessor,
+    private val modelRepository: ModelRepository,
     private val client: ExternalApiClient = ExternalApiClient(),
 ) : ViewModel() {
     private val _config = MutableStateFlow(settings.read())
@@ -50,6 +53,7 @@ class ExternalApiViewModel(
     val currentId: StateFlow<String?> = _currentId.asStateFlow()
     private val _messages = MutableStateFlow<List<SavedRemoteMessage>>(emptyList())
     val messages: StateFlow<List<SavedRemoteMessage>> = _messages.asStateFlow()
+    val availableProfiles: StateFlow<List<AiProfile>> = modelRepository.profiles
     private val _profile = MutableStateFlow("Padrão")
     val profile: StateFlow<String> = _profile.asStateFlow()
     private val _attachments = MutableStateFlow<List<RemoteDraftAttachment>>(emptyList())
@@ -118,7 +122,7 @@ class ExternalApiViewModel(
 
     fun setProfile(name: String) {
         if (_busy.value) return
-        if (name !in PROFILE_NAMES) return
+        if (name != "Padrão" && availableProfiles.value.none { it.displayName == name }) return
         _profile.value = name
         persistCurrent()
     }
@@ -245,7 +249,7 @@ class ExternalApiViewModel(
         val chat = _conversations.value.firstOrNull { it.id == id } ?: return
         _currentId.value = id
         _messages.value = chat.messages
-        _profile.value = chat.profile.takeIf { it in PROFILE_NAMES } ?: "Padrão"
+        _profile.value = chat.profile.takeIf { it == "Padrão" || availableProfiles.value.any { p -> p.displayName == it } } ?: "Padrão"
         _attachments.value = emptyList()
         if (chat.provider != _config.value.provider.name || chat.baseUrl != _config.value.baseUrl ||
             chat.modelId != _config.value.modelId) {
@@ -284,7 +288,7 @@ class ExternalApiViewModel(
         _busy.value = true
         val answerId = _messages.value.last().id
         val previous = _messages.value.dropLast(1)
-        val systemPrompt = PROFILE_PROMPTS[_profile.value].orEmpty()
+        val systemPrompt = availableProfiles.value.firstOrNull { it.displayName == _profile.value }?.systemPrompt.orEmpty()
         val turns = buildList {
             if (systemPrompt.isNotBlank()) add(RemoteChatTurn("system", systemPrompt))
             previous.filter { it.content.isNotBlank() }.forEach { add(RemoteChatTurn(it.role, it.content)) }
@@ -340,18 +344,12 @@ class ExternalApiViewModel(
         private val store: ExternalApiChatStore,
         private val importer: AttachmentImporter,
         private val processor: AttachmentContentProcessor,
+        private val modelRepository: ModelRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            ExternalApiViewModel(settings, store, importer, processor) as T
+            ExternalApiViewModel(settings, store, importer, processor, modelRepository) as T
     }
 
-    companion object {
-        val PROFILE_NAMES = listOf("Padrão", "Programador", "Professor", "Criativo")
-        private val PROFILE_PROMPTS = mapOf(
-            "Programador" to "Você é um assistente de programação. Produza código correto em blocos markdown com linguagem, explique como executar e destaque riscos de segurança.",
-            "Professor" to "Você é um professor paciente. Explique conceitos por etapas, com exemplos claros.",
-            "Criativo" to "Você é um assistente criativo, imaginativo e útil, sempre respeitando o pedido do usuário.",
-        )
-    }
+
 }
