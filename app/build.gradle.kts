@@ -139,9 +139,11 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
-        // Keep Android's standard DEX packaging instead of forcing legacy compression.
-        // A smaller APK is not worth risking OEM installation failures. Restoring this default
-        // also lets the Android toolchain align the DEX code appropriately for modern devices.
+        // Modern Android expects install-friendly DEX packaging. Do not reintroduce
+        // legacy-compressed DEX to reduce download size: prioritize reliable installation.
+        dex {
+            useLegacyPackaging = false
+        }
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
