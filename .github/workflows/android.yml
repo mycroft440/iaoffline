@@ -119,7 +119,8 @@ jobs:
             echo "Installing the exact signed APK that will be uploaded to GitHub..."
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb shell pm path com.example.ialocal | grep -q '^package:'
-            adb shell dumpsys package com.example.ialocal | grep -m 1 'versionCode='
+            adb shell dumpsys package com.example.ialocal > "$RUNNER_TEMP/emulator-installed-package.txt"
+            grep -m 1 'versionCode=' "$RUNNER_TEMP/emulator-installed-package.txt"
             echo "APK installed successfully in a clean Android environment."
 
       # The APK itself, not a ZIP (archive: false): the artifact is named after the file and
