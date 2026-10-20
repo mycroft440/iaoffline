@@ -67,6 +67,10 @@ class ChatGenerationManager(
 
     private val _activeGenerations = MutableStateFlow(0)
     val activeGenerations: StateFlow<Int> = _activeGenerations.asStateFlow()
+    private val generatingConversationIds = mutableListOf<String>()
+    private val _notificationConversationId = MutableStateFlow<String?>(null)
+    /** The conversation opened by tapping the foreground notification. */
+    val notificationConversationId: StateFlow<String?> = _notificationConversationId.asStateFlow()
 
     /**
      * At most [MAX_CONCURRENT_ANSWERS] conversations are answered at once. The semaphore is fair, so
@@ -216,8 +220,10 @@ class ChatGenerationManager(
     ) {
         session._isGenerating.value = true
         session._progress.value = null
-        // Only the first concurrent generation starts the service; later ones (including queued turns
-        // started while the app is in the background) run under the service that is already active.
+        // The latest responding conversation is what the notification opens. Track all active
+        // sessions so stopping one cannot redirect the notification to an unrelated chat.
+        generatingConversationIds.add(conversationId)
+        _notificationConversationId.value = conversationId
         if (_activeGenerations.value == 0) ChatGenerationService.start(appContext)
         _activeGenerations.value += 1
         session.job = scope.launch {
@@ -234,6 +240,8 @@ class ChatGenerationManager(
                 // Start the next queued turn before releasing this one so the count never drops to
                 // zero in between and the foreground service is not stopped mid-queue.
                 startNextQueued(conversationId, session, target)
+                generatingConversationIds.remove(conversationId)
+                _notificationConversationId.value = generatingConversationIds.lastOrNull()
                 _activeGenerations.value -= 1
             }
         }
