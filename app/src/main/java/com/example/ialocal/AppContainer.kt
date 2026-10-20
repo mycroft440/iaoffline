@@ -8,6 +8,7 @@ import com.example.ialocal.agent.tools.AgentToolRegistry
 import com.example.ialocal.ai.AiGateway
 import com.example.ialocal.api.ApiSettingsRepository
 import com.example.ialocal.api.ExternalApiSettings
+import com.example.ialocal.api.ExternalApiChatStore
 import com.example.ialocal.api.LocalApiAiGateway
 import com.example.ialocal.api.LocalApiServer
 import com.example.ialocal.chat.ChatGenerationManager
@@ -69,6 +70,7 @@ class AppContainer(context: Context) {
     )
 
     val externalApiSettings = ExternalApiSettings(appContext)
+    val externalApiChatStore = ExternalApiChatStore(appContext)
     val apiSettings = ApiSettingsRepository(appContext)
     val apiServer = LocalApiServer(
         apiSettings,
