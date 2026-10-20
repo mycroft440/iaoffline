@@ -491,7 +491,7 @@ private fun FeaturedMoeHeader(count: Int, freeRamBytes: Long) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
-            "MoE em destaque · até 14B",
+            "MoE recomendadas · abaixo de 14B",
             color = CatalogText,
             fontSize = 17.sp,
             fontWeight = FontWeight.ExtraBold,
