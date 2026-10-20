@@ -64,6 +64,40 @@ class CodeCanvasTest {
     }
 
     @Test
+    fun pythonCodeRecommendsPythonPackWhenMissing() {
+        val python = CodeCanvases.of(
+            AnswerPart.Code("python", (1..8).joinToString("\n") { "print($it)" }, complete = true),
+        )
+        assertEquals("python", python.language)
+        assertEquals("python", missingCanvasLanguagePack(python, emptySet())?.id)
+        assertNull(missingCanvasLanguagePack(python, setOf("python")))
+        assertEquals("python", canvasLanguagePack(python)?.id)
+    }
+
+    @Test
+    fun eachSupportedLanguageGetsItsOwnMissingPackWithoutRecommendingAWrongOne() {
+        val cplusplus = CodeCanvases.of(AnswerPart.Code("c++", "int main() { return 0; }", complete = true))
+        val kotlin = CodeCanvases.of(AnswerPart.Code("kt", "fun main() = Unit", complete = true))
+        val typescript = CodeCanvases.of(AnswerPart.Code("tsx", "const App = () => null", complete = true))
+        val shell = CodeCanvases.of(AnswerPart.Code("zsh", "echo ok", complete = true))
+        assertEquals("cpp", missingCanvasLanguagePack(cplusplus, emptySet())?.id)
+        assertEquals("kotlin", missingCanvasLanguagePack(kotlin, emptySet())?.id)
+        assertEquals("typescript", missingCanvasLanguagePack(typescript, emptySet())?.id)
+        assertEquals("bash", missingCanvasLanguagePack(shell, emptySet())?.id)
+        assertNull(missingCanvasLanguagePack(kotlin, setOf("kotlin")))
+    }
+
+    @Test
+    fun existingWebPreviewsAndUnknownLanguagesNeverAskForLanguagePacks() {
+        val javascript = CodeCanvases.of(AnswerPart.Code("javascript", "console.log('ok')", complete = true))
+        val html = CodeCanvases.at(site, 0)!!
+        val unknown = CodeCanvases.of(AnswerPart.Code("fictionlang", "not executable", complete = true))
+        assertNull(missingCanvasLanguagePack(javascript, emptySet()))
+        assertNull(missingCanvasLanguagePack(html, emptySet()))
+        assertNull(missingCanvasLanguagePack(unknown, emptySet()))
+    }
+
+    @Test
     fun javascriptRunsInAPageThatShowsTheConsole() {
         val canvas = CodeCanvases.of(AnswerPart.Code("js", "console.log('</script>')", complete = true))
         val page = CodeCanvases.previewDocument(canvas)!!
