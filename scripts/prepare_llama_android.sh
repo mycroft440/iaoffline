@@ -117,6 +117,39 @@ replace_once(
     "                }\n",
 )
 
+# Every native call runs on one thread of its own. limitedParallelism(1) only runs one call at a
+# time, on whichever IO thread is free: each thread that started a computation became the root of
+# its own OpenMP team (the CPU threads of llama.cpp on arm64), so the next call, on another thread,
+# created a new team while the previous one still spun for 200 ms on the same cores.
+replace_once(
+    "    @OptIn(ExperimentalCoroutinesApi::class)\n"
+    "    private val llamaDispatcher = Dispatchers.IO.limitedParallelism(1)\n",
+    "    private val llamaDispatcher = Executors.newSingleThreadExecutor { task ->\n"
+    "        Thread(task, \"llama-native\").apply { isDaemon = true }\n"
+    "    }.asCoroutineDispatcher()\n",
+)
+replace_once(
+    "import kotlinx.coroutines.Dispatchers\n"
+    "import kotlinx.coroutines.ExperimentalCoroutinesApi\n",
+    "",
+)
+replace_once(
+    "import kotlinx.coroutines.cancel\n",
+    "import kotlinx.coroutines.asCoroutineDispatcher\nimport kotlinx.coroutines.cancel\n",
+)
+replace_once(
+    "import java.io.IOException\n",
+    "import java.io.IOException\nimport java.util.concurrent.Executors\n",
+)
+# @FastNative keeps the thread runnable for the garbage collector, which then waits for the call
+# to return before it can pause the process: loading a model, reading a long prompt or writing a
+# token froze the AI process's other threads (the answer's progress, a request to stop) meanwhile.
+for name in ("load", "prepare", "benchModel", "processSystemPrompt", "processUserPrompt", "generateNextToken", "unload"):
+    replace_once(
+        f"    @FastNative\n    private external fun {name}(",
+        f"    private external fun {name}(",
+    )
+
 path.write_text(text)
 print("Applied IA Offline inference-engine recovery patch")
 PY
@@ -1008,6 +1041,116 @@ replace_once(
     "    // Free up resources\n"
     "    iaoffline_reset_prefetch();\n"
     "    common_sampler_free(g_sampler);\n",
+)
+
+# 17. Threads for the fast CPU cores the AI process may use now. The upstream binding used all cores
+#     but 2, at most 4, which leaves idle a third to half of the fast cores of recent phones (6 on a
+#     Snapdragon 8 Gen 3, 8 on a Snapdragon 8 Elite or a Dimensity 9300/9400); reading a prompt is
+#     limited by the cores, so it gets up to twice the cores there. Each operation is split among the
+#     threads and waits for the last one, so efficiency cores (Cortex-A53/A55/A510/A520, which the app
+#     tells apart by their part numbers in /proc/cpuinfo and lists in IAOFFLINE_EFFICIENCY_CPUS) only
+#     fill in up to the 4 threads of before, and a phone with 4 fast cores or fewer keeps what it had.
+#     The count is checked again before each batch and each token: Android may leave the process
+#     fewer cores (in the background, or parking cores), and a thread without a core of its own would
+#     make every operation wait for it.
+replace_once(
+    "#include <android/log.h>\n",
+    "// sched_getaffinity() and the CPU_* macros; clang already defines it for C++ on Android.\n"
+    "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n#include <android/log.h>\n",
+)
+replace_once(
+    "#include <sys/mman.h>\n",
+    "#include <sys/mman.h>\n#include <sched.h>\n",
+)
+replace_once(
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n",
+    "// Efficiency cores by CPU number, from IAOFFLINE_EFFICIENCY_CPUS (\"0,1,2,3\"; empty when the CPU\n"
+    "// has none). Unset, the core types are unknown (x86_64). Read when a context is created.\n"
+    "static std::vector<bool> g_efficiency_cpus;\n"
+    "static bool g_cpu_types_known = false;\n"
+    "constexpr int                             IAOFFLINE_MAX_THREADS = 8;\n\n"
+    "static void iaoffline_read_cpu_types() {\n"
+    "    g_efficiency_cpus.clear();\n"
+    "    const char *value = getenv(\"IAOFFLINE_EFFICIENCY_CPUS\");\n"
+    "    g_cpu_types_known = value != nullptr;\n"
+    "    if (value == nullptr) return;\n"
+    "    for (const char *p = value; *p != '\\0';) {\n"
+    "        char *end = nullptr;\n"
+    "        const long cpu = strtol(p, &end, 10);\n"
+    "        if (end == p) {\n"
+    "            p++;\n"
+    "            continue;\n"
+    "        }\n"
+    "        if (cpu >= 0 && cpu < CPU_SETSIZE) {\n"
+    "            if ((long) g_efficiency_cpus.size() <= cpu) g_efficiency_cpus.resize(cpu + 1, false);\n"
+    "            g_efficiency_cpus[cpu] = true;\n"
+    "        }\n"
+    "        p = end;\n"
+    "    }\n"
+    "}\n\n"
+    "// Threads for the cores this process may use now (its affinity, which follows the cpuset Android\n"
+    "// gives it): one per fast core, filled in with efficiency cores up to the upstream 4, at most 8.\n"
+    "static int iaoffline_thread_count(int *allowed_out = nullptr, int *fast_out = nullptr) {\n"
+    "    cpu_set_t allowed;\n"
+    "    CPU_ZERO(&allowed);\n"
+    "    int n_allowed = 0;\n"
+    "    int n_fast = 0;\n"
+    "    if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {\n"
+    "        const int total = CPU_COUNT(&allowed);\n"
+    "        for (int cpu = 0; cpu < CPU_SETSIZE && n_allowed < total; cpu++) {\n"
+    "            if (!CPU_ISSET(cpu, &allowed)) continue;\n"
+    "            n_allowed++;\n"
+    "            // A core missing from the list (offline when the app read /proc/cpuinfo) counts as fast.\n"
+    "            if (cpu >= (int) g_efficiency_cpus.size() || !g_efficiency_cpus[cpu]) n_fast++;\n"
+    "        }\n"
+    "    }\n"
+    "    if (n_allowed == 0) n_allowed = n_fast = std::max(1, (int) sysconf(_SC_NPROCESSORS_ONLN));\n"
+    "    if (allowed_out != nullptr) *allowed_out = n_allowed;\n"
+    "    if (fast_out != nullptr) *fast_out = n_fast;\n"
+    "    if (!g_cpu_types_known) {\n"
+    "        // Core types unknown: the upstream choice, all cores but 2, between 2 and 4.\n"
+    "        return std::min(n_allowed, std::max(N_THREADS_MIN, std::min(N_THREADS_MAX, n_allowed - N_THREADS_HEADROOM)));\n"
+    "    }\n"
+    "    return std::min({n_allowed, IAOFFLINE_MAX_THREADS, std::max(n_fast, std::min(N_THREADS_MAX, n_allowed))});\n"
+    "}\n\n"
+    "static void iaoffline_update_threads(llama_context *context) {\n"
+    "    int n_allowed = 0;\n"
+    "    int n_fast = 0;\n"
+    "    const int threads = iaoffline_thread_count(&n_allowed, &n_fast);\n"
+    "    if (threads == llama_n_threads(context) && threads == llama_n_threads_batch(context)) return;\n"
+    "    LOGi(\"%s: %d threads (%d cores available now, %d of them fast)\", __func__, threads, n_allowed, n_fast);\n"
+    "    llama_set_n_threads(context, threads, threads);\n"
+    "}\n\n"
+    "// Set by the app (IAOFFLINE_LOW_MEMORY=1) when the model is large for this device's RAM.\n",
+)
+replace_once(
+    "    // Multi-threading setup\n"
+    "    const int n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,\n"
+    "                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -\n"
+    "                                                     N_THREADS_HEADROOM));\n"
+    "    LOGi(\"%s: Using %d threads\", __func__, n_threads);\n",
+    "    // Multi-threading setup: the fast cores this process may use (iaoffline_thread_count).\n"
+    "    iaoffline_read_cpu_types();\n"
+    "    int n_allowed_cores = 0;\n"
+    "    int n_fast_cores = 0;\n"
+    "    const int n_threads = iaoffline_thread_count(&n_allowed_cores, &n_fast_cores);\n"
+    "    LOGi(\"%s: Using %d threads (%d cores available, %d of them fast)\", __func__, n_threads,\n"
+    "         n_allowed_cores, n_fast_cores);\n",
+)
+replace_once(
+    "    setenv(\"IAOFFLINE_ACTIVE_CONTEXT_TOKENS\", std::to_string(llama_n_ctx(context)).c_str(), 1);",
+    "    setenv(\"IAOFFLINE_ACTIVE_CONTEXT_TOKENS\", std::to_string(llama_n_ctx(context)).c_str(), 1);\n"
+    "    setenv(\"IAOFFLINE_ACTIVE_THREADS\", std::to_string(llama_n_threads(context)).c_str(), 1);",
+)
+replace_once(
+    "        // Shift context if current batch cannot fit into the context\n",
+    "        iaoffline_update_threads(context);\n\n"
+    "        // Shift context if current batch cannot fit into the context\n",
+)
+replace_once(
+    "    // Infinite text generation via context shifting\n",
+    "    iaoffline_update_threads(g_context);\n\n"
+    "    // Infinite text generation via context shifting\n",
 )
 
 path.write_text(text)

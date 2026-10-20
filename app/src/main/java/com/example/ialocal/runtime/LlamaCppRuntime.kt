@@ -57,6 +57,8 @@ class LlamaCppRuntime(
     private val requests = AtomicInteger()
     /** What holds [mutex], told to an answer that has to wait for it ([GenerationStage.BUSY_ANSWER]…). */
     @Volatile private var busyWith: String? = null
+    /** Cores the native threads fill in with only up to 4, read once from /proc/cpuinfo. */
+    private val efficiencyCpus by lazy { CpuCores.efficiencyCpus() }
 
     private data class Primed(val modelId: String, val key: String, val history: List<AiChatMessage>)
 
@@ -378,15 +380,20 @@ class LlamaCppRuntime(
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, experts read from storage for a mixture of experts that does not fit
-        // at all, the memory that sizes the (Q4_0) context and the presence penalty the model card
-        // recommends (the other sampling settings come from the GGUF itself).
+        // at all, the memory that sizes the (Q4_0) context, the presence penalty the model card
+        // recommends (the other sampling settings come from the GGUF itself) and the efficiency
+        // cores, which the CPU threads only fill in with.
+        val efficiency = efficiencyCpus
         runCatching {
+            if (efficiency == null) Os.unsetenv(EFFICIENCY_CPUS_ENV)
+            else Os.setenv(EFFICIENCY_CPUS_ENV, CpuCores.encode(efficiency), true)
             Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true)
             Os.setenv(MOE_STREAM_ENV, if (plan.streamsExperts) "1" else "0", true)
             Os.setenv(CONTEXT_TOKENS_ENV, RuntimeLimits.MAX_CONTEXT_TOKENS.toString(), true)
             Os.setenv(KV_BUDGET_ENV, kvBudgetMb.toString(), true)
             Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
             Os.unsetenv(ACTIVE_CONTEXT_ENV)
+            Os.unsetenv(ACTIVE_THREADS_ENV)
         }
         logger?.info(
             "MODEL_LOAD",
@@ -408,7 +415,15 @@ class LlamaCppRuntime(
             engine.loadModel(model.filePath)
             loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
                 ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
-            logger?.info("MODEL_LOAD", "Contexto alocado: $loadedContextTokens tokens")
+            val threads = runCatching { Os.getenv(ACTIVE_THREADS_ENV) }.getOrNull()
+            logger?.info(
+                "MODEL_LOAD",
+                buildString {
+                    append("Contexto alocado: $loadedContextTokens tokens")
+                    if (threads != null) append("; $threads threads da CPU")
+                    if (!efficiency.isNullOrEmpty()) append("; núcleos de eficiência: ${CpuCores.encode(efficiency)}")
+                },
+            )
             loadedModelId = model.id
             session = null
             primed = null
@@ -510,8 +525,10 @@ class LlamaCppRuntime(
         private const val SESSION_CLEAN_ENV = "IAOFFLINE_SESSION_CLEAN"
         private const val SESSION_TOKENS_ENV = "IAOFFLINE_SESSION_TOKENS"
         private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
+        private const val ACTIVE_THREADS_ENV = "IAOFFLINE_ACTIVE_THREADS"
         private const val PROMPT_CACHE_ENV = "IAOFFLINE_PROMPT_CACHE"
         private const val SYSTEM_PROMPT_TAIL_ENV = "IAOFFLINE_SYSTEM_PROMPT_TAIL"
+        private const val EFFICIENCY_CPUS_ENV = "IAOFFLINE_EFFICIENCY_CPUS"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
         private const val MB = 1024L * 1024
     }
