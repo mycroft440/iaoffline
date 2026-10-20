@@ -57,6 +57,8 @@ internal enum class PreviewKind { HTML, SVG, JAVASCRIPT }
 internal data class CodeCanvas(
     val title: String,
     val languageLabel: String,
+    /** Original fenced-code language (py, tsx, cpp, etc.) to match the pack library. */
+    val language: String,
     val code: String,
     val complete: Boolean,
     val preview: PreviewKind?,
@@ -87,6 +89,7 @@ internal object CodeCanvases {
         return CodeCanvas(
             title = title(part.language, part.code, preview),
             languageLabel = languageLabel(part.language, preview),
+            language = part.language,
             code = part.code,
             complete = part.complete,
             preview = preview,
