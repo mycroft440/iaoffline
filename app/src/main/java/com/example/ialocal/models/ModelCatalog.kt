@@ -35,6 +35,7 @@ data class CatalogModel(
     val quantization: String,
     val approximateSizeBytes: Long,
     val sha256: String,
+    /** Suggested *phone capacity*, not measured resident RAM; includes space for Android. */
     val recommendedRamBytes: Long,
     val totalParametersBillions: Double,
     val activeParametersBillions: Double? = null,
@@ -53,7 +54,7 @@ data class CatalogModel(
     val apiIdPrefix: String
         get() = "local-catalog-$id-"
 
-    /** Mixture of experts: each word uses only [activeParametersBillions] of the total. */
+    /** MoE: active parameters describe compute per token, not the RAM occupied by the GGUF. */
     val isMoe: Boolean
         get() = activeParametersBillions != null
 
