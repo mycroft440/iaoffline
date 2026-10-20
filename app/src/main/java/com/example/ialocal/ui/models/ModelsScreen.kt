@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +71,7 @@ import com.example.ialocal.models.ModelDownloadState
 import com.example.ialocal.models.ModelImportPreview
 import com.example.ialocal.runtime.RuntimeStatus
 import com.example.ialocal.ui.branding.ProviderLogo
+import com.example.ialocal.ui.rememberLiveMemory
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.catalogProvider
 
@@ -78,6 +81,7 @@ fun ModelsScreen(
     viewModel: ModelsViewModel,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
     onRequestRewardedDownload: (String, () -> Unit) -> Unit,
+    onFreeDownloadStarted: () -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -92,6 +96,10 @@ fun ModelsScreen(
     val apiKey by viewModel.apiKey.collectAsStateWithLifecycle()
     val integration by viewModel.integrationTest.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val liveMemory = rememberLiveMemory()
+    val freeDownloadModelId = remember(viewModel.catalog, liveMemory.availableBytes) {
+        recommendedModels(viewModel.catalog, liveMemory.availableBytes).freeDownloadModelId
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.inspectModel(uri)
@@ -177,8 +185,10 @@ fun ModelsScreen(
                 }
 
                 items(providerModels, key = { "catalog-${it.id}" }) { catalogModel ->
+                    val isFreeDownload = catalogModel.id == freeDownloadModelId
                     CatalogModelCard(
                         model = catalogModel,
+                        isFreeDownload = isFreeDownload,
                         state = download.takeIf { it.catalogId == catalogModel.id },
                         installed = models.any { it.apiModelId.startsWith(catalogModel.apiIdPrefix) },
                         anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
@@ -189,6 +199,8 @@ fun ModelsScreen(
                                     download.phase in setOf(ModelDownloadPhase.CANCELLED, ModelDownloadPhase.ERROR)
                                 ) {
                                     viewModel.resumeDownload(catalogModel.id)
+                                } else if (isFreeDownload) {
+                                    if (viewModel.downloadCatalogModel(catalogModel.id)) onFreeDownloadStarted()
                                 } else {
                                     onRequestRewardedDownload(catalogModel.displayName) {
                                         viewModel.downloadCatalogModel(catalogModel.id)
@@ -252,6 +264,7 @@ fun ModelsScreen(
 @Composable
 private fun CatalogModelCard(
     model: CatalogModel,
+    isFreeDownload: Boolean,
     state: ModelDownloadState?,
     installed: Boolean,
     anotherOperationRunning: Boolean,
@@ -280,7 +293,18 @@ private fun CatalogModelCard(
                 }
                 if (installed) Icon(Icons.Default.CheckCircle, "Modelo instalado", tint = MaterialTheme.colorScheme.primary)
             }
+            if (isFreeDownload) {
+                Text("FREE · GRÁTIS", color = Color(0xFF16A34A), fontWeight = FontWeight.Bold)
+            }
             Text(model.description, style = MaterialTheme.typography.bodySmall)
+            if (!installed && state == null) {
+                Text(
+                    if (isFreeDownload) "Download imediato; anúncio comum opcional depois."
+                    else "Assista a um anúncio para liberar o download.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isFreeDownload) Color(0xFF16A34A) else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 "RAM recomendada: ~${formatBytes(model.recommendedRamBytes)} · Fonte: ${model.repository}",
                 style = MaterialTheme.typography.labelSmall,
@@ -317,6 +341,10 @@ private fun CatalogModelCard(
                     onClick = onDownload,
                     enabled = !installed && !currentBusy && !anotherOperationRunning,
                     modifier = Modifier.weight(1f),
+                    colors = if (isFreeDownload) ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF16A34A),
+                        contentColor = Color.White,
+                    ) else ButtonDefaults.buttonColors(),
                 ) {
                     if (currentBusy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     else Icon(Icons.Default.Download, contentDescription = null)
@@ -325,7 +353,8 @@ private fun CatalogModelCard(
                             installed -> "  Instalado"
                             state?.phase == ModelDownloadPhase.CANCELLED -> "  Continuar download"
                             state?.phase == ModelDownloadPhase.ERROR -> "  Tentar novamente"
-                            else -> "  Assistir anúncio e baixar"
+                            isFreeDownload -> "  Baixar GRÁTIS"
+                            else -> "  Assistir anúncio e liberar"
                         }
                     )
                 }
