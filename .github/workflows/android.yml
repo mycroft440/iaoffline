@@ -74,6 +74,22 @@ jobs:
           # and Android 13+ signing before handing the file to a phone.
           unzip -tq "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -v 4 "$APK"
+          # Inspect the actual installation-critical entries, not just the ZIP signature.
+          python3 - "$APK" <<'PY'
+          import sys
+          import zipfile
+          with zipfile.ZipFile(sys.argv[1]) as apk:
+              files = apk.infolist()
+              dex = [f for f in files if f.filename.endswith(".dex")]
+              arm = [f for f in files if f.filename.startswith("lib/arm64-v8a/") and f.filename.endswith(".so")]
+              intel = [f for f in files if f.filename.startswith("lib/x86_64/") and f.filename.endswith(".so")]
+              assert dex, "APK has no DEX code"
+              assert arm and intel, "APK lacks a native library for a supported ABI"
+              assert all(f.compress_type == zipfile.ZIP_STORED for f in dex), "Legacy-compressed DEX regression detected"
+              assert all(f.compress_type == zipfile.ZIP_DEFLATED for f in arm + intel), "Native lib extraction mode changed"
+              assert apk.testzip() is None, "APK ZIP entry checksum mismatch"
+              print(f"APK content OK: {len(dex)} stored DEX files; {len(arm)} ARM64 and {len(intel)} x86_64 native libraries")
+          PY
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | tee "$RUNNER_TEMP/apk-package.txt"
           # aapt2 prints minSdkVersion, not sdkVersion. An incorrect grep previously
           # rejected a valid, correctly signed APK and blocked the release upload.
