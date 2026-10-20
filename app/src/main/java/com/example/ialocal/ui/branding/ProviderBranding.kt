@@ -42,6 +42,7 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.COHERE -> "Cohere"
     ModelProvider.POOLSIDE -> "Poolside"
     ModelProvider.SBER -> "Sber / GigaChat"
+    ModelProvider.ARCEE -> "Arcee AI / Trinity"
 }
 
 /** Every company has its own logo, shown in the catalog and next to its model's replies in the chat. */
@@ -67,6 +68,7 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.COHERE -> R.drawable.provider_cohere
     ModelProvider.POOLSIDE -> R.drawable.provider_poolside
     ModelProvider.SBER -> R.drawable.provider_sber
+    ModelProvider.ARCEE -> R.drawable.provider_arcee
 }
 
 fun AiModelEntity.catalogProvider(): ModelProvider? =
