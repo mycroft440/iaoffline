@@ -219,25 +219,25 @@ class MainActivity : ComponentActivity() {
         adsManager.showDownloadAd(this)
     }
 
-    /** New model downloads use opt-in rewarded ads; Wikipedia keeps its old interstitial. */
-    private fun requestRewardedDownload(modelName: String, onAuthorized: () -> Unit) {
+    /** Recompensa voluntária para modelos, Wikipédias, compiladores e criação de perfis. */
+    private fun requestRewardedDownload(actionName: String, onAuthorized: () -> Unit) {
         if (container.chatGenerationManager.activeGenerations.value > 0) {
             Toast.makeText(this, "Termine a resposta da IA antes de assistir ao anúncio.", Toast.LENGTH_LONG).show()
             return
         }
         android.app.AlertDialog.Builder(this)
-            .setTitle("Liberar download de ${modelName}?")
+            .setTitle("Liberar ${actionName}?")
             .setMessage(
-                "Assista a um anúncio recompensado para liberar o download desta IA. " +
-                    "Se você fechar antes de receber a recompensa, o download não começa. " +
-                    "Se não houver anúncio disponível, o download será liberado gratuitamente.",
+                "Assista a um anúncio recompensado para liberar esta ação. " +
+                    "Se você fechar antes de receber a recompensa, a ação não será realizada. " +
+                    "Se não houver anúncio disponível, a ação será liberada sem anúncio.",
             )
             .setPositiveButton("Assistir anúncio") { _, _ ->
                 adsManager.requestRewardedDownload(
                     activity = this,
                     onReward = onAuthorized,
                     onUnavailable = {
-                        Toast.makeText(this, "Anúncio indisponível. Download liberado sem anúncio.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "Anúncio indisponível. Ação liberada sem anúncio.", Toast.LENGTH_LONG).show()
                         onAuthorized()
                     },
                     onBusy = {
@@ -407,6 +407,7 @@ private fun LocalAiApp(
                 adsEnabled = adsManager.adsReady,
                 onEnsureStorageAccess = onEnsureStorageAccess,
                 onRequestRewardedDownload = onRequestRewardedDownload,
+                onFreeDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -493,6 +494,7 @@ private fun LocalAiApp(
                 viewModel = vm,
                 onEnsureStorageAccess = onEnsureStorageAccess,
                 onRequestRewardedDownload = onRequestRewardedDownload,
+                onFreeDownloadStarted = onDownloadStarted,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -543,8 +545,10 @@ private fun LocalAiApp(
             val vm: AiProfilesViewModel = viewModel(
                 factory = AiProfilesViewModel.Factory(container.modelRepository),
             )
+            PreloadRewardedSectionEntry(adsManager)
             AiProfilesScreen(
                 viewModel = vm,
+                onRequestRewardedAction = onRequestRewardedDownload,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -566,17 +570,19 @@ private fun LocalAiApp(
                     container.codeLanguagePacks,
                 ),
             )
+            PreloadRewardedSectionEntry(adsManager)
             CompilersScreen(
                 viewModel = vm,
+                onRequestRewardedAction = onRequestRewardedDownload,
                 onBack = { navController.popBackStack() },
             )
         }
 
         composable("wikipedia") {
-            PreloadDownloadAd(adsManager)
+            PreloadRewardedSectionEntry(adsManager)
             WikipediaScreen(
                 wikipedia = container.offlineWikipedia,
-                onDownloadStarted = onDownloadStarted,
+                onRequestRewardedAction = onRequestRewardedDownload,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -594,6 +600,15 @@ private fun PreloadDownloadAd(adsManager: AdsManager) {
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(adsManager.adsReady, lifecycleOwner) {
         lifecycleOwner.withResumed { adsManager.preloadDownloadAd() }
+    }
+}
+
+/** Prepares, but never displays, one rewarded ad per 30 minutes across the three sections. */
+@Composable
+private fun PreloadRewardedSectionEntry(adsManager: AdsManager) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(adsManager.adsReady, lifecycleOwner) {
+        lifecycleOwner.withResumed { adsManager.preloadRewardedOnSectionEntry() }
     }
 }
 
