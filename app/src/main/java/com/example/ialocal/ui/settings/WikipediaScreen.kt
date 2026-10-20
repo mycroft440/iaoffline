@@ -52,7 +52,7 @@ import com.example.ialocal.knowledge.WikipediaPackStatus
 @Composable
 fun WikipediaScreen(
     wikipedia: OfflineWikipedia,
-    onDownloadStarted: () -> Unit,
+    onRequestRewardedAction: (String, () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val states by wikipedia.states.collectAsStateWithLifecycle()
@@ -87,7 +87,7 @@ fun WikipediaScreen(
                 Text(
                     "Escolha qual edição da Wikipédia baixar para os agentes consultarem sem internet. Com ela instalada, as IAs " +
                         "conferem nomes, datas e fatos nos artigos em vez de inventá-los, sem precisar de um modelo maior. " +
-                        "Nada é baixado sem você tocar em Baixar e confirmar, e o app não atualiza as edições sozinho. " +
+                        "Cada download é liberado após um anúncio recompensado; você confirma o tamanho e o Wi-Fi antes de assistir. " +
                         "Os arquivos são do Kiwix (formato ZIM) e são conferidos por SHA-256 depois do download.",
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall,
@@ -166,10 +166,13 @@ fun WikipediaScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    wikipedia.install(state.pack.id, wifiOnly)
-                    confirmDownload = null
-                    onDownloadStarted()
-                }) { Text("Baixar") }
+                    val packId = state.pack.id
+                    val wifiOnlySelected = wifiOnly
+                    onRequestRewardedAction("o download de ${state.pack.title}") {
+                        wikipedia.install(packId, wifiOnlySelected)
+                        confirmDownload = null
+                    }
+                }) { Text("Assistir anúncio e baixar") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDownload = null }) { Text("Cancelar") }
@@ -240,7 +243,7 @@ private fun WikipediaPackCard(
                     WikipediaPackStatus.PREPARING, WikipediaPackStatus.VERIFYING -> Unit
                     WikipediaPackStatus.NOT_INSTALLED, WikipediaPackStatus.FAILED -> Button(onClick = onDownload) {
                         Icon(Icons.Default.Download, contentDescription = null)
-                        Text(if (state.status == WikipediaPackStatus.FAILED) " Tentar de novo" else " Baixar")
+                        Text(if (state.status == WikipediaPackStatus.FAILED) " Recompensa e tentar" else " Assistir anúncio")
                     }
                 }
             }
