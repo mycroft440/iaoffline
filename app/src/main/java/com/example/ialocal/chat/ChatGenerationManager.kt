@@ -177,13 +177,20 @@ class ChatGenerationManager(
         }
     }
 
+    /** Only an explicit stop cancels this conversation's active answer and its pending turns. */
     fun stop(conversationId: String) {
-        sessions[conversationId]?.job?.cancel()
+        sessions[conversationId]?.let { session ->
+            session._queued.value = emptyList()
+            session.queuedTarget = null
+            session.job?.cancel()
+        }
     }
 
+    /** The notification's Parar button cancels every answer and pending turn. */
     fun stopAll() {
         sessions.values.forEach { session ->
             session._queued.value = emptyList()
+            session.queuedTarget = null
             session.job?.cancel()
         }
     }
