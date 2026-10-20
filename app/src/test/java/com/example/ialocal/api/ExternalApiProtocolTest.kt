@@ -34,7 +34,7 @@ class ExternalApiProtocolTest {
             """data: {"choices":[{"delta":{"content":"Olá"}}]}""",
         ))
         assertEquals(" mundo", remoteApiEventContent(
-            """data: {"choices":[{"delta":{"content":" mundo"},"role":"assistant"}}]}""",
+            """data: {"choices":[{"delta":{"content":" mundo","role":"assistant"}}]}""",
         ))
         assertNull(remoteApiEventContent("data: [DONE]"))
         assertNull(remoteApiEventContent(": heartbeat"))
