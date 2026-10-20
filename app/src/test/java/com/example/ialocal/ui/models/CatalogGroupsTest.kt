@@ -175,6 +175,37 @@ class CatalogGroupsTest {
     }
 
     @Test
+    fun homePreviewKeepsAllSevenInstalledModelsVisibleInTwoColumnTiles() {
+        val installed = (1..7).map { index ->
+            model("installed-$index", "Modelo $index").copy(importedAt = index.toLong())
+        }
+        val result = homeAiPreview(installed)
+        assertEquals(7, result.models.size)
+        assertEquals(0, result.remainingCount)
+        assertEquals(installed.reversed().map { it.id }, result.models.map { it.id })
+    }
+
+    @Test
+    fun homePreviewShowsAtMostEightModelsWithCorrectRemainingCount() {
+        val installed = (1..13).map { index ->
+            model("installed-$index", "Modelo $index").copy(importedAt = index.toLong())
+        }
+        val result = homeAiPreview(installed)
+        assertEquals(HOME_MODEL_PREVIEW_LIMIT, result.models.size)
+        assertEquals(5, result.remainingCount)
+        assertEquals((13 downTo 6).map { "installed-$it" }, result.models.map { it.id })
+    }
+
+    @Test
+    fun homePreviewPrioritizesActiveAiAndHandlesEmptyList() {
+        val oldActive = model("active", "Em uso").copy(isActive = true, importedAt = 1L)
+        val newest = model("new", "Recente").copy(importedAt = 99L)
+        assertEquals(listOf(oldActive, newest), homeAiPreview(listOf(newest, oldActive)).models)
+        assertTrue(homeAiPreview(emptyList()).models.isEmpty())
+        assertEquals(0, homeAiPreview(emptyList()).remainingCount)
+    }
+
+    @Test
     fun compactNamesDropTheFileDetails() {
         val gemma = ModelCatalog.entries.first { it.displayName == "Gemma 4 26B-A4B QAT" }
         assertEquals("Gemma 4 26B-A4B QAT", compactModelName(model(gemma.apiIdPrefix + "abc", "qualquer nome")))
