@@ -94,6 +94,19 @@ class CatalogGroupsTest {
     }
 
     @Test
+    fun performanceNoticeUsesLiveFreeRamInsteadOfHardCodedFiveGigabytes() {
+        val threeGiB = 3L * 1024L * 1024L * 1024L
+        val sixGiB = 6L * 1024L * 1024L * 1024L
+        val threeGbNotice = catalogPerformanceNotice(threeGiB)
+        val sixGbNotice = catalogPerformanceNotice(sixGiB)
+        assertTrue(threeGbNotice.contains("até ${groupedFormatBytes(threeGiB)} de RAM"))
+        assertTrue(sixGbNotice.contains("até ${groupedFormatBytes(sixGiB)} de RAM"))
+        assertFalse(threeGbNotice == sixGbNotice)
+        assertTrue(threeGbNotice.contains("MoE abaixo de 14 bilhões"))
+        assertTrue(catalogPerformanceNotice(-1).contains("0 MB de RAM"))
+    }
+
+    @Test
     fun recommendsEveryModelThatFitsCurrentFreeRamWithoutLimitsPerCompany() {
         val free = 6L * 1024 * 1024 * 1024
         val recommended = recommendedModels(ModelCatalog.entries, freeRamBytes = free)
