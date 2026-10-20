@@ -93,6 +93,35 @@ jobs:
             echo "SHA-256: \`$(sha256sum "$APK" | cut -d' ' -f1)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Verify a real installation, not only the APK ZIP/signature. Android's Package
+      # Installer can reject packages for reasons that apksigner/aapt2 do not detect.
+      # A failure here prints the Android INSTALL_* reason and prevents publishing a bad APK.
+      - name: Permit Android emulator KVM acceleration
+        shell: bash
+        run: |
+          if test -e /dev/kvm; then
+            sudo chmod 666 /dev/kvm
+          fi
+
+      - name: Smoke test APK installation on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            echo "Android version: $(adb shell getprop ro.build.version.release)"
+            echo "Installing the exact signed APK that will be uploaded to GitHub..."
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm path com.example.ialocal | grep -q '^package:'
+            adb shell dumpsys package com.example.ialocal | grep -m 1 'versionCode='
+            echo "APK installed successfully in a clean Android environment."
+
       # The APK itself, not a ZIP (archive: false): the artifact is named after the file and
       # downloads as IA-Local-debug-0.1.N.apk, ready to install on a phone. A ZIP had to be
       # extracted first, and Android's ZIP reader rejected the uncompressed ones Actions used to
