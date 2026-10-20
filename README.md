@@ -116,7 +116,7 @@ Quando a assinatura de release estiver configurada, o APK mais recente ficará d
 
 `https://github.com/mycroft440/iaoffline/releases/latest/download/IA-Local.apk`
 
-Enquanto a assinatura não estiver configurada, o APK de teste fica no ZIP **IA-Local-debug-APK** de cada execução do GitHub Actions. O workflow envia esse ZIP comprimido (`compression-level` acima de 0). Um ZIP sem compressão gerado pelo Actions abre no computador, mas o leitor de ZIP do Android e a maioria dos gerenciadores de arquivos do celular o recusam como corrompido.
+Enquanto a assinatura não estiver configurada, o APK de teste é o artefato **IA-Local-debug.apk** de cada execução do GitHub Actions. Ele é enviado como o próprio APK, sem ZIP (`archive: false`): o download já é o arquivo para instalar, sem nada para descompactar. Execuções anteriores entregavam um ZIP, e os ZIPs sem compressão (até o PR #46) aparecem como corrompidos no celular, porque o leitor de ZIP do Android recusa uma entrada sem compressão com descritor de dados, como o Actions os gerava.
 
 Requisitos do APK atual:
 

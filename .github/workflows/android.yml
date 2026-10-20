@@ -63,18 +63,19 @@ jobs:
         run: |
           test -f app/build/outputs/apk/debug/app-debug.apk
           ls -lh app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p dist-debug
+          cp app/build/outputs/apk/debug/app-debug.apk dist-debug/IA-Local-debug.apk
 
+      # The APK itself, not a ZIP (archive: false): the artifact is named after the file and
+      # downloads as IA-Local-debug.apk, ready to install on a phone. A ZIP had to be extracted
+      # first, and Android's ZIP reader rejected the uncompressed ones Actions used to stream.
       - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: IA-Local-debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: dist-debug/IA-Local-debug.apk
+          archive: false
           if-no-files-found: error
           retention-days: 14
-          # Never 0: the artifact ZIP is streamed with data descriptors, and a stored (level 0)
-          # entry with a data descriptor is rejected by java.util.zip.ZipInputStream, which
-          # Android and most Android file managers use, so the ZIP opened on a phone as corrupted.
-          compression-level: 6
 
       - name: Check persistent release signing
         id: signing
@@ -143,18 +144,28 @@ jobs:
           sha256sum dist/IA-Local.apk > dist/IA-Local.apk.sha256
           ls -lh dist/IA-Local.apk dist/IA-Local.aab dist/IA-Local.apk.sha256
 
-      - name: Upload signed release artifact
+      # The APK unzipped, like the debug one; the bundle and the checksum go in a ZIP.
+      - name: Upload signed release APK
         if: steps.signing.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/IA-Local.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload signed release bundle
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: IA-Local-signed-release
           path: |
-            dist/IA-Local.apk
             dist/IA-Local.aab
             dist/IA-Local.apk.sha256
           if-no-files-found: error
           retention-days: 14
-          # Never 0; see Upload Debug APK.
+          # Never 0: Actions streams the ZIP with data descriptors, and Android's ZIP reader
+          # (java.util.zip.ZipInputStream) rejects an uncompressed entry that has one.
           compression-level: 6
 
       - name: Publish direct-download GitHub Release
