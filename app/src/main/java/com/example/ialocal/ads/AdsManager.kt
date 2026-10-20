@@ -160,7 +160,8 @@ class AdsManager(private val appContext: Context) {
         adsReady = BuildConfig.TEST_ADS || consentInformation.canRequestAds()
         if (adsReady) {
             appOpenAds.preload()
-            downloadRewarded.preload()
+            // Rewarded inventory is prepared only when the user enters a related screen or
+            // chooses a rewarded action, not automatically at app launch.
         }
     }
 }
