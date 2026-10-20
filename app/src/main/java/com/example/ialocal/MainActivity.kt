@@ -494,6 +494,7 @@ private fun LocalAiApp(
                     container.externalApiChatStore,
                     container.attachmentImporter,
                     container.attachmentProcessor,
+                    container.modelRepository,
                 ),
             )
             val installedLanguageIds by container.codeLanguagePacks.installedIds.collectAsStateWithLifecycle()
