@@ -489,9 +489,20 @@ private fun LocalAiApp(
         // The original local server remains available under Models e API for integrations.
         composable("external-api") {
             val vm: ExternalApiViewModel = viewModel(
-                factory = ExternalApiViewModel.Factory(container.externalApiSettings),
+                factory = ExternalApiViewModel.Factory(
+                    container.externalApiSettings,
+                    container.externalApiChatStore,
+                    container.attachmentImporter,
+                    container.attachmentProcessor,
+                ),
             )
-            ExternalApiScreen(viewModel = vm, onBack = { navController.popBackStack() })
+            val installedLanguageIds by container.codeLanguagePacks.installedIds.collectAsStateWithLifecycle()
+            ExternalApiScreen(
+                viewModel = vm,
+                installedLanguageIds = installedLanguageIds,
+                onOpenCompilers = { id -> navController.navigate("compilers?languageId=$id") },
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable("models") {
