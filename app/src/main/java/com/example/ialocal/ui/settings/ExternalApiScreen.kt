@@ -131,6 +131,8 @@ fun ExternalApiScreen(
     var showProfile by remember { mutableStateOf(false) }
     var canvasRef by remember { mutableStateOf<CanvasRef?>(null) }
     val chatScroll = rememberLazyListState()
+    val currentChatModel = conversations.firstOrNull { it.id == currentId }?.modelId
+        ?: configuration.modelId
     val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val speaker = remember(context) { TextToSpeech(context.applicationContext) { } }
     DisposableEffect(speaker) { onDispose { speaker.stop(); speaker.shutdown() } }
@@ -348,7 +350,7 @@ fun ExternalApiScreen(
                                     modifier = Modifier.size(22.dp),
                                 )
                                 Text(
-                                    if (message.role == "assistant") configuration.modelId.ifBlank { "IA online" } else "Você",
+                                    if (message.role == "assistant") currentChatModel.ifBlank { "IA online" } else "Você",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold,
                                 )
