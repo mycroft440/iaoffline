@@ -838,7 +838,7 @@ private fun ExactTopBar(
                     }
                 }
                 ExactSelector(
-                    modifier = Modifier.widthIn(max = 142.dp),
+                    modifier = Modifier.widthIn(max = 112.dp),
                     icon = null,
                     textIcon = "</>",
                     label = agent,
@@ -848,7 +848,7 @@ private fun ExactTopBar(
             }
 
             ExactSelector(
-                modifier = Modifier.widthIn(max = 136.dp),
+                modifier = Modifier.widthIn(max = 100.dp),
                 icon = Icons.Default.Memory,
                 textIcon = null,
                 label = model,
