@@ -1,5 +1,6 @@
 package com.example.ialocal.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -43,6 +45,7 @@ import com.example.ialocal.ui.codeeditor.CodeLanguagePackDescriptor
 @Composable
 fun CompilersScreen(
     viewModel: SettingsViewModel,
+    focusedLanguageId: String? = null,
     onRequestRewardedAction: (String, () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -50,6 +53,12 @@ fun CompilersScreen(
     val busyLanguageId by viewModel.busyLanguageId.collectAsStateWithLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val listState = rememberLazyListState()
+    LaunchedEffect(focusedLanguageId) {
+        val index = viewModel.availableLanguagePacks.indexOfFirst { it.id == focusedLanguageId }
+        // The introduction occupies the first row. Focus on the pack requested from Canvas.
+        if (index >= 0) listState.scrollToItem(index + 1)
+    }
 
     LaunchedEffect(statusMessage) {
         statusMessage?.let {
@@ -72,6 +81,7 @@ fun CompilersScreen(
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
@@ -93,6 +103,7 @@ fun CompilersScreen(
             ) { descriptor ->
                 LanguagePackCard(
                     descriptor = descriptor,
+                    highlighted = descriptor.id == focusedLanguageId,
                     installed = descriptor.id in installedIds,
                     busy = busyLanguageId == descriptor.id,
                     anotherBusy = busyLanguageId != null && busyLanguageId != descriptor.id,
@@ -113,13 +124,17 @@ fun CompilersScreen(
 @Composable
 private fun LanguagePackCard(
     descriptor: CodeLanguagePackDescriptor,
+    highlighted: Boolean,
     installed: Boolean,
     busy: Boolean,
     anotherBusy: Boolean,
     onDownload: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        border = if (highlighted) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+    ) {
         Row(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
