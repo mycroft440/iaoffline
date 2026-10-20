@@ -197,49 +197,42 @@ class ModelDownloader(
         var candidateIndex = 0
         var failedAttempts = 0
         while (true) {
+            val bytesBeforeAttempt = partial.length()
             try {
                 pauseIfOffline(partial)
                 downloadBody(model, candidates[candidateIndex], partial, onState)
                 return
             } catch (cancel: CancellationException) {
+                // Pausar/encerrar precisa interromper imediatamente inclusive a espera de 30 s.
                 throw cancel
             } catch (offline: NetworkUnavailableException) {
+                // The foreground service handles missing connectivity using the same retry policy.
                 throw offline
-            } catch (dns: UnknownHostException) {
-                pauseIfOffline(partial, dns)
-                failedAttempts += 1
-                if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) {
-                    throw IOException(
-                        "Não foi possível resolver os servidores de download da Hugging Face. Verifique sua conexão, DNS privado, VPN ou bloqueios de rede e tente novamente.",
-                        dns,
-                    )
-                }
-
-                candidateIndex = (candidateIndex + 1) % candidates.size
-                val nextAttempt = failedAttempts + 1
-                logger?.info(
-                    "MODEL_DOWNLOAD",
-                    "Falha de DNS em ${model.displayName}: ${dns.message}. Tentando rota alternativa $nextAttempt/$MAX_DOWNLOAD_ATTEMPTS.",
-                )
-                onState(
-                    ModelDownloadState(
-                        catalogId = model.id,
-                        phase = ModelDownloadPhase.DOWNLOADING,
-                        downloadedBytes = partial.length(),
-                        totalBytes = model.approximateSizeBytes,
-                        message = "Servidor de download indisponível. Tentando rota alternativa ($nextAttempt/$MAX_DOWNLOAD_ATTEMPTS)…",
-                    )
-                )
-                delay(RETRY_BASE_DELAY_MS * failedAttempts)
             } catch (io: IOException) {
                 pauseIfOffline(partial, io)
-                failedAttempts += 1
-                if (failedAttempts >= MAX_DOWNLOAD_ATTEMPTS) throw io
+                // Storage needs a real fix, not endless automatic network retries.
+                if (ModelDownloadRetryPolicy.isStorageFailure(io)) throw io
 
-                val nextAttempt = failedAttempts + 1
+                // Whenever new bytes arrived, treat the next attempt as the first failure again.
+                // Otherwise try immediately after the first failure, then every 30 seconds.
+                if (partial.length() > bytesBeforeAttempt) failedAttempts = 0
+                failedAttempts = ModelDownloadRetryPolicy.nextFailureCount(failedAttempts)
+                val waitMs = ModelDownloadRetryPolicy.delayBeforeRetryMs(failedAttempts)
+                candidateIndex = (candidateIndex + 1) % candidates.size
+
+                val causeText = if (io is UnknownHostException) {
+                    "Servidor não encontrado (DNS)"
+                } else {
+                    "Conexão com o servidor interrompida"
+                }
+                val retryText = if (waitMs == 0L) {
+                    "$causeText. Tentando novamente agora…"
+                } else {
+                    "$causeText. Nova tentativa automática em 30 segundos…"
+                }
                 logger?.info(
                     "MODEL_DOWNLOAD",
-                    "Falha temporária em ${model.displayName}: ${io.message}. Retomando tentativa $nextAttempt/$MAX_DOWNLOAD_ATTEMPTS.",
+                    "${model.displayName}: ${io.message}. $retryText; parcial=${partial.length()} bytes.",
                 )
                 onState(
                     ModelDownloadState(
@@ -247,10 +240,10 @@ class ModelDownloader(
                         phase = ModelDownloadPhase.DOWNLOADING,
                         downloadedBytes = partial.length(),
                         totalBytes = model.approximateSizeBytes,
-                        message = "Conexão interrompida. Retomando ($nextAttempt/$MAX_DOWNLOAD_ATTEMPTS)…",
+                        message = retryText,
                     )
                 )
-                delay(RETRY_BASE_DELAY_MS * failedAttempts)
+                if (waitMs > 0L) delay(waitMs)
             }
         }
     }
@@ -438,8 +431,6 @@ class ModelDownloader(
         private const val READ_TIMEOUT_MS = 60_000
         private const val PROGRESS_INTERVAL_MS = 300L
         private const val MAX_REDIRECTS = 8
-        private const val MAX_DOWNLOAD_ATTEMPTS = 4
-        private const val RETRY_BASE_DELAY_MS = 1_000L
         private const val HTTP_RANGE_NOT_SATISFIABLE = 416
         private const val STORAGE_HEADROOM = 256L * 1024 * 1024
         private const val PARTIAL_SIZE_TOLERANCE = 512L * 1024 * 1024
