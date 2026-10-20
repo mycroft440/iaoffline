@@ -18,8 +18,8 @@ App Android local-first para baixar ou importar modelos GGUF, validar por infer�
   - Bonsai 2 Ternário 27B (baseado no Qwen3.8 27B): 7,6 GB, para celulares de 12 GB; denso e lento, mas muito forte.
 - **Gemma 4 QAT** (E2B, E4B, 12B e 26B-A4B): versões oficiais do Google treinadas para 4 bits, com qualidade próxima da versão completa, no formato Q4_0, o mais rápido nos processadores ARM.
 - Outros modelos novos que rodam no celular: Ornith 1.5 9B (sobre o Qwen3.5 9B, perto do Qwen3.6 35B-A3B nos testes do autor), Granite 4.2 3B e 8B (IBM, com raciocínio), MiniCPM5 2B (OpenBMB), Mellum 2.1 12B-A2.5B (JetBrains, especialista em código; MoE com 2,5B ativos), LFM2.5 24B-A2B (Liquid AI, experimental; MoE com 2,45B ativos, quantizado com destilação) e SmallThinker 4B-A0.6B (PowerInfer, MoE feito para rodar no aparelho, 0,6B ativos).
-- Download em HTTPS com retomada de arquivo parcial quando o servidor permite `Range`.
-- Fila de downloads: é possível escolher várias IAs enquanto outra baixa; elas baixam uma de cada vez e a próxima começa assim que a anterior é instalada (ou falha). **Minhas I.As** mostra cada download com o progresso e as ações Pausar, Continuar, Tentar novamente e Remover; a fila sobrevive ao fechamento do app e retoma dos arquivos parciais.
+- Download em HTTPS com retomada do arquivo parcial quando o servidor permite `Range`. **Falha transitória de conexão/DNS/servidor: a primeira repetição é imediata; se falhar de novo, o download tenta automaticamente a cada 30 segundos**, mesmo com a tela fechada, enquanto o serviço em primeiro plano permanecer ativo. Não há mais o limite antigo de quatro tentativas; a fila e o progresso continuam preservados.
+- Fila de downloads: é possível escolher várias IAs enquanto outra baixa; elas baixam uma de cada vez e a próxima começa assim que a anterior é instalada (ou encontra uma falha definitiva que exige correção). **Minhas I.As** mostra cada download com o progresso e as ações Pausar, Continuar, Tentar novamente e Remover; a fila sobrevive ao fechamento do app e retoma dos arquivos parciais.
 - Modelos concluídos do catálogo são mantidos na pasta `IAs Offline` na raiz do armazenamento compartilhado do telefone para sobreviver à desinstalação.
 - Após reinstalar, os GGUFs persistentes podem ser restaurados sem novo download, com nova validação SHA-256 e inferência real.
 - SHA-256 fixado no app para cada GGUF do catálogo antes de qualquer carregamento nativo.
@@ -141,6 +141,8 @@ Requisitos do APK atual:
 Se uma versão debug antiga do aplicativo já estiver instalada, desinstale-a uma única vez antes de instalar a primeira Release assinada. Depois disso, as Releases futuras usam a mesma chave e podem atualizar a instalação normalmente.
 
 ## Segurança e armazenamento
+
+Falhas de rede são recuperadas automaticamente: a primeira nova tentativa começa imediatamente após o erro; as seguintes ocorrem a cada 30 segundos, com a mensagem de retomada na tela e na notificação. A retomada automática não exige outro anúncio, não apaga os bytes já salvos e pode ser interrompida pelas ações **Pausar** e **Encerrar**. Erros que não melhoram com nova conexão (SHA-256 inválido, falta de espaço, permissão negada, arquivo ausente/HTTP permanente) são exibidos como erro, sem retentativas infinitas. Se o Android limitar ou encerrar o serviço de dados em primeiro plano, o progresso salvo pode ser continuado depois.
 
 Arquivos incompletos continuam no armazenamento privado do aplicativo com extensão `.part`, podem ser retomados e nunca são registrados como modelo. Ao concluir um download do catálogo, o app confere o SHA-256 esperado e salva uma cópia persistente em `IAs Offline` antes de registrar a cópia privada usada pelo runtime. O Android solicita acesso aos arquivos compartilhados antes de iniciar o download, caso ainda não tenha sido concedido.
 
