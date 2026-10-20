@@ -67,7 +67,10 @@ class BackgroundModelVerificationService : Service() {
                         // Never interrupt an active answer or another download's own automatic
                         // verification. Both share the same native inference runtime.
                         while (isActive && (container.modelManager.downloadState.value.isBusy ||
-                            container.chatGenerationManager.activeGenerations.value > 0)) {
+                            container.modelManager.downloadQueue.value.active != null ||
+                            container.modelManager.transferRunning ||
+                            container.chatGenerationManager.activeGenerations.value > 0 ||
+                            container.externalApiViewModel.busy.value)) {
                             delay(5_000)
                         }
                         if (!isActive) break
