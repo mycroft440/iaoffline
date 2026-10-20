@@ -75,7 +75,9 @@ jobs:
           unzip -tq "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -v 4 "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | tee "$RUNNER_TEMP/apk-package.txt"
-          grep -q "sdkVersion:'33'" "$RUNNER_TEMP/apk-package.txt"
+          # aapt2 prints minSdkVersion, not sdkVersion. An incorrect grep previously
+          # rejected a valid, correctly signed APK and blocked the release upload.
+          grep -q "^minSdkVersion:'33'$" "$RUNNER_TEMP/apk-package.txt"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --min-sdk-version 33 --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apk-certs.txt"
           grep -q "certificate SHA-256 digest: $DEBUG_CERT_SHA256" "$RUNNER_TEMP/apk-certs.txt"
           mkdir -p dist-debug
@@ -115,7 +117,7 @@ jobs:
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           cp "$APK" dist-debug/IA-Local-teste.apk
-          sha256sum dist-debug/IA-Local-teste.apk > dist-debug/IA-Local-teste.apk.sha256
+          (cd dist-debug && sha256sum IA-Local-teste.apk > IA-Local-teste.apk.sha256)
           BYTES=$(stat -c %s "$APK")
           SHA=$(sha256sum "$APK" | cut -d' ' -f1)
           cat > "$RUNNER_TEMP/preview-notes.md" <<EOF
