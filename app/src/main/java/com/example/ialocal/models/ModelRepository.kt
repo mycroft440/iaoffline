@@ -37,6 +37,15 @@ class ModelRepository(
     val agents: Flow<List<AgentEntity>> = dao.observeAgents()
 
     private val agentUsagePreferences = context.getSharedPreferences(AGENT_USAGE_PREFS, Context.MODE_PRIVATE)
+    private val lastChatModelPrefs = context.getSharedPreferences("last_selected_chat_model", Context.MODE_PRIVATE)
+
+    /** Set only when a user explicitly chooses a model, not during automatic fallback. */
+    fun rememberChatModel(modelId: String) {
+        lastChatModelPrefs.edit().putString("model_id", modelId).apply()
+    }
+
+    fun lastChatModelId(): String? = lastChatModelPrefs.getString("model_id", null)
+
     private val profilePreferences = context.getSharedPreferences(PROFILE_PREFS, Context.MODE_PRIVATE)
     private val _profiles = MutableStateFlow(
         AiProfile.BUILT_IN + CustomProfiles.decode(profilePreferences.getString(CUSTOM_PROFILES_KEY, null))
