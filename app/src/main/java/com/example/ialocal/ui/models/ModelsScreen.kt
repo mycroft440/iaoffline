@@ -77,7 +77,7 @@ import com.example.ialocal.ui.branding.catalogProvider
 fun ModelsScreen(
     viewModel: ModelsViewModel,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
-    onDownloadStarted: () -> Unit,
+    onRequestRewardedDownload: (String, () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -184,7 +184,16 @@ fun ModelsScreen(
                         anotherOperationRunning = download.isBusy && download.catalogId != catalogModel.id || importing || operation != null,
                         onDownload = {
                             onEnsureStorageAccess {
-                                if (viewModel.downloadCatalogModel(catalogModel.id)) onDownloadStarted()
+                                // Continuing a partial download never requires a second ad.
+                                if (download.catalogId == catalogModel.id &&
+                                    download.phase in setOf(ModelDownloadPhase.CANCELLED, ModelDownloadPhase.ERROR)
+                                ) {
+                                    viewModel.resumeDownload(catalogModel.id)
+                                } else {
+                                    onRequestRewardedDownload(catalogModel.displayName) {
+                                        viewModel.downloadCatalogModel(catalogModel.id)
+                                    }
+                                }
                             }
                         },
                         onCancel = viewModel::cancelDownload,
@@ -316,7 +325,7 @@ private fun CatalogModelCard(
                             installed -> "  Instalado"
                             state?.phase == ModelDownloadPhase.CANCELLED -> "  Continuar download"
                             state?.phase == ModelDownloadPhase.ERROR -> "  Tentar novamente"
-                            else -> "  Baixar e instalar"
+                            else -> "  Assistir anúncio e baixar"
                         }
                     )
                 }
