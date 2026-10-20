@@ -121,6 +121,21 @@ class ModelCatalogTest {
     }
 
     @Test
+    fun additionalSmallMoeModelsHaveUniqueDownloadableEntries() {
+        val ids = setOf("ling3.0-tiny-q4-k-m", "trinity-nano-preview-q4-k-m", "phi-mini-moe-7.6b-q4-k-m", "phi-tiny-moe-3.8b-q8-0", "olmoe-1b-7b-0924-instruct-q4-k-m", "granite3.1-3b-a800m-q4-k-m", "granite3.1-1b-a400m-q4-k-m")
+        val added = ModelCatalog.entries.filter { it.id in ids }
+        assertEquals(7, added.size)
+        assertEquals(ids, added.map { it.id }.toSet())
+        added.forEach {
+            assertTrue(it.isMoe)
+            assertTrue(it.totalParametersBillions <= 14.0)
+            assertFalse(it.isExperimental)
+            assertTrue(it.sha256.matches(Regex("^[0-9a-f]{64}$")))
+        }
+        assertEquals(ModelProvider.ARCEE, ModelCatalog.requireById("trinity-nano-preview-q4-k-m").provider)
+    }
+
+    @Test
     fun onlyLargeMoeModelsAreExperimental() {
         val experimental = ModelCatalog.entries.filter { it.isExperimental }.map { it.id }.toSet()
         assertTrue("gemma4-26b-a4b-it-q4-0" in experimental)
