@@ -1,10 +1,12 @@
 package com.example.ialocal
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
@@ -33,6 +35,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -82,6 +86,9 @@ class MainActivity : ComponentActivity() {
     private var pendingStorageAction: (() -> Unit)? = null
     private var lastExitReport by mutableStateOf<LastExitReport?>(null)
     private var pendingResponseNavigation by mutableStateOf<ResponseNotificationRoute.Destination?>(null)
+    private val notificationsPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* Android controls whether foreground-service notifications appear in the shade. */ }
 
     // Coming back from a screen the app opened itself (a file picker, Android settings, an ad's
     // page) is not a return to the app, so it never shows the app open ad.
@@ -179,6 +186,18 @@ class MainActivity : ComponentActivity() {
         }
 
         showStorageImportNotices()
+        // Ask only once, on Android 13+, so ongoing offline/API responses are visible in the
+        // notification shade instead of only the Android foreground-service task manager.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            val prefs = getSharedPreferences("response_notification_permission", MODE_PRIVATE)
+            if (!prefs.getBoolean("asked", false)) {
+                prefs.edit().putBoolean("asked", true).apply()
+                notificationsPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
         // Downloads interrupted by the app being killed pick up from their partial files.
         container.modelManager.resumeQueueAfterRestart()
         runInitialStorageScanOnce()
