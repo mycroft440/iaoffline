@@ -953,7 +953,7 @@ private fun ModelSpecsGrid(
         SpecCell(
             label = if (model.isMoe) "RAM (EST.)" else if (model.isExperimental) "RAM IDEAL" else "REQUISITOS MÍN.",
             value = if (model.isMoe) {
-                "~${groupedFormatBytes(estimatedFullMoeRamBytes(model))}"
+                "~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))}"
             } else {
                 "${formatRamRequirement(model.recommendedRamBytes)} RAM"
             },
@@ -1057,7 +1057,7 @@ private fun ModelDetailsDialog(
                 Text("Tamanho: ${groupedFormatBytes(model.approximateSizeBytes)}")
                 if (model.isMoe) {
                     Text(
-                        "RAM estimada com os pesos residentes: ~${groupedFormatBytes(estimatedFullMoeRamBytes(model))} " +
+                        "RAM estimada com os pesos residentes: ~${formatMoeRamEstimate(estimatedFullMoeRamBytes(model))} " +
                             "(arquivo GGUF + 256 MiB de contexto mínimo + 512 MiB de buffers). " +
                             "É uma referência, não consumo medido nem pico garantido."
                     )
@@ -1156,6 +1156,9 @@ private fun groupedFormatParameters(value: Double): String =
     } else {
         "${"%.2f".format(value).trimEnd('0').trimEnd('.')}B"
     }
+
+/** Decimal GB for MoE RAM estimates, consistent with phone RAM capacities. */
+private fun formatMoeRamEstimate(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)
 
 /** Catalog requirements are written in the gigabytes phones are sold with: 12_000_000_000 is "12 GB". */
 private fun formatRamRequirement(bytes: Long): String = formatAdvertisedGb(bytes / 1_000_000_000.0)
