@@ -305,7 +305,7 @@ private fun CanvasResultSupportMessage(
                         "essa linguagem. A prévia de resultado funciona para HTML, SVG e JavaScript."
                 else ->
                     "Este Canvas não tem execução disponível para essa linguagem. " +
-                        "A prévia de resultado funciona para HTML, SVG e JavaScript.",
+                        "A prévia de resultado funciona para HTML, SVG e JavaScript."
             },
             color = CanvasMuted,
             fontSize = 13.sp,
