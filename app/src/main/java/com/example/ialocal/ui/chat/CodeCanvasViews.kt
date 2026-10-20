@@ -179,7 +179,7 @@ internal fun CodeCanvasDialog(
     val clipboard = LocalClipboardManager.current
     val previewable = canvas.preview != null
     val languagePack = remember(canvas.language, canvas.preview) { canvasLanguagePack(canvas) }
-    val missingLanguagePack = languagePack?.takeUnless { it.id in installedLanguageIds }
+    val missingLanguagePack = missingCanvasLanguagePack(canvas, installedLanguageIds)
     var tab by remember { mutableStateOf(if (previewable && canvas.complete) CanvasTab.RESULT else CanvasTab.CODE) }
     var reloads by remember { mutableIntStateOf(0) }
 
