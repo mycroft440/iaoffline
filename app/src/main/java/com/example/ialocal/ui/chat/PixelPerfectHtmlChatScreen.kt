@@ -167,6 +167,8 @@ fun PixelPerfectHtmlChatScreen(
     onOpenConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
+    onOpenCompilers: (String) -> Unit,
+    installedLanguageIds: Set<String>,
     onOpenSettings: () -> Unit,
     adsEnabled: Boolean,
 ) {
@@ -340,6 +342,8 @@ fun PixelPerfectHtmlChatScreen(
                 onRerun = viewModel::rerunAssistant,
                 onRemoveAttachment = viewModel::removePendingAttachment,
                 onRemoveQueued = viewModel::removeQueuedMessage,
+                onOpenCompilers = onOpenCompilers,
+                installedLanguageIds = installedLanguageIds,
             )
         }
     }
@@ -667,6 +671,8 @@ private fun ExactChatBody(
     onRerun: (String) -> Unit,
     onRemoveAttachment: (String) -> Unit,
     onRemoveQueued: (Int) -> Unit,
+    onOpenCompilers: (String) -> Unit,
+    installedLanguageIds: Set<String>,
 ) {
     val sendingAssistantId = if (generating) {
         messages.lastOrNull {
@@ -687,7 +693,17 @@ private fun ExactChatBody(
                 ?.let { CodeCanvases.at(AssistantContent.parse(it.message.content).answer, ref.codeIndex) }
         }
     }
-    canvas?.let { CodeCanvasDialog(it, onDismiss = { openCanvas = null }) }
+    canvas?.let { currentCanvas ->
+        CodeCanvasDialog(
+            canvas = currentCanvas,
+            installedLanguageIds = installedLanguageIds,
+            onOpenCompilers = { languageId ->
+                openCanvas = null
+                onOpenCompilers(languageId)
+            },
+            onDismiss = { openCanvas = null },
+        )
+    }
     val bannerMessageIds = remember(messages) {
         ChatAdSchedule.assistantIdsWithBanner(
             messages,
