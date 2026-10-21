@@ -35,6 +35,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 
+/**
+ * A streaming answer already supports cooperative cancellation. Native startup, verification
+ * and prompt reading can be blocking, so they require the isolated AI process to be interrupted.
+ */
+internal fun shouldInterruptNativeWork(isActive: Boolean, stage: GenerationStage.Kind?): Boolean =
+    isActive && stage != GenerationStage.Kind.WRITING && stage != GenerationStage.Kind.REASONING
+
 data class QueuedChatMessage(
     val content: String,
     val attachments: List<PendingAttachment> = emptyList(),
@@ -182,13 +189,8 @@ class ChatGenerationManager(
     }
 
     /** Before the first token, native model loading and prompt processing may ignore cancellation. */
-    private fun Session.needsNativeInterruption(): Boolean {
-        if (job?.isActive != true) return false
-        return when (_progress.value?.current?.stage?.kind) {
-            GenerationStage.Kind.WRITING, GenerationStage.Kind.REASONING -> false
-            else -> true
-        }
-    }
+    private fun Session.needsNativeInterruption(): Boolean =
+        shouldInterruptNativeWork(job?.isActive == true, _progress.value?.current?.stage?.kind)
 
     /** Only an explicit stop cancels this conversation's active answer and its pending turns. */
     fun stop(conversationId: String) {
