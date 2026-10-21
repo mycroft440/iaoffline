@@ -181,22 +181,39 @@ class ChatGenerationManager(
         }
     }
 
+    /** Before the first token, native model loading and prompt processing may ignore cancellation. */
+    private fun Session.needsNativeInterruption(): Boolean {
+        if (job?.isActive != true) return false
+        return when (_progress.value?.current?.stage?.kind) {
+            GenerationStage.Kind.WRITING, GenerationStage.Kind.REASONING -> false
+            else -> true
+        }
+    }
+
     /** Only an explicit stop cancels this conversation's active answer and its pending turns. */
     fun stop(conversationId: String) {
         sessions[conversationId]?.let { session ->
+            val interruptNative = _activeGenerations.value == 1 && session.needsNativeInterruption()
             session._queued.value = emptyList()
             session.queuedTarget = null
             session.job?.cancel()
+            // Preparation is independent of the chat's response job. Cancel it as well.
+            if (_activeGenerations.value <= 1) warmUp?.cancel()
+            // Abort only when no other chat is answering: the AI runs in a shared :ai process.
+            if (interruptNative) modelManager.interruptNativeWork()
         }
     }
 
     /** The notification's Parar button cancels every answer and pending turn. */
     fun stopAll() {
+        val interruptNative = sessions.values.any { it.needsNativeInterruption() }
         sessions.values.forEach { session ->
             session._queued.value = emptyList()
             session.queuedTarget = null
             session.job?.cancel()
         }
+        warmUp?.cancel()
+        if (interruptNative) modelManager.interruptNativeWork()
     }
 
     fun removeQueued(conversationId: String, index: Int): QueuedChatMessage? {
