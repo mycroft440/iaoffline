@@ -810,37 +810,65 @@ private fun ExactTopBar(
         Row(
             modifier = Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Surface(
-                    modifier = Modifier.size(32.dp).clickable(onClick = onMenu),
-                    shape = CircleShape,
-                    color = PCard,
-                    border = BorderStroke(1.dp, PBorder),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        StaggeredMenuIcon(Modifier.size(15.dp), color = PText2)
-                    }
+            Surface(
+                modifier = Modifier.size(32.dp).clickable(onClick = onMenu),
+                shape = CircleShape,
+                color = PCard,
+                border = BorderStroke(1.dp, PBorder),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    StaggeredMenuIcon(Modifier.size(15.dp), color = PText2)
                 }
-                ExactSelector(
-                    modifier = Modifier.widthIn(max = 112.dp),
-                    icon = null,
-                    textIcon = "</>",
-                    label = agent,
-                    maxLabelWidth = 90.dp,
-                    onClick = onProfile,
-                )
             }
 
             ExactSelector(
-                modifier = Modifier.widthIn(max = 100.dp),
+                modifier = Modifier.weight(1f),
                 icon = Icons.Default.Memory,
                 textIcon = null,
                 label = model,
-                maxLabelWidth = 85.dp,
+                maxLabelWidth = 100.dp,
                 onClick = onModel,
             )
+
+            Surface(
+                modifier = Modifier.weight(1f).clickable(onClick = onProfile),
+                shape = RoundedCornerShape(50),
+                color = PCard,
+                border = BorderStroke(1.dp, PBorder),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Perfil",
+                            maxLines = 1,
+                            fontSize = 8.sp,
+                            lineHeight = 9.sp,
+                            color = PMuted,
+                        )
+                        Text(
+                            agent,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 12.sp,
+                            lineHeight = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = PText2,
+                        )
+                    }
+                    Spacer(Modifier.width(2.dp))
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        null,
+                        tint = Color(0xFF94A3B8),
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+            }
         }
     }
 }
