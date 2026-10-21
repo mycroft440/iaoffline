@@ -287,11 +287,11 @@ class RemoteModelRuntime(
      * it was working on. Reported both by the death notice and by a call that hit the dead process.
      */
     private fun onAiProcessDied(deadBinder: IBinder) = synchronized(deathLock) {
+        val userStopped = intentionalDeaths.remove(deadBinder)
         val current = service?.asBinder()
         if (current != null && current !== deadBinder && current.isBinderAlive) return@synchronized
         // Bound again on the next request, so a process stopped for lack of memory is not
         // restarted, empty, while memory is still short.
-        val userStopped = intentionalDeaths.remove(deadBinder)
         disconnect()
         val interrupted = runs.values.toList()
         runs.clear()
