@@ -198,24 +198,26 @@ class ChatGenerationManager(
             val interruptNative = _activeGenerations.value == 1 && session.needsNativeInterruption()
             session._queued.value = emptyList()
             session.queuedTarget = null
+            // Abort before cancelling coroutines: callbackFlow removes the running request
+            // immediately on cancellation, but JNI may still be loading it in the AI process.
+            if (interruptNative) modelManager.interruptNativeWork()
             session.job?.cancel()
             // Preparation is independent of the chat's response job. Cancel it as well.
             if (_activeGenerations.value <= 1) warmUp?.cancel()
-            // Abort only when no other chat is answering: the AI runs in a shared :ai process.
-            if (interruptNative) modelManager.interruptNativeWork()
         }
     }
 
     /** The notification's Parar button cancels every answer and pending turn. */
     fun stopAll() {
         val interruptNative = sessions.values.any { it.needsNativeInterruption() }
+        // Kill blocking native work while its request is still registered.
+        if (interruptNative) modelManager.interruptNativeWork()
         sessions.values.forEach { session ->
             session._queued.value = emptyList()
             session.queuedTarget = null
             session.job?.cancel()
         }
         warmUp?.cancel()
-        if (interruptNative) modelManager.interruptNativeWork()
     }
 
     fun removeQueued(conversationId: String, index: Int): QueuedChatMessage? {
