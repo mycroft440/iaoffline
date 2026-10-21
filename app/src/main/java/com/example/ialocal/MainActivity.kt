@@ -18,10 +18,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,11 +37,14 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.graphics.luminance
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.content.pm.PackageManager
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ialocal.ads.AdsManager
@@ -134,6 +139,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val statusBarController = WindowInsetsControllerCompat(window, window.decorView)
         setContent {
             val themeMode by container.themeRepository.themeMode.collectAsStateWithLifecycle(
                 initialValue = ThemeMode.SYSTEM,
@@ -141,6 +147,7 @@ class MainActivity : ComponentActivity() {
             LocalAiTheme(themeMode = themeMode) {
                 LocalAiApp(
                     container = container,
+                    statusBarController = statusBarController,
                     adsManager = adsManager,
                     onScanStorage = { requestStorageScan(AutomaticModelScanMode.FULL) },
                     onEnsureStorageAccess = ::requestStorageAccess,
@@ -335,6 +342,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalAiApp(
     container: AppContainer,
+    statusBarController: WindowInsetsControllerCompat,
     adsManager: AdsManager,
     onScanStorage: () -> Unit,
     onEnsureStorageAccess: (() -> Unit) -> Unit,
@@ -346,6 +354,20 @@ private fun LocalAiApp(
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    // These screens use dark backgrounds even when the app's selected theme is light.
+    // Android's "light status bar" flag means *dark icons*, which disappear on dark UI.
+    val alwaysDarkStatusBar = when (backStackEntry?.destination?.route) {
+        null, "ai-home", "my-ais", "offline-models",
+        "chat/{conversationId}?modelId={modelId}" -> true
+        else -> false
+    }
+    val darkStatusBarIcons = !alwaysDarkStatusBar &&
+        MaterialTheme.colorScheme.background.luminance() > 0.5f
+    SideEffect {
+        statusBarController.isAppearanceLightStatusBars = darkStatusBarIcons
+    }
+
     LaunchedEffect(responseNotificationDestination) {
         val destination = responseNotificationDestination ?: return@LaunchedEffect
         val target = when (destination.kind) {
