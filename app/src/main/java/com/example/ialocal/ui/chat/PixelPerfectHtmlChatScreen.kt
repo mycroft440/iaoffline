@@ -37,7 +37,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
@@ -167,7 +166,6 @@ fun PixelPerfectHtmlChatScreen(
     viewModel: ChatViewModel,
     onOpenConversation: (String) -> Unit,
     onOpenHistory: () -> Unit,
-    onBack: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenCompilers: (String) -> Unit,
     installedLanguageIds: Set<String>,
@@ -318,7 +316,6 @@ fun PixelPerfectHtmlChatScreen(
                 profileName = selectedProfile.displayName,
                 adsEnabled = adsEnabled,
                 selectedModel = selectedModel,
-                onBack = onBack,
                 messages = messages,
                 listState = listState,
                 draft = draft,
@@ -652,7 +649,6 @@ private fun ExactChatBody(
     profileName: String,
     adsEnabled: Boolean,
     selectedModel: AiModelEntity?,
-    onBack: () -> Unit,
     messages: List<MessageWithAttachments>,
     listState: androidx.compose.foundation.lazy.LazyListState,
     draft: String,
@@ -721,7 +717,6 @@ private fun ExactChatBody(
             agent = profileName,
             model = selectedModelLabel ?: "Modelo",
             onMenu = onMenu,
-            onBack = onBack,
             onProfile = onProfile,
             onModel = onModel,
         )
@@ -808,7 +803,6 @@ private fun ExactTopBar(
     agent: String,
     model: String,
     onMenu: () -> Unit,
-    onBack: () -> Unit,
     onProfile: () -> Unit,
     onModel: () -> Unit,
 ) {
@@ -819,14 +813,6 @@ private fun ExactTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IconButton(onClick = onBack, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Sair da conversa e voltar à página anterior",
-                        tint = PText,
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
                 Surface(
                     modifier = Modifier.size(32.dp).clickable(onClick = onMenu),
                     shape = CircleShape,
