@@ -545,11 +545,6 @@ private fun LocalAiApp(
                         navController.navigate("ai-home") { launchSingleTop = true }
                     }
                 },
-                onBack = {
-                    if (!navController.popBackStack()) {
-                        navController.navigate("ai-home") { launchSingleTop = true }
-                    }
-                },
                 onOpenModels = {
                     if (!navController.popBackStack("ai-home", inclusive = false)) {
                         navController.navigate("ai-home") {
