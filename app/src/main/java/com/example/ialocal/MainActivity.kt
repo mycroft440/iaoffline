@@ -26,7 +26,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -38,6 +40,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.content.pm.PackageManager
@@ -354,6 +357,13 @@ private fun LocalAiApp(
     onExitApp: () -> Unit,
 ) {
     val navController = rememberNavController()
+    val context = LocalContext.current
+    val lastChatPreferences = remember(context) {
+        context.getSharedPreferences("last_chat_navigation", android.content.Context.MODE_PRIVATE)
+    }
+    var lastOpenedConversationId by rememberSaveable {
+        mutableStateOf(lastChatPreferences.getString("last_opened_conversation_id", null))
+    }
     val backStackEntry by navController.currentBackStackEntryAsState()
     // These screens use dark backgrounds even when the app's selected theme is light.
     // Android's "light status bar" flag means *dark icons*, which disappear on dark UI.
@@ -406,20 +416,27 @@ private fun LocalAiApp(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
                 onStartChat = {
-                    scope.launch {
-                        val installed = container.modelRepository.getModels()
-                        val recentModel = container.chatRepository.listRecentConversations(15)
-                            .firstNotNullOfOrNull { conversation ->
-                                container.chatRepository.getConversation(conversation.id)?.agentId
-                                    ?.let { container.modelRepository.getAgent(it)?.modelId }
-                            }
-                        val preferredId = preferredChatStartupModel(
-                            installed, container.modelRepository.lastChatModelId(), recentModel,
-                        )
-                        val conversationId = container.chatRepository.createConversation()
-                        val destination = if (preferredId == null) "chat/$conversationId"
-                            else "chat/$conversationId?modelId=$preferredId"
-                        navController.navigate(destination)
+                    val previousConversationId = lastOpenedConversationId
+                    if (previousConversationId != null) {
+                        navController.navigate("chat/${Uri.encode(previousConversationId)}") {
+                            launchSingleTop = true
+                        }
+                    } else {
+                        scope.launch {
+                            val installed = container.modelRepository.getModels()
+                            val recentModel = container.chatRepository.listRecentConversations(15)
+                                .firstNotNullOfOrNull { conversation ->
+                                    container.chatRepository.getConversation(conversation.id)?.agentId
+                                        ?.let { container.modelRepository.getAgent(it)?.modelId }
+                                }
+                            val preferredId = preferredChatStartupModel(
+                                installed, container.modelRepository.lastChatModelId(), recentModel,
+                            )
+                            val conversationId = container.chatRepository.createConversation()
+                            val destination = if (preferredId == null) "chat/$conversationId"
+                                else "chat/$conversationId?modelId=$preferredId"
+                            navController.navigate(destination)
+                        }
                     }
                 },
                 onStartChatWith = { modelId ->
@@ -534,6 +551,10 @@ private fun LocalAiApp(
             ),
         ) { entry ->
             val id = requireNotNull(entry.arguments?.getString("conversationId"))
+            LaunchedEffect(id) {
+                lastOpenedConversationId = id
+                lastChatPreferences.edit().putString("last_opened_conversation_id", id).apply()
+            }
             val initialModelId = entry.arguments?.getString("modelId")
             val vm: ChatViewModel = viewModel(
                 key = "chat-$id",
