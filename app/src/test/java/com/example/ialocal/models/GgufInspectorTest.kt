@@ -103,6 +103,24 @@ class GgufInspectorTest {
     }
 
     @Test
+    fun sizesExpertTensorsEvenWhenTensorOffsetsAreNotOrdered() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(4)
+            u64(0)
+            tensor("blk.0.ffn_down_exps.weight", offset = 4096)
+            tensor("blk.0.attn_q.weight", offset = 0)
+            tensor("blk.0.ffn_up_exps.weight", offset = 1024)
+            tensor("blk.0.ffn_gate_inp.weight", offset = 8192)
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 8448L)
+        // 4096 bytes from 4096 to 8192, plus 3072 bytes from 1024 to 4096.
+        assertEquals(7168L, metadata.expertBytes)
+    }
+
+    @Test
     fun denseModelsHaveNoExperts() {
         val bytes = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
