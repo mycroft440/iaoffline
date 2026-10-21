@@ -129,15 +129,7 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
-          script: |
-            set -eu
-            echo "Android version: $(adb shell getprop ro.build.version.release)"
-            echo "Installing the exact signed APK that will be uploaded to GitHub..."
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb shell pm path com.example.ialocal | grep -q '^package:'
-            adb shell dumpsys package com.example.ialocal > "$RUNNER_TEMP/emulator-installed-package.txt"
-            grep -m 1 'versionCode=' "$RUNNER_TEMP/emulator-installed-package.txt"
-            echo "APK installed successfully in a clean Android environment."
+          script: bash scripts/verify_apk_install.sh app/build/outputs/apk/debug/app-debug.apk 4096
 
       # Newer ARM phones can use 16 KB memory pages. A normal x86_64 emulator uses
       # 4 KB pages and cannot detect all OEM installation failures. The experimental
@@ -152,14 +144,7 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
-          script: |
-            set -eu
-            PAGE_SIZE=$(adb shell getconf PAGESIZE | tr -d '\r')
-            echo "Emulator page size: $PAGE_SIZE"
-            test "$PAGE_SIZE" = "16384"
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb shell pm path com.example.ialocal | grep -q '^package:'
-            echo "Verified installation with 16 KB system pages."
+          script: bash scripts/verify_apk_install.sh app/build/outputs/apk/debug/app-debug.apk 16384
 
       # The APK itself, not a ZIP (archive: false): the artifact is named after the file and
       # downloads as IA-Local-debug-0.1.N.apk, ready to install on a phone. A ZIP had to be
