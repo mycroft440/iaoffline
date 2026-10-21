@@ -29,6 +29,8 @@ class GgufInspector {
          * the router picks them; the rest is read for every token.
          */
         val expertBytes: Long = 0L,
+        /** Largest layer's expert weights: space needed while a prompt batch uses many experts. */
+        val largestExpertLayerBytes: Long = 0L,
     )
 
     fun inspect(file: File): Metadata =
@@ -98,10 +100,15 @@ class GgufInspector {
             hasChatTemplate = hasChatTemplate,
             onDemandBytes = tensorBytes.onDemand,
             expertBytes = tensorBytes.experts,
+            largestExpertLayerBytes = tensorBytes.largestExpertLayer,
         )
     }
 
-    private data class TensorBytes(val onDemand: Long = 0L, val experts: Long = 0L)
+    private data class TensorBytes(
+        val onDemand: Long = 0L,
+        val experts: Long = 0L,
+        val largestExpertLayer: Long = 0L,
+    )
 
     /**
      * Reads the tensor table that follows the metadata. A tensor's size is the distance to the next
@@ -112,6 +119,7 @@ class GgufInspector {
         val offsets = LongArray(tensorCount.toInt())
         val onDemand = ArrayList<Int>()
         val experts = ArrayList<Int>()
+        val expertLayers = HashMap<Int, Int>()
         for (index in 0 until tensorCount.toInt()) {
             val name = readString(input, 64 * 1024)
             val dimensions = readU32(input)
@@ -120,7 +128,11 @@ class GgufInspector {
             readU32(input) // quantization type
             offsets[index] = readU64(input)
             if (name in ON_DEMAND_TENSORS) onDemand += index
-            if (EXPERT_TENSOR.containsMatchIn(name)) experts += index
+            if (EXPERT_TENSOR.containsMatchIn(name)) {
+                experts += index
+                // Unknown layer names share a conservative bucket instead of disappearing.
+                expertLayers[index] = EXPERT_LAYER.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+            }
         }
         if (onDemand.isEmpty() && experts.isEmpty()) return TensorBytes()
         val dataStart = (input.count + alignment - 1) / alignment * alignment
@@ -139,7 +151,16 @@ class GgufInspector {
             val next = sorted.getOrNull(lo) ?: dataEnd ?: start
             return (next - start).coerceAtLeast(0L)
         }
-        return TensorBytes(onDemand = onDemand.sumOf { sizeOf(it) }, experts = experts.sumOf { sizeOf(it) })
+        val bytesByLayer = HashMap<Int, Long>()
+        for (index in experts) {
+            val layer = expertLayers.getValue(index)
+            bytesByLayer[layer] = bytesByLayer.getOrDefault(layer, 0L) + sizeOf(index)
+        }
+        return TensorBytes(
+            onDemand = onDemand.sumOf { sizeOf(it) },
+            experts = bytesByLayer.values.sum(),
+            largestExpertLayer = bytesByLayer.values.maxOrNull() ?: 0L,
+        )
     }
 
     private fun readValue(input: InputStream, type: Int, materialize: Boolean): Any? = when (type) {
@@ -247,6 +268,7 @@ class GgufInspector {
         val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
         /** Expert weights, named as llama.cpp's --cpu-moe matches them ("blk.3.ffn_down_exps.weight"). */
         val EXPERT_TENSOR = Regex("\\.ffn_(up|down|gate|gate_up)_(ch|)exps")
+        val EXPERT_LAYER = Regex("^blk\\.(\\d+)\\.")
     }
 
     private fun skipFully(input: InputStream, count: Long) {

@@ -101,18 +101,25 @@ class RuntimeLimitsTest {
         // The other 2.4 GB fit twice (while repacked), so they are kept in RAM.
         assertFalse(plan.lowMemory)
         assertEquals(RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES, plan.kvBudgetBytes)
-        assertEquals(2_400_000_000L + RuntimeLimits.MIN_KV_BUDGET_BYTES + RuntimeLimits.WORKING_MEMORY_BYTES, plan.minimumBytes)
+        assertEquals(RuntimeLimits.DEFAULT_EXPERT_WORKING_SET_BYTES, plan.expertWorkingSetBytes)
+        assertEquals(
+            2_400_000_000L + plan.expertWorkingSetBytes + RuntimeLimits.MIN_KV_BUDGET_BYTES + RuntimeLimits.WORKING_MEMORY_BYTES,
+            plan.minimumBytes,
+        )
     }
 
     @Test
     fun aStreamingMoeCapsKvToTheMemoryLeftAfterSharedWeights() {
-        // The AI has 4.7 GiB; shared weights and working buffers leave only 0.3 GiB.
-        val fixedBytes = 39 * gb / 10
+        // The AI has 4.7 GiB; shared weights, expert pages and buffers leave only 0.3 GiB.
+        val fixedBytes = 34 * gb / 10
         val plan = RuntimeLimits.planMemory(10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0)
 
         assertTrue(plan.streamsExperts)
         assertTrue(plan.fits)
-        assertEquals(plan.budgetBytes - fixedBytes - RuntimeLimits.WORKING_MEMORY_BYTES, plan.kvBudgetBytes)
+        assertEquals(
+            plan.budgetBytes - fixedBytes - plan.expertWorkingSetBytes - RuntimeLimits.WORKING_MEMORY_BYTES,
+            plan.kvBudgetBytes,
+        )
         assertTrue(plan.kvBudgetBytes < RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES)
         assertTrue(plan.kvBudgetBytes >= RuntimeLimits.MIN_KV_BUDGET_BYTES)
     }
@@ -121,7 +128,10 @@ class RuntimeLimitsTest {
     fun aStreamingMoeAvoidsRepackingWhenActualKvWouldExceedMemory() {
         // Two copies of the shared weights fit with 256 MiB, but not with 384 MiB.
         val fixedBytes = 196 * gb / 100
-        val plan = RuntimeLimits.planMemory(10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0)
+        val plan = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0,
+            largestExpertLayerBytes = gb / 64,
+        )
 
         assertTrue(plan.streamsExperts)
         assertTrue(plan.fits)
@@ -136,6 +146,37 @@ class RuntimeLimitsTest {
         assertTrue(plan.streamsExperts)
         assertTrue(plan.fits)
         assertTrue(plan.lowMemory)
+    }
+
+    @Test
+    fun streamingCannotGiveExpertPageMemoryToTheKvCache() {
+        // The former plan accepted 3.9 GiB of fixed weights in 4.7 GiB, leaving no
+        // room for this model's 512 MiB expert layer after KV and compute buffers.
+        val plan = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 61 * gb / 10, safeLevel = 0,
+            largestExpertLayerBytes = gb / 2,
+        )
+        assertTrue(plan.streamsExperts)
+        assertFalse(plan.fits)
+        assertTrue(plan.minimumBytes > plan.budgetBytes)
+    }
+
+    @Test
+    fun measuredExpertLayersAllowSmallLayersWithoutUnderestimatingLargeOnes() {
+        val small = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 62 * gb / 10, safeLevel = 0,
+            largestExpertLayerBytes = gb / 8,
+        )
+        assertTrue(small.fits)
+        assertEquals(gb / 8, small.expertWorkingSetBytes)
+        assertTrue(38 * gb / 10 + small.expertWorkingSetBytes + small.kvBudgetBytes + RuntimeLimits.WORKING_MEMORY_BYTES <= small.budgetBytes)
+
+        val large = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 7 * gb, safeLevel = 0,
+            largestExpertLayerBytes = gb,
+        )
+        assertFalse(large.fits)
+        assertEquals(gb, large.expertWorkingSetBytes)
     }
 
     @Test

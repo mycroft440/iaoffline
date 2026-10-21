@@ -99,6 +99,7 @@ class GgufInspectorTest {
         val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 9472L)
 
         assertEquals(7168L, metadata.expertBytes)
+        assertEquals(7168L, metadata.largestExpertLayerBytes)
         assertEquals(0L, metadata.onDemandBytes)
     }
 
@@ -131,6 +132,28 @@ class GgufInspectorTest {
             tensor("blk.0.ffn_up.weight", offset = 1024)
         }.toByteArray()
         assertEquals(0L, inspector.inspect(ByteArrayInputStream(bytes), totalBytes = 4096L).expertBytes)
+    }
+
+    @Test
+    fun reservesTheLargestExpertLayerIncludingCombinedGateUpWeights() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(6)
+            u64(0)
+            // Tensor table order need not match either layer order or data offsets.
+            tensor("blk.1.ffn_down_exps.weight", offset = 8192)
+            tensor("blk.0.ffn_up_exps.weight", offset = 1024)
+            tensor("token_embd.weight", offset = 0)
+            tensor("blk.1.ffn_gate_up_exps.weight", offset = 4096)
+            tensor("blk.0.ffn_down_exps.weight", offset = 2048)
+            tensor("blk.1.ffn_gate_inp.weight", offset = 10240)
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 11264L)
+
+        assertEquals(9216L, metadata.expertBytes)
+        assertEquals(6144L, metadata.largestExpertLayerBytes)
     }
 
     /** Runs on the real Gemma 4 26B-A4B GGUF of the catalog when IAOFFLINE_GEMMA4_MOE_FILE points to it. */

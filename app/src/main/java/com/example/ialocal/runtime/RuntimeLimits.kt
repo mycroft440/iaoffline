@@ -27,6 +27,8 @@ object RuntimeLimits {
     const val MAX_KV_BUDGET_BYTES = 2L * 1024 * 1024 * 1024
     /** MoE models read from storage need the rest of the RAM to keep the experts they use. */
     const val EXPERIMENTAL_KV_BUDGET_BYTES = 384L * 1024 * 1024
+    /** Fallback when the GGUF's per-layer expert sizes are unavailable. */
+    const val DEFAULT_EXPERT_WORKING_SET_BYTES = 512L * 1024 * 1024
 
     /**
      * A model file above this share of the device RAM is loaded in low-memory mode: weights stay
@@ -83,6 +85,8 @@ object RuntimeLimits {
          * as the router picks them. [lowMemory] then only concerns the rest of the weights.
          */
         val streamsExperts: Boolean = false,
+        /** RAM left for file-backed expert pages, separate from KV and compute buffers. */
+        val expertWorkingSetBytes: Long = 0L,
     )
 
     /**
@@ -91,34 +95,41 @@ object RuntimeLimits {
      * its weights for every token, so they must fit even when file-backed, or the phone spends
      * its time reading them from storage and stops responding. A mixture of experts
      * ([expertBytes] of its weights are experts) reads only a few experts per token, so when it
-     * does not fit its experts are read from storage and only the rest must fit.
+     * does not fit its experts are read from storage. The shared weights and at least one
+     * layer's expert pages must fit: a prompt batch can select every expert in that layer.
      */
     fun planMemory(
         residentWeightsBytes: Long,
         memory: MemorySnapshot,
         expertBytes: Long,
         safeLevel: Int,
+        largestExpertLayerBytes: Long = 0L,
     ): MemoryPlan {
         val budget = aiBudgetBytes(memory)
         val minimum = residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
         if (expertBytes > 0 && minimum > budget) {
             // Attention, shared experts and output: read for every token, so they must fit.
             val fixedBytes = (residentWeightsBytes - expertBytes.coerceAtMost(residentWeightsBytes)).coerceAtLeast(0L)
-            val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+            val expertWorkingSet = minOf(
+                expertBytes,
+                largestExpertLayerBytes.takeIf { it > 0L } ?: DEFAULT_EXPERT_WORKING_SET_BYTES,
+            )
+            val fixedMinimum = fixedBytes + expertWorkingSet + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
             // The experimental 384 MB KV cache must fit beside the shared weights
             // and compute buffers; a model can fit with 256 MB but not with 384 MB.
-            val kvRoom = (budget - fixedBytes - WORKING_MEMORY_BYTES).coerceAtLeast(MIN_KV_BUDGET_BYTES)
+            val kvRoom = (budget - fixedBytes - expertWorkingSet - WORKING_MEMORY_BYTES).coerceAtLeast(MIN_KV_BUDGET_BYTES)
             val kvBudget = safeKvBudgetBytes(
                 minOf(kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true), kvRoom),
                 safeLevel,
             )
             return MemoryPlan(
                 budgetBytes = budget,
-                lowMemory = safeLevel > 0 || 2 * fixedBytes + kvBudget + WORKING_MEMORY_BYTES > budget,
+                lowMemory = safeLevel > 0 || 2 * fixedBytes + expertWorkingSet + kvBudget + WORKING_MEMORY_BYTES > budget,
                 kvBudgetBytes = kvBudget,
                 fits = fixedMinimum <= budget,
                 minimumBytes = fixedMinimum,
                 streamsExperts = true,
+                expertWorkingSetBytes = expertWorkingSet,
             )
         }
         // While the weights are repacked, the copy and the mapped file are in RAM together.

@@ -449,7 +449,10 @@ class LlamaCppRuntime(
         val memory = DeviceMemory.read(appContext)
         // A model that already made the app close for lack of memory loads with less of it.
         val safeLevel = safeLevelOf(model.id)
-        val plan = RuntimeLimits.planMemory(modelBytes, memory, layout?.expertBytes ?: 0L, safeLevel)
+        val plan = RuntimeLimits.planMemory(
+            modelBytes, memory, layout?.expertBytes ?: 0L, safeLevel,
+            largestExpertLayerBytes = layout?.largestExpertLayerBytes ?: 0L,
+        )
         if (!plan.fits) {
             val message = "${model.name} precisa de cerca de ${gigabytes(plan.minimumBytes)} de RAM, mas a IA pode usar " +
                 "${gigabytes(plan.budgetBytes)} agora (a RAM livre menos 0,5 GB para o Android e o app). Carregar " +
@@ -485,6 +488,7 @@ class LlamaCppRuntime(
                 "limite da IA ${plan.budgetBytes / MB} MB; memória para contexto: $kvBudgetMb MB" +
                 (if (plan.streamsExperts) {
                     "; especialistas MoE (${(layout?.expertBytes ?: 0L) / MB} MB) lidos do armazenamento conforme o uso" +
+                        "; reserva para páginas de especialistas: ${plan.expertWorkingSetBytes / MB} MB" +
                         if (lowMemory) "" else ", o restante dos pesos mantido na RAM"
                 } else {
                     ""
