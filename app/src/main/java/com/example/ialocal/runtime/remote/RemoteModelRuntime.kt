@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.DeadObjectException
 import android.os.IBinder
+import android.os.Process
 import android.os.RemoteException
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
@@ -21,7 +22,11 @@ import com.example.ialocal.runtime.VerificationResult
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
@@ -70,6 +75,28 @@ class RemoteModelRuntime(
     }
 
     private val deathLock = Any()
+    /** Binder deaths caused by the user's Stop action are not memory crashes. */
+    private val intentionalDeaths = mutableSetOf<IBinder>()
+    @Volatile private var aiPid = -1
+    /** Binder warm-up/verification calls are synchronous; await them off the caller's Job. */
+    private val blockingCalls = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * A JNI model load or prompt read can ignore coroutine cancellation for many seconds.
+     * Terminate only the isolated AI process, never the app. The chat manager calls this only
+     * when no other conversation is generating (or Stop All was requested).
+     */
+    override fun interruptNativeWork() {
+        val pid = synchronized(deathLock) {
+            val remote = service ?: return
+            val binder = remote.asBinder()
+            val currentPid = aiPid
+            if (!binder.isBinderAlive || currentPid <= 0 || currentPid == Process.myPid() || runs.isEmpty()) return
+            intentionalDeaths.add(binder)
+            currentPid
+        }
+        Process.killProcess(pid)
+    }
 
     private val stateListener = object : IInferenceStateListener.Stub() {
         override fun onState(status: String, modelId: String?, modelName: String?, error: String?) {
@@ -172,20 +199,30 @@ class RemoteModelRuntime(
 
     private suspend fun <T> call(model: AiModelEntity, phase: ModelCrashGuard.Phase, block: (IInferenceService) -> T): T {
         val remote = connected()
-        val runId = UUID.randomUUID().toString()
-        val run = Run(model, phase)
-        runs[runId] = run
-        crashGuard?.begin(model.id, model.name, phase)
-        try {
-            return block(remote)
-        } catch (dead: DeadObjectException) {
-            onAiProcessDied(remote.asBinder())
-            throw IllegalStateException(run.deathMessage ?: DEATH_ERROR, dead)
-        } catch (failure: RemoteException) {
-            throw IllegalStateException(COMMUNICATION_ERROR, failure)
-        } finally {
-            runs.remove(runId)
-            crashGuard?.end()
+        // A synchronous Binder/JNI call blocks its thread, even when its caller is cancelled.
+        // Waiting for a separate supervisor Job lets Stop release the chat immediately.
+        val task = blockingCalls.async {
+            val runId = UUID.randomUUID().toString()
+            val run = Run(model, phase)
+            runs[runId] = run
+            crashGuard?.begin(model.id, model.name, phase)
+            try {
+                block(remote)
+            } catch (dead: DeadObjectException) {
+                onAiProcessDied(remote.asBinder())
+                throw IllegalStateException(run.deathMessage ?: DEATH_ERROR, dead)
+            } catch (failure: RemoteException) {
+                throw IllegalStateException(COMMUNICATION_ERROR, failure)
+            } finally {
+                runs.remove(runId)
+                crashGuard?.end()
+            }
+        }
+        return try {
+            task.await()
+        } catch (cancel: CancellationException) {
+            task.cancel()
+            throw cancel
         }
     }
 
@@ -204,7 +241,8 @@ class RemoteModelRuntime(
                     runCatching {
                         binder.linkToDeath({ onAiProcessDied(binder) }, 0)
                         remote.setStateListener(stateListener)
-                        logger?.info("AI_PROCESS", "Processo da IA conectado (pid ${remote.pid()})")
+                        aiPid = remote.pid()
+                        logger?.info("AI_PROCESS", "Processo da IA conectado (pid $aiPid)")
                     }
                     service = remote
                     ready.complete(remote)
@@ -249,6 +287,7 @@ class RemoteModelRuntime(
      * it was working on. Reported both by the death notice and by a call that hit the dead process.
      */
     private fun onAiProcessDied(deadBinder: IBinder) = synchronized(deathLock) {
+        val userStopped = intentionalDeaths.remove(deadBinder)
         val current = service?.asBinder()
         if (current != null && current !== deadBinder && current.isBinderAlive) return@synchronized
         // Bound again on the next request, so a process stopped for lack of memory is not
@@ -258,20 +297,22 @@ class RemoteModelRuntime(
         runs.clear()
         val primary = interrupted.firstOrNull { it.phase == ModelCrashGuard.Phase.LOAD } ?: interrupted.firstOrNull()
         if (primary == null) {
-            logger?.info("AI_PROCESS", "Processo da IA encerrado pelo sistema sem tarefa em andamento")
+            if (!userStopped) logger?.info("AI_PROCESS", "Processo da IA encerrado pelo sistema sem tarefa em andamento")
             _state.value = RuntimeState()
             return@synchronized
         }
-        val message = deathMessage(primary)
+        val message = if (userStopped) STOPPED_MESSAGE else deathMessage(primary)
         interrupted.forEach { run ->
             run.deathMessage = message
             run.onDeath(message)
         }
-        _state.value = RuntimeState(RuntimeStatus.ERROR, primary.model.id, primary.model.name, message)
+        _state.value = if (userStopped) RuntimeState()
+            else RuntimeState(RuntimeStatus.ERROR, primary.model.id, primary.model.name, message)
     }
 
     private fun disconnect() {
         service = null
+        aiPid = -1
         connection?.let { runCatching { appContext.unbindService(it) } }
         connection = null
     }
@@ -294,5 +335,6 @@ class RemoteModelRuntime(
         const val START_ERROR = "Não foi possível iniciar o processo da IA."
         const val COMMUNICATION_ERROR = "Falha de comunicação com o processo da IA."
         const val DEATH_ERROR = "O Android encerrou a IA. O app continua aberto; tente de novo."
+        const val STOPPED_MESSAGE = "Operação da IA interrompida pelo usuário."
     }
 }

@@ -74,6 +74,9 @@ interface ModelRuntime {
 
     suspend fun unload()
 
+    /** Stops blocking native preparation when the user explicitly cancels a chat request. */
+    fun interruptNativeWork() {}
+
     /** Frees the loaded model unless it is loading or answering; true if it was freed. */
     suspend fun releaseIfIdle(): Boolean = false
 }

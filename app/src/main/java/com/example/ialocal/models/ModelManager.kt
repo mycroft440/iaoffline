@@ -13,6 +13,7 @@ import com.example.ialocal.runtime.SessionStore
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -438,6 +439,9 @@ class ModelManager(
         if (!_downloadState.value.isBusy) _downloadState.value = ModelDownloadState()
     }
 
+    /** Interrupts a blocking native request after an explicit stop in the chat. */
+    fun interruptNativeWork() = runtime.interruptNativeWork()
+
     /** [keepLoaded] when the model is about to be used, so it is not loaded a second time. */
     suspend fun verifyAndActivate(modelId: String, keepLoaded: Boolean = false): AiModelEntity {
         val model = requireNotNull(repository.getModel(modelId)) { "Modelo não encontrado." }
@@ -450,6 +454,9 @@ class ModelManager(
             val agent = repository.getAgentForModel(model.id)
             if (repository.getDefaultAgent() == null && agent != null) repository.setDefaultAgent(agent.id)
             requireNotNull(repository.getModel(model.id))
+        } catch (cancel: CancellationException) {
+            withContext(NonCancellable) { repository.restoreVerification(model) }
+            throw cancel
         } catch (t: Throwable) {
             val message = t.message ?: "Falha ao verificar o modelo."
             repository.markVerificationError(model.id, message)

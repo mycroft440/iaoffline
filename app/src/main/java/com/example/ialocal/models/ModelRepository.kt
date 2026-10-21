@@ -238,6 +238,10 @@ class ModelRepository(
     suspend fun markVerifying(id: String) =
         dao.updateVerification(id, ModelVerificationStatus.VERIFYING.name, null, null)
 
+    /** An interrupted first-use test must not turn an installed model into a broken model. */
+    suspend fun restoreVerification(model: AiModelEntity) =
+        dao.updateVerification(model.id, model.verificationStatus, model.lastError, model.lastVerifiedAt)
+
     suspend fun markVerified(id: String) {
         ensureStarterProfiles(id)
         dao.updateVerification(id, ModelVerificationStatus.VERIFIED.name, null, System.currentTimeMillis())
