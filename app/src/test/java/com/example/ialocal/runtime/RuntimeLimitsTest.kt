@@ -105,6 +105,31 @@ class RuntimeLimitsTest {
     }
 
     @Test
+    fun aStreamingMoeCapsKvToTheMemoryLeftAfterSharedWeights() {
+        // The AI has 4.7 GiB; shared weights and working buffers leave only 0.3 GiB.
+        val fixedBytes = 39 * gb / 10
+        val plan = RuntimeLimits.planMemory(10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0)
+
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        assertEquals(plan.budgetBytes - fixedBytes - RuntimeLimits.WORKING_MEMORY_BYTES, plan.kvBudgetBytes)
+        assertTrue(plan.kvBudgetBytes < RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES)
+        assertTrue(plan.kvBudgetBytes >= RuntimeLimits.MIN_KV_BUDGET_BYTES)
+    }
+
+    @Test
+    fun aStreamingMoeAvoidsRepackingWhenActualKvWouldExceedMemory() {
+        // Two copies of the shared weights fit with 256 MiB, but not with 384 MiB.
+        val fixedBytes = 196 * gb / 100
+        val plan = RuntimeLimits.planMemory(10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0)
+
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        assertEquals(RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES, plan.kvBudgetBytes)
+        assertTrue(plan.lowMemory)
+    }
+
+    @Test
     fun aMixtureOfExpertsKeepsItsSharedWeightsFileBackedWhenTwoCopiesDoNotFit() {
         // 8 GB phone (about 7.3 GB reported): 4.2 GB for the AI, less than two copies of 2.4 GB.
         val plan = RuntimeLimits.planMemory(12_710_000_000L, memory(7.3, 3.0), expertBytes = 10_310_000_000L, safeLevel = 0)
