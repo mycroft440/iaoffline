@@ -128,7 +128,15 @@ class GgufInspector {
         val sorted = offsets.sortedArray()
         fun sizeOf(index: Int): Long {
             val start = offsets[index]
-            val next = sorted.firstOrNull { it > start } ?: dataEnd ?: start
+            // Upper-bound search avoids scanning the tensor table for every MoE tensor.
+            // Repeated offsets are skipped, as in the original strictly-greater lookup.
+            var lo = 0
+            var hi = sorted.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (sorted[mid] <= start) lo = mid + 1 else hi = mid
+            }
+            val next = sorted.getOrNull(lo) ?: dataEnd ?: start
             return (next - start).coerceAtLeast(0L)
         }
         return TensorBytes(onDemand = onDemand.sumOf { sizeOf(it) }, experts = experts.sumOf { sizeOf(it) })
