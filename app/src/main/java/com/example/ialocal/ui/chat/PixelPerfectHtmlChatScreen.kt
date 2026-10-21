@@ -147,18 +147,18 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-private val PBg = Color(0xFF090B11)
-private val PSurface = Color(0xFF111420)
-private val PCard = Color(0xFF161A29)
-private val PCardHover = Color(0xFF1D2235)
-private val PBorder = Color(0xFF23283E)
-private val PIndigo = Color(0xFF6366F1)
-private val PIndigoStrong = Color(0xFF4F46E5)
-private val PPurple = Color(0xFFA855F7)
-private val PEmerald = Color(0xFF34D399)
-private val PText = Color(0xFFF1F5F9)
-private val PText2 = Color(0xFFCBD5E1)
-private val PMuted = Color(0xFF64748B)
+private val PBg = Color(0xFF090D17)
+private val PSurface = Color(0xFF111827)
+private val PCard = Color(0xFF172033)
+private val PCardHover = Color(0xFF1C2940)
+private val PBorder = Color(0xFF2A3851)
+private val PIndigo = Color(0xFF8B92FF)
+private val PIndigoStrong = Color(0xFF6269EA)
+private val PPurple = Color(0xFFB681FF)
+private val PEmerald = Color(0xFF44D7AB)
+private val PText = Color(0xFFF5F7FF)
+private val PText2 = Color(0xFFD7DEED)
+private val PMuted = Color(0xFF91A0B8)
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -806,39 +806,50 @@ private fun ExactTopBar(
     onProfile: () -> Unit,
     onModel: () -> Unit,
 ) {
-    Surface(color = PBg, border = BorderStroke(0.5.dp, PBorder.copy(alpha = 0.40f))) {
+    Surface(
+        color = PSurface,
+        border = BorderStroke(0.5.dp, PBorder.copy(alpha = 0.75f)),
+        shadowElevation = 4.dp,
+    ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.horizontalGradient(listOf(PSurface, Color(0xFF181E33), PSurface)))
+                .height(58.dp)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
                 Surface(
-                    modifier = Modifier.size(32.dp).clickable(onClick = onMenu),
-                    shape = CircleShape,
-                    color = PCard,
+                    modifier = Modifier.size(36.dp).clickable(onClick = onMenu),
+                    shape = RoundedCornerShape(13.dp),
+                    color = PCardHover,
                     border = BorderStroke(1.dp, PBorder),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        StaggeredMenuIcon(Modifier.size(15.dp), color = PText2)
+                        StaggeredMenuIcon(Modifier.size(17.dp), color = PText2)
                     }
                 }
                 ExactSelector(
-                    modifier = Modifier.widthIn(max = 112.dp),
+                    modifier = Modifier.widthIn(max = 140.dp),
                     icon = null,
                     textIcon = "</>",
                     label = agent,
-                    maxLabelWidth = 90.dp,
+                    maxLabelWidth = 112.dp,
                     onClick = onProfile,
                 )
             }
 
             ExactSelector(
-                modifier = Modifier.widthIn(max = 100.dp),
+                modifier = Modifier.widthIn(max = 134.dp),
                 icon = Icons.Default.Memory,
                 textIcon = null,
                 label = model,
-                maxLabelWidth = 85.dp,
+                maxLabelWidth = 106.dp,
                 onClick = onModel,
             )
         }
@@ -856,31 +867,32 @@ private fun ExactSelector(
 ) {
     Surface(
         modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(50),
+        shape = RoundedCornerShape(16.dp),
         color = PCard,
-        border = BorderStroke(1.dp, PBorder),
+        border = BorderStroke(1.dp, PBorder.copy(alpha = 0.88f)),
+        shadowElevation = 2.dp,
     ) {
         Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (textIcon != null) {
-                Text(textIcon, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color(0xFF818CF8))
+                Text(textIcon, fontSize = 13.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = PIndigo)
             } else if (icon != null) {
-                Icon(icon, null, tint = Color(0xFF818CF8), modifier = Modifier.size(11.dp))
+                Icon(icon, null, tint = PIndigo, modifier = Modifier.size(14.dp))
             }
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(7.dp))
             Text(
                 label,
                 modifier = Modifier.widthIn(max = maxLabelWidth),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.SemiBold,
                 color = PText2,
             )
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(11.dp))
+            Spacer(Modifier.width(3.dp))
+            Icon(Icons.Default.ArrowDropDown, null, tint = PMuted, modifier = Modifier.size(12.dp))
         }
     }
 }
@@ -898,43 +910,78 @@ private fun StaggeredMenuIcon(modifier: Modifier, color: Color) {
 
 @Composable
 private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Boolean, reasoningNote: String?) {
-    Box(modifier.padding(horizontal = 24.dp, vertical = 24.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(PIndigo.copy(alpha = 0.12f), PPurple.copy(alpha = 0.045f), Color.Transparent),
+                    radius = 780f,
+                )
+            )
+            .padding(horizontal = 24.dp, vertical = 24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(
+                modifier = Modifier.size(72.dp),
+                shape = RoundedCornerShape(24.dp),
+                color = PIndigo.copy(alpha = 0.13f),
+                border = BorderStroke(1.dp, PIndigo.copy(alpha = 0.30f)),
+                shadowElevation = 6.dp,
+            ) {
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.linearGradient(listOf(PIndigo.copy(alpha = 0.16f), PPurple.copy(alpha = 0.12f)))
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.SmartToy, null, tint = Color(0xFFC5C7FF), modifier = Modifier.size(31.dp))
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+            Text(
+                "SUA IA, NO SEU DISPOSITIVO",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.7.sp,
+                color = PIndigo,
+            )
+            Spacer(Modifier.height(10.dp))
             Text(
                 "Como posso ajudar você agora?",
-                fontSize = 24.sp,
-                lineHeight = 29.sp,
+                fontSize = 25.sp,
+                lineHeight = 32.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = PText,
                 textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 if (modelAvailable) {
                     "Você está conversando com o perfil $profile. Tudo é processado localmente no aparelho."
                 } else {
                     "Perfil $profile selecionado. Baixe uma IA offline para começar a conversar."
                 },
-                modifier = Modifier.widthIn(max = 320.dp),
-                fontSize = 13.sp,
-                lineHeight = 20.sp,
-                color = Color(0xFF94A3B8),
+                modifier = Modifier.widthIn(max = 318.dp),
+                fontSize = 12.5.sp,
+                lineHeight = 19.sp,
+                color = PMuted,
                 textAlign = TextAlign.Center,
             )
             if (reasoningNote != null) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(21.dp))
                 Surface(
                     shape = RoundedCornerShape(50),
-                    color = Color(0xFF581C87).copy(alpha = 0.30f),
-                    border = BorderStroke(1.dp, PPurple.copy(alpha = 0.20f)),
+                    color = PPurple.copy(alpha = 0.11f),
+                    border = BorderStroke(1.dp, PPurple.copy(alpha = 0.25f)),
                 ) {
                     Row(
-                        Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFC084FC)))
-                        Spacer(Modifier.width(6.dp))
-                        Text(reasoningNote, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFFD8B4FE))
+                        Icon(Icons.Default.Psychology, null, tint = Color(0xFFD4B5FF), modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(reasoningNote, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = Color(0xFFE3CEFF))
                     }
                 }
             }
@@ -965,11 +1012,11 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         Column(Modifier.fillMaxWidth(0.88f), horizontalAlignment = Alignment.End) {
             Surface(
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 6.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
                 color = Color.Transparent,
             ) {
                 Column(
-                    Modifier.background(Brush.linearGradient(listOf(Color(0xFF4F46E5), Color(0xFF4338CA))))
+                    Modifier.background(Brush.linearGradient(listOf(Color(0xFF656CE8), Color(0xFF4A50C0))))
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     if (item.attachments.isNotEmpty()) {
@@ -1006,7 +1053,7 @@ private fun ExactUserMessage(item: MessageWithAttachments) {
                         }
                         Spacer(Modifier.height(6.dp))
                     }
-                    Text(item.message.content, fontSize = 13.5.sp, lineHeight = 20.sp, color = Color.White)
+                    Text(item.message.content, fontSize = 14.sp, lineHeight = 21.sp, color = Color.White)
                 }
             }
             Text(
@@ -1214,15 +1261,15 @@ private fun ExactAnswerContent(text: String, message: MessageEntity, onOpenCanva
 private fun ExactAnswerBubble(text: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+        shape = RoundedCornerShape(topStart = 6.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
         color = PCard,
-        border = BorderStroke(1.dp, PBorder),
+        border = BorderStroke(1.dp, PBorder.copy(alpha = 0.82f)),
     ) {
         Text(
             text,
-            modifier = Modifier.padding(16.dp),
-            fontSize = 13.5.sp,
-            lineHeight = 20.sp,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            fontSize = 14.sp,
+            lineHeight = 21.sp,
             color = PText2,
         )
     }
@@ -1396,7 +1443,7 @@ private fun ExactComposer(
     onRemoveAttachment: (String) -> Unit,
     onRemoveQueued: (Int) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().imePadding().background(PBg)) {
+    Column(Modifier.fillMaxWidth().imePadding().background(Brush.verticalGradient(listOf(PBg, PSurface)))) {
         if (attachments.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
@@ -1477,27 +1524,27 @@ private fun ExactComposer(
             }
         }
 
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = PCard,
-                border = BorderStroke(1.dp, PBorder),
-                shadowElevation = 4.dp,
+                shape = RoundedCornerShape(22.dp),
+                color = PSurface,
+                border = BorderStroke(1.dp, if (draft.isNotBlank() || attachments.isNotEmpty()) PIndigo.copy(alpha = 0.50f) else PBorder),
+                shadowElevation = 10.dp,
             ) {
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Column(Modifier.padding(horizontal = 13.dp, vertical = 12.dp)) {
                     BasicTextField(
                         value = draft,
                         onValueChange = onDraftChange,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp, max = 120.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp, max = 130.dp),
                         enabled = !processing,
-                        textStyle = TextStyle(fontSize = 13.5.sp, lineHeight = 20.sp, color = PText),
+                        textStyle = TextStyle(fontSize = 14.sp, lineHeight = 22.sp, color = PText),
                         decorationBox = { inner ->
                             Box(Modifier.fillMaxWidth()) {
                                 if (draft.isEmpty()) {
                                     Text(
                                         if (generating) "Digite para adicionar à fila..." else "Envie uma mensagem ou anexe arquivos...",
-                                        fontSize = 13.5.sp,
-                                        lineHeight = 20.sp,
+                                        fontSize = 14.sp,
+                                        lineHeight = 22.sp,
                                         color = PMuted,
                                     )
                                 }
@@ -1506,9 +1553,9 @@ private fun ExactComposer(
                         },
                     )
 
-                    HorizontalDivider(color = PBorder.copy(alpha = 0.40f))
+                    HorizontalDivider(color = PBorder.copy(alpha = 0.65f))
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
@@ -1546,19 +1593,19 @@ private fun ExactComposer(
                                 }
                             }
                             Surface(
-                                modifier = Modifier.size(32.dp).clickable(
+                                modifier = Modifier.size(36.dp).clickable(
                                     enabled = model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty()),
                                     onClick = onSend,
                                 ),
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) PIndigoStrong else Color(0xFF1E293B),
+                                shape = RoundedCornerShape(13.dp),
+                                color = if (model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) PIndigoStrong else PCardHover,
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         Icons.Default.Send,
                                         "Enviar",
                                         tint = if (model != null && !processing && !recording && (draft.isNotBlank() || attachments.isNotEmpty())) Color.White else PMuted,
-                                        modifier = Modifier.size(12.dp).rotate(-12f),
+                                        modifier = Modifier.size(15.dp).rotate(-12f),
                                     )
                                 }
                             }
@@ -1577,13 +1624,9 @@ private fun ExactComposer(
                     fontSize = 11.sp,
                     color = PMuted,
                 )
-                Text("${draft.length} caracteres", fontSize = 10.5.sp, fontFamily = FontFamily.Monospace, color = PMuted)
+                Text("${draft.length} caracteres", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = PMuted)
             }
 
-            Box(
-                Modifier.width(128.dp).height(4.dp).align(Alignment.CenterHorizontally)
-                    .clip(CircleShape).background(Color(0xFF334155).copy(alpha = 0.60f))
-            )
         }
     }
 }
@@ -1615,12 +1658,12 @@ private fun ExactDeepThinkSelector(agent: AgentEntity, model: AiModelEntity) {
 
     Surface(
         modifier = Modifier.clickable { open = true },
-        shape = RoundedCornerShape(12.dp),
-        color = PSurface,
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+        shape = RoundedCornerShape(13.dp),
+        color = PCardHover,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
     ) {
         Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
@@ -1856,11 +1899,15 @@ private fun ExactSquareIconButton(
     enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    Box(
+    Surface(
         modifier = Modifier.size(size).clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
+        shape = RoundedCornerShape(11.dp),
+        color = if (enabled) PCardHover else PCard,
+        border = BorderStroke(1.dp, PBorder.copy(alpha = if (enabled) 0.65f else 0.30f)),
     ) {
-        content()
+        Box(contentAlignment = Alignment.Center) {
+            content()
+        }
     }
 }
 
