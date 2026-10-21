@@ -29,11 +29,26 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/** Choose the chat's AI at entry; background model updates must not reselect it. */
+internal fun initialChatModelId(
+    installed: List<AiModelEntity>,
+    explicitModelId: String?,
+    conversationModelId: String?,
+): String? {
+    return explicitModelId?.takeIf { id -> installed.any { it.id == id } }
+        ?: conversationModelId?.takeIf { id -> installed.any { it.id == id } }
+        ?: installed.firstOrNull { it.isActive }?.id
+        ?: installed.firstOrNull()?.id
+}
 
 class ChatViewModel(
     private val conversationId: String,
@@ -82,6 +97,7 @@ class ChatViewModel(
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
     private val _selectedModelId = MutableStateFlow(initialModelId)
+    private val selectionMutex = Mutex()
 
     init {
         viewModelScope.launch {
@@ -93,31 +109,58 @@ class ChatViewModel(
             }
         }
         viewModelScope.launch {
-            generation.resolvedAgentId.collect { agentId -> if (agentId != null) _selectedAgentId.value = agentId }
+            generation.resolvedAgentId.collect { agentId ->
+                if (agentId != null) {
+                    selectionMutex.withLock {
+                        // An older reply finishing must not undo a newer manual model selection.
+                        if (_selectedAgentId.value == null) {
+                            modelRepository.getAgent(agentId)?.let { agent ->
+                                _selectedModelId.value = agent.modelId
+                                _selectedAgentId.value = agent.id
+                            }
+                        }
+                    }
+                }
+            }
         }
         viewModelScope.launch {
-            // While the user writes, the selected AI loads and reads this conversation, so the
-            // first answer does not start with minutes of loading and reading.
+            // The selected AI can prepare the conversation while the user types.
             combine(_selectedAgentId, _selectedModelId) { agentId, modelId -> agentId?.let { it to modelId } }
                 .filterNotNull()
                 .distinctUntilChanged()
                 .collect { generationManager.prepare(conversationId, currentTarget()) }
         }
         viewModelScope.launch {
-            combine(modelRepository.models, selectedProfile, _selectedModelId) { installed, _, requestedId ->
-                requestedId?.takeIf { id -> installed.any { it.id == id } }
-                    ?: installed.firstOrNull { it.isActive }?.id
-                    ?: installed.firstOrNull()?.id
-            }.collect { modelId ->
-                runCatching {
-                    if (modelId == null) {
-                        _selectedAgentId.value = null
-                        repository.setConversationAgent(conversationId, null)
-                    } else {
-                        selectModelInternal(modelId, recordUsage = false)
+            selectionMutex.withLock {
+                val previousAgent = repository.getConversation(conversationId)?.agentId
+                    ?.let { modelRepository.getAgent(it) }
+                val modelId = initialChatModelId(
+                    modelRepository.getModels(),
+                    initialModelId,
+                    previousAgent?.modelId,
+                )
+                when {
+                    modelId == null -> Unit
+                    initialModelId == null && previousAgent != null && previousAgent.modelId == modelId -> {
+                        // Restore the actual agent saved with this conversation.
+                        _selectedModelId.value = modelId
+                        _selectedAgentId.value = previousAgent.id
                     }
-                }.onFailure {
-                    _error.value = it.message ?: "Não foi possível preparar a IA selecionada."
+                    else -> runCatching { selectModelInternal(modelId, recordUsage = false) }
+                        .onFailure { _error.value = it.message ?: "Não foi possível preparar a IA selecionada." }
+                }
+            }
+        }
+        viewModelScope.launch {
+            // Profile changes are user choices; downloads and verification are not.
+            selectedProfile.drop(1).collect { profile ->
+                selectionMutex.withLock {
+                    val modelId = _selectedModelId.value ?: return@withLock
+                    val selectedAgent = _selectedAgentId.value?.let { modelRepository.getAgent(it) }
+                    if (selectedAgent?.name != profile.displayName && modelRepository.getModel(modelId) != null) {
+                        runCatching { selectModelInternal(modelId, recordUsage = false) }
+                            .onFailure { _error.value = it.message ?: "Não foi possível preparar a IA selecionada." }
+                    }
                 }
             }
         }
@@ -134,24 +177,26 @@ class ChatViewModel(
 
     fun selectAgent(agentId: String?) {
         viewModelScope.launch {
-            if (agentId == null) {
-                _selectedAgentId.value = null
-                repository.setConversationAgent(conversationId, null)
-                return@launch
-            }
-            runCatching {
-                val agent = requireNotNull(modelRepository.getAgent(agentId)) { "Perfil não encontrado." }
-                val profile = requireNotNull(modelRepository.profileNamed(agent.name)) {
-                    "Este perfil não existe mais."
+            selectionMutex.withLock {
+                if (agentId == null) {
+                    _selectedAgentId.value = null
+                    repository.setConversationAgent(conversationId, null)
+                    return@withLock
                 }
-                modelRepository.setSelectedProfile(profile)
-                _selectedModelId.value = agent.modelId
-                _selectedAgentId.value = agent.id
-                modelRepository.recordAgentUse(agent.id)
-                modelRepository.rememberChatModel(agent.modelId)
-                repository.setConversationAgent(conversationId, agent.id)
-            }.onFailure {
-                _error.value = it.message ?: "Não foi possível selecionar este perfil."
+                runCatching {
+                    val agent = requireNotNull(modelRepository.getAgent(agentId)) { "Perfil não encontrado." }
+                    val profile = requireNotNull(modelRepository.profileNamed(agent.name)) {
+                        "Este perfil não existe mais."
+                    }
+                    modelRepository.setSelectedProfile(profile)
+                    _selectedModelId.value = agent.modelId
+                    _selectedAgentId.value = agent.id
+                    modelRepository.recordAgentUse(agent.id)
+                    modelRepository.rememberChatModel(agent.modelId)
+                    repository.setConversationAgent(conversationId, agent.id)
+                }.onFailure {
+                    _error.value = it.message ?: "Não foi possível selecionar este perfil."
+                }
             }
         }
     }
@@ -165,13 +210,10 @@ class ChatViewModel(
 
     fun selectModel(modelId: String) {
         viewModelScope.launch {
-            runCatching {
-                selectModelInternal(modelId, recordUsage = true)
-                _selectedModelId.value = modelId
+            selectionMutex.withLock {
+                runCatching { selectModelInternal(modelId, recordUsage = true) }
+                    .onFailure { _error.value = it.message ?: "Não foi possível selecionar o modelo." }
             }
-                .onFailure {
-                    _error.value = it.message ?: "Não foi possível selecionar o modelo."
-                }
         }
     }
 
@@ -181,6 +223,7 @@ class ChatViewModel(
         val modelAgents = modelRepository.getAgents().filter { it.modelId == modelId }
         val agent = modelAgents.firstOrNull { it.name == selectedProfile.value.displayName }
             ?: throw IllegalStateException("Nenhum perfil foi encontrado para este modelo.")
+        _selectedModelId.value = modelId
         _selectedAgentId.value = agent.id
         if (recordUsage) {
             modelRepository.recordAgentUse(agent.id)
