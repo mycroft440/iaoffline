@@ -101,7 +101,53 @@ class RuntimeLimitsTest {
         // The other 2.4 GB fit twice (while repacked), so they are kept in RAM.
         assertFalse(plan.lowMemory)
         assertEquals(RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES, plan.kvBudgetBytes)
-        assertEquals(2_400_000_000L + RuntimeLimits.MIN_KV_BUDGET_BYTES + RuntimeLimits.WORKING_MEMORY_BYTES, plan.minimumBytes)
+        assertEquals(
+            2_400_000_000L + RuntimeLimits.MIN_KV_BUDGET_BYTES +
+                RuntimeLimits.WORKING_MEMORY_BYTES + plan.expertReserveBytes,
+            plan.minimumBytes,
+        )
+        assertTrue(plan.expertReserveBytes > 0)
+    }
+
+    @Test
+    fun streamingReservesSpaceForRecentlyUsedExperts() {
+        assertEquals(0L, RuntimeLimits.streamingExpertReserveBytes(0L))
+        assertEquals(RuntimeLimits.MIN_STREAMING_EXPERT_RESERVE_BYTES, RuntimeLimits.streamingExpertReserveBytes(gb))
+        assertEquals(gb / 2, RuntimeLimits.streamingExpertReserveBytes(8 * gb))
+        assertEquals(RuntimeLimits.MAX_STREAMING_EXPERT_RESERVE_BYTES, RuntimeLimits.streamingExpertReserveBytes(40 * gb))
+    }
+
+    @Test
+    fun streamingContextShrinksToPreserveTheExpertReserve() {
+        // 7.3 GB of usable system RAM; the foreground AI budget is about 4.25 GiB.
+        // Two copies of the fixed weights do not fit; only ~350 MiB remains for KV.
+        val fixedBytes = (2.9 * gb).toLong()
+        val expertBytes = 8 * gb
+        val plan = RuntimeLimits.planMemory(
+            fixedBytes + expertBytes, memory(7.3, 3.0), expertBytes, safeLevel = 0,
+        )
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        assertTrue(plan.lowMemory)
+        assertEquals(gb / 2, plan.expertReserveBytes)
+        assertTrue(plan.kvBudgetBytes < RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES)
+        assertTrue(plan.kvBudgetBytes >= RuntimeLimits.MIN_KV_BUDGET_BYTES)
+        assertTrue(
+            fixedBytes + plan.kvBudgetBytes + RuntimeLimits.WORKING_MEMORY_BYTES +
+                plan.expertReserveBytes <= plan.budgetBytes,
+        )
+    }
+
+    @Test
+    fun streamingRefusesAModelWithoutExpertCacheHeadroom() {
+        val fixedBytes = (3.2 * gb).toLong()
+        val expertBytes = 8 * gb
+        val plan = RuntimeLimits.planMemory(
+            fixedBytes + expertBytes, memory(7.3, 3.0), expertBytes, safeLevel = 0,
+        )
+        assertTrue(plan.streamsExperts)
+        assertFalse(plan.fits)
+        assertTrue(plan.minimumBytes > plan.budgetBytes)
     }
 
     @Test

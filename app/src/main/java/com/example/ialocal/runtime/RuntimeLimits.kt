@@ -27,6 +27,16 @@ object RuntimeLimits {
     const val MAX_KV_BUDGET_BYTES = 2L * 1024 * 1024 * 1024
     /** MoE models read from storage need the rest of the RAM to keep the experts they use. */
     const val EXPERIMENTAL_KV_BUDGET_BYTES = 384L * 1024 * 1024
+    // The kernel page cache needs space for routed experts even when their weights stay file-backed.
+    // A 1/16 share approximates one token's routed experts for an 8-of-128 MoE; bound it on phones.
+    const val MIN_STREAMING_EXPERT_RESERVE_BYTES = 256L * 1024 * 1024
+    const val MAX_STREAMING_EXPERT_RESERVE_BYTES = 768L * 1024 * 1024
+
+    fun streamingExpertReserveBytes(expertBytes: Long): Long =
+        if (expertBytes <= 0L) 0L else (expertBytes / 16).coerceIn(
+            MIN_STREAMING_EXPERT_RESERVE_BYTES,
+            MAX_STREAMING_EXPERT_RESERVE_BYTES,
+        )
 
     /**
      * A model file above this share of the device RAM is loaded in low-memory mode: weights stay
@@ -83,6 +93,8 @@ object RuntimeLimits {
          * as the router picks them. [lowMemory] then only concerns the rest of the weights.
          */
         val streamsExperts: Boolean = false,
+        /** Headroom for the OS page cache to retain recently used MoE expert weights. */
+        val expertReserveBytes: Long = 0L,
     )
 
     /**
@@ -104,17 +116,28 @@ object RuntimeLimits {
         if (expertBytes > 0 && minimum > budget) {
             // Attention, shared experts and output: read for every token, so they must fit.
             val fixedBytes = (residentWeightsBytes - expertBytes).coerceAtLeast(0L)
-            val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+            val expertReserve = streamingExpertReserveBytes(expertBytes)
+            // Without room for the active experts, mmap may fit on paper but thrash the storage.
+            val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES + expertReserve
+            val lowMemory = safeLevel > 0 ||
+                2 * fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES + expertReserve > budget
+            // Repacked fixed weights temporarily occupy both mapped and anonymous pages.
+            // The KV budget must fit *after* that copy and the expert cache reserve, not just
+            // after one copy of the fixed weights.
+            val fixedAllocation = if (lowMemory) fixedBytes else 2 * fixedBytes
+            val availableKv = (budget - fixedAllocation - WORKING_MEMORY_BYTES - expertReserve)
+                .coerceAtLeast(MIN_KV_BUDGET_BYTES)
             return MemoryPlan(
                 budgetBytes = budget,
-                lowMemory = safeLevel > 0 || 2 * fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES > budget,
+                lowMemory = lowMemory,
                 kvBudgetBytes = safeKvBudgetBytes(
-                    kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true),
+                    minOf(kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true), availableKv),
                     safeLevel,
                 ),
                 fits = fixedMinimum <= budget,
                 minimumBytes = fixedMinimum,
                 streamsExperts = true,
+                expertReserveBytes = expertReserve,
             )
         }
         // While the weights are repacked, the copy and the mapped file are in RAM together.
