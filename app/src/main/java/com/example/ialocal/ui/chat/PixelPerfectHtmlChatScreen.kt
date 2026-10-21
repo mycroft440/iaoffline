@@ -821,6 +821,7 @@ private fun ExactTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
@@ -835,7 +836,7 @@ private fun ExactTopBar(
                     }
                 }
                 ExactSelector(
-                    modifier = Modifier.widthIn(max = 140.dp),
+                    modifier = Modifier.weight(1f, fill = false).widthIn(max = 140.dp),
                     icon = null,
                     textIcon = "</>",
                     label = agent,
@@ -1905,7 +1906,7 @@ private fun ExactSquareIconButton(
         color = if (enabled) PCardHover else PCard,
         border = BorderStroke(1.dp, PBorder.copy(alpha = if (enabled) 0.65f else 0.30f)),
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             content()
         }
     }
