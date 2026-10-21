@@ -485,6 +485,7 @@ class LlamaCppRuntime(
                 "limite da IA ${plan.budgetBytes / MB} MB; memória para contexto: $kvBudgetMb MB" +
                 (if (plan.streamsExperts) {
                     "; especialistas MoE (${(layout?.expertBytes ?: 0L) / MB} MB) lidos do armazenamento conforme o uso" +
+                        "; reserva de cache dos especialistas: ${plan.expertReserveBytes / MB} MB" +
                         if (lowMemory) "" else ", o restante dos pesos mantido na RAM"
                 } else {
                     ""
