@@ -103,15 +103,19 @@ object RuntimeLimits {
         val minimum = residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
         if (expertBytes > 0 && minimum > budget) {
             // Attention, shared experts and output: read for every token, so they must fit.
-            val fixedBytes = (residentWeightsBytes - expertBytes).coerceAtLeast(0L)
+            val fixedBytes = (residentWeightsBytes - expertBytes.coerceAtMost(residentWeightsBytes)).coerceAtLeast(0L)
             val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+            // The experimental 384 MB KV cache must fit beside the shared weights
+            // and compute buffers; a model can fit with 256 MB but not with 384 MB.
+            val kvRoom = (budget - fixedBytes - WORKING_MEMORY_BYTES).coerceAtLeast(MIN_KV_BUDGET_BYTES)
+            val kvBudget = safeKvBudgetBytes(
+                minOf(kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true), kvRoom),
+                safeLevel,
+            )
             return MemoryPlan(
                 budgetBytes = budget,
-                lowMemory = safeLevel > 0 || 2 * fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES > budget,
-                kvBudgetBytes = safeKvBudgetBytes(
-                    kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true),
-                    safeLevel,
-                ),
+                lowMemory = safeLevel > 0 || 2 * fixedBytes + kvBudget + WORKING_MEMORY_BYTES > budget,
+                kvBudgetBytes = kvBudget,
                 fits = fixedMinimum <= budget,
                 minimumBytes = fixedMinimum,
                 streamsExperts = true,
