@@ -38,6 +38,40 @@ class GgufInspectorTest {
     }
 
     @Test
+    fun skipsTokenizerStringsBeforeReadingModelMetadata() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(2)
+            string("tokenizer.ggml.tokens")
+            u32(9) // array
+            u32(8) // strings
+            u64(20_000)
+            repeat(20_000) { string("token-$it") }
+            kvString("general.architecture", "qwen3moe")
+        }.toByteArray()
+        val metadata = inspector.inspect(ByteArrayInputStream(bytes))
+        assertEquals("qwen3moe", metadata.architecture)
+    }
+
+    @Test
+    fun stillReadsPastLargeIgnoredValuesWhenTheStreamCannotSkip() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(2)
+            kvString("ignored.large.value", "x".repeat(1024 * 1024))
+            kvString("general.architecture", "gemma4")
+        }.toByteArray()
+        val stream = object : ByteArrayInputStream(bytes) {
+            override fun skip(n: Long): Long = 0L
+        }
+        assertEquals("gemma4", inspector.inspect(stream).architecture)
+    }
+
+    @Test
     fun sizesPerLayerEmbeddingsThatStayInTheFile() {
         val header = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))

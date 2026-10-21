@@ -273,13 +273,16 @@ class GgufInspector {
 
     private fun skipFully(input: InputStream, count: Long) {
         var remaining = count
-        val scratch = ByteArray(64 * 1024)
+        // File streams normally skip directly. A tokenizer can contain hundreds of thousands
+        // of strings; allocating a buffer for every skipped string creates gigabytes of garbage.
+        var scratch: ByteArray? = null
         while (remaining > 0) {
             val skipped = input.skip(remaining)
             if (skipped > 0) {
                 remaining -= skipped
             } else {
-                val read = input.read(scratch, 0, minOf(scratch.size.toLong(), remaining).toInt())
+                val buffer = scratch ?: ByteArray(64 * 1024).also { scratch = it }
+                val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
                 if (read < 0) throw IOException("Fim inesperado do arquivo GGUF.")
                 remaining -= read
             }
