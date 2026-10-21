@@ -136,7 +136,7 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun eightAdditionalMoeModelsArePinnedAndUnder14B() {
+    fun sevenAdditionalMoeModelsArePinnedAndUnder14B() {
         val ids = setOf(
             "lfm2-8b-a1b-q4-k-m",
             "olmoe-1b-7b-0125-instruct-q4-k-m",
@@ -145,10 +145,9 @@ class ModelCatalogTest {
             "granite-guardian-3.2-3b-a800m-q4-k-m",
             "gpt-oss-6.6b-pruned-q5-k-m",
             "gpt-oss-10.2b-pruned-science-q5-k-m",
-            "gpt-oss-13.1b-pruned-q5-k-m",
         )
         val added = ModelCatalog.entries.filter { it.id in ids }
-        assertEquals(8, added.size)
+        assertEquals(7, added.size)
         assertEquals(ids, added.map { it.id }.toSet())
         added.forEach { model ->
             assertTrue(model.isMoe)

@@ -1256,20 +1256,6 @@ object ModelCatalog {
             activeParametersBillions = 3.6,
             description = "gpt-oss modificado por terceiros, com 14 especialistas remanescentes e foco experimental em ciências. Não é uma versão oficial da OpenAI e pode ter menor precisão.",
         ),
-        CatalogModel(
-            id = "gpt-oss-13.1b-pruned-q5-k-m",
-            displayName = "gpt-oss Pruned 13.1B (19 experts)",
-            provider = ModelProvider.OPENAI,
-            repository = "echos-keeper/gpt-oss-13.1b-specialized-all-pruned-moe-only-19-experts-Q5_K_M-GGUF",
-            fileName = "gpt-oss-13.1b-specialized-all-pruned-moe-only-19-experts-q5_k_m.gguf",
-            quantization = "Q5_K_M",
-            approximateSizeBytes = 10_651_647_680L,
-            sha256 = "6e0799bf61d6fb3b068a37009dec2c132157d73c8dcdaa8503e1f7dcb90ff628",
-            recommendedRamBytes = 16_000_000_000L,
-            totalParametersBillions = 13.1,
-            activeParametersBillions = 3.6,
-            description = "Variante MoE comunitária do gpt-oss com 19 especialistas, quantizada em 5 bits. Não oficial e experimental: precisão e compatibilidade com o Android exigem testes.",
-        ),
     )
 
     fun requireById(id: String): CatalogModel =

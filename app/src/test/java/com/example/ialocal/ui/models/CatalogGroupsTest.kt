@@ -204,7 +204,7 @@ class CatalogGroupsTest {
     @Test
     fun moeRamEstimateAccountsForTheQuantizedGgufFileNotParameterNames() {
         val small = ModelCatalog.requireById("granite3.1-1b-a400m-q4-k-m")
-        val large = ModelCatalog.requireById("gpt-oss-13.1b-pruned-q5-k-m")
+        val large = ModelCatalog.requireById("gpt-oss-10.2b-pruned-science-q5-k-m")
         assertEquals(
             large.approximateSizeBytes - small.approximateSizeBytes,
             estimatedFullMoeRamBytes(large) - estimatedFullMoeRamBytes(small),
