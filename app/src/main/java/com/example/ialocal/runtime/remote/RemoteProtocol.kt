@@ -16,6 +16,7 @@ internal data class GenerateRequest(
     val maxTokens: Int,
     val turn: TurnOptions,
     val safeLevel: Int,
+    val performanceProfile: String = "CACHE",
 )
 
 /** JSON for what crosses to the AI process; small enough for a Binder transaction. */
@@ -28,7 +29,9 @@ internal object RemoteProtocol {
     const val MAX_CONVERSATION_CHARS = 240_000
     private const val CUT_NOTICE = "[início cortado] "
 
-    fun encodeModel(model: AiModelEntity): String = modelJson(model).toString()
+    fun encodeModel(model: AiModelEntity, profile: String = "CACHE"): String = modelJson(model).put("performanceProfile", profile).toString()
+
+    fun decodeProfile(json: String): String = JSONObject(json).optString("performanceProfile", "CACHE")
 
     fun decodeModel(json: String): AiModelEntity = model(JSONObject(json))
 
@@ -40,6 +43,7 @@ internal object RemoteProtocol {
         .put("maxTokens", request.maxTokens)
         .putTurn(request.turn)
         .put("safeLevel", request.safeLevel)
+        .put("performanceProfile", request.performanceProfile)
         .toString()
 
     fun decodeRequest(json: String): GenerateRequest {
@@ -52,6 +56,7 @@ internal object RemoteProtocol {
             maxTokens = o.getInt("maxTokens"),
             turn = turn(o),
             safeLevel = o.optInt("safeLevel"),
+            performanceProfile = o.optString("performanceProfile", "CACHE"),
         )
     }
 

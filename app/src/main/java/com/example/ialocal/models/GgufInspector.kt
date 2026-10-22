@@ -31,6 +31,8 @@ class GgufInspector {
         val expertBytes: Long = 0L,
         /** Largest layer's expert weights: space needed while a prompt batch uses many experts. */
         val largestExpertLayerBytes: Long = 0L,
+        val largestSharedLayerBytes: Long = 0L,
+        val blockCount: Int = 0,
     )
 
     fun inspect(file: File): Metadata =
@@ -55,6 +57,7 @@ class GgufInspector {
         var architecture: String? = null
         var sizeLabel: String? = null
         var contextLength: Int? = null
+        var blockCount = 0
         var hasChatTemplate = false
         var alignment = DEFAULT_ALIGNMENT
 
@@ -67,7 +70,7 @@ class GgufInspector {
                 key == "general.size_label" ||
                 key == "tokenizer.chat_template" ||
                 key == "general.alignment" ||
-                key.endsWith(".context_length")
+                key.endsWith(".context_length") || key.endsWith(".block_count")
             val value = readValue(input, type, wanted)
 
             when (key) {
@@ -76,7 +79,9 @@ class GgufInspector {
                 "general.size_label" -> sizeLabel = value?.toString()
                 "tokenizer.chat_template" -> hasChatTemplate = (value as? String)?.isNotBlank() == true
                 "general.alignment" -> alignment = (value as? Number)?.toLong()?.takeIf { it > 0 } ?: alignment
-                else -> if (key.endsWith(".context_length")) {
+                else -> if (key.endsWith(".block_count")) {
+                    blockCount = (value as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
+                } else if (key.endsWith(".context_length")) {
                     contextLength = when (value) {
                         is Number -> value.toInt()
                         else -> null
@@ -101,6 +106,8 @@ class GgufInspector {
             onDemandBytes = tensorBytes.onDemand,
             expertBytes = tensorBytes.experts,
             largestExpertLayerBytes = tensorBytes.largestExpertLayer,
+            largestSharedLayerBytes = tensorBytes.largestSharedLayer,
+            blockCount = blockCount,
         )
     }
 
@@ -108,6 +115,7 @@ class GgufInspector {
         val onDemand: Long = 0L,
         val experts: Long = 0L,
         val largestExpertLayer: Long = 0L,
+        val largestSharedLayer: Long = 0L,
     )
 
     /**
@@ -120,6 +128,7 @@ class GgufInspector {
         val onDemand = ArrayList<Int>()
         val experts = ArrayList<Int>()
         val expertLayers = HashMap<Int, Int>()
+        val sharedLayers = HashMap<Int, Int>()
         for (index in 0 until tensorCount.toInt()) {
             val name = readString(input, 64 * 1024)
             val dimensions = readU32(input)
@@ -132,9 +141,11 @@ class GgufInspector {
                 experts += index
                 // Unknown layer names share a conservative bucket instead of disappearing.
                 expertLayers[index] = EXPERT_LAYER.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+            } else if (name !in ON_DEMAND_TENSORS) {
+                EXPERT_LAYER.find(name)?.groupValues?.get(1)?.toIntOrNull()?.let { sharedLayers[index] = it }
             }
         }
-        if (onDemand.isEmpty() && experts.isEmpty()) return TensorBytes()
+        if (onDemand.isEmpty() && experts.isEmpty() && sharedLayers.isEmpty()) return TensorBytes()
         val dataStart = (input.count + alignment - 1) / alignment * alignment
         val dataEnd = totalBytes?.minus(dataStart)
         val sorted = offsets.sortedArray()
@@ -156,10 +167,15 @@ class GgufInspector {
             val layer = expertLayers.getValue(index)
             bytesByLayer[layer] = bytesByLayer.getOrDefault(layer, 0L) + sizeOf(index)
         }
+        val sharedBytesByLayer = HashMap<Int, Long>()
+        for ((index, layer) in sharedLayers) {
+            sharedBytesByLayer[layer] = sharedBytesByLayer.getOrDefault(layer, 0L) + sizeOf(index)
+        }
         return TensorBytes(
             onDemand = onDemand.sumOf { sizeOf(it) },
             experts = bytesByLayer.values.sum(),
             largestExpertLayer = bytesByLayer.values.maxOrNull() ?: 0L,
+            largestSharedLayer = sharedBytesByLayer.values.maxOrNull() ?: 0L,
         )
     }
 

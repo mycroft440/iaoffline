@@ -48,6 +48,9 @@ jobs:
             "cmake;3.31.6"
           sdkmanager --list_installed
 
+      - name: Vulkan shader compiler and headers
+        run: sudo apt-get update && sudo apt-get install -y glslc libvulkan-dev spirv-headers
+
       - name: Build llama.cpp Android binding
         env:
           LLAMA_CPP_TAG: v0.7.0
@@ -58,6 +61,17 @@ jobs:
 
       - name: Test MoE prefetch cancellation
         run: python3 scripts/test_moe_prefetch.py
+
+      - name: Test expert cache correctness
+        run: |
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -pthread scripts/native/test-moe-cache.cpp -o /tmp/test-moe-cache
+          /tmp/test-moe-cache
+
+      - name: Test cached CPU kernels against original quantized weights
+        run: |
+          cmake -S scripts/native -B /tmp/moe-kernel -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/moe-kernel -j 2 --target test-moe-kernel
+          /tmp/moe-kernel/test-moe-kernel
 
       - name: Unit tests + lint + debug build
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --stacktrace --info

@@ -9,6 +9,36 @@ class RuntimeLimitsTest {
     private val gb = 1024L * 1024L * 1024L
 
     @Test
+    fun optionalCopiesFitBesideMappedExpertsAndNeverUseUnavailableRam() {
+        val memory = memory(11.0, 7.0)
+        val fixed = 2 * gb
+        val plan = RuntimeLimits.planMemory(12 * gb, memory, 10 * gb, 0, gb / 2)
+        val extra = RuntimeLimits.performanceBudget(plan, memory, fixed, gb / 8, PerformanceProfile.GPU, 0)
+        assertTrue(extra.gpuLayers in 1..4)
+        assertTrue(extra.cacheBytes in 0..(gb / 2))
+        val peak = fixed + plan.kvBudgetBytes + RuntimeLimits.WORKING_MEMORY_BYTES + plan.expertWorkingSetBytes +
+            extra.cacheBytes + extra.gpuLayers * gb / 8 + gb / 4
+        assertTrue(peak <= minOf(plan.budgetBytes, memory.availableBytes - RuntimeLimits.AI_MARGIN_BYTES))
+        val pressured = memory.copy(availableBytes = 2 * gb)
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(plan, pressured, fixed, gb / 8, PerformanceProfile.GPU, 0))
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(plan, memory, fixed, gb / 8, PerformanceProfile.GPU, 1))
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(plan, memory, fixed, gb / 8, PerformanceProfile.CPU, 0))
+    }
+
+    @Test
+    fun cacheCountsTheRepackPeakAndGpuNeedsKnownSharedLayerSizes() {
+        val memory = memory(11.0, 7.0)
+        val plan = RuntimeLimits.planMemory(12 * gb, memory, 10 * gb, 0, gb / 2).copy(lowMemory = false)
+        val cached = RuntimeLimits.performanceBudget(plan, memory, 2 * gb, 0, PerformanceProfile.CACHE, 0)
+        val available = minOf(plan.budgetBytes, memory.availableBytes - RuntimeLimits.AI_MARGIN_BYTES)
+        val spare = available - 4 * gb - plan.kvBudgetBytes - RuntimeLimits.WORKING_MEMORY_BYTES - plan.expertWorkingSetBytes
+        assertEquals(minOf(spare.coerceAtLeast(0) / 2, gb / 2), cached.cacheBytes)
+        assertEquals(0, RuntimeLimits.performanceBudget(plan, memory, 2 * gb, 0, PerformanceProfile.GPU, 0).gpuLayers)
+        val dense = plan.copy(streamsExperts = false)
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(dense, memory, 2 * gb, gb / 8, PerformanceProfile.CACHE, 0))
+    }
+
+    @Test
     fun eightBillionModelOnTwelveGigabytePhoneUsesLowMemoryMode() {
         // S22 Ultra reports ~11 GB total; an 8B Q4_K_M file is ~4.9 GB.
         assertTrue(RuntimeLimits.needsLowMemoryMode(modelBytes = 49 * gb / 10, deviceTotalMemory = 11 * gb))

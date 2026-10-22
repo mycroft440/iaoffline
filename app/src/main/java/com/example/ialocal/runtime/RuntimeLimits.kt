@@ -148,6 +148,37 @@ object RuntimeLimits {
         )
     }
 
+    data class PerformanceBudget(val cacheBytes: Long = 0, val gpuLayers: Int = 0)
+
+    /** Extra copies must fit beside the mapped working set, including the repack peak.
+     * Use memory available NOW; optional accelerators never rely on killing other apps. */
+    fun performanceBudget(
+        plan: MemoryPlan,
+        memory: MemorySnapshot,
+        fixedBytes: Long,
+        largestSharedLayerBytes: Long,
+        profile: PerformanceProfile,
+        safeLevel: Int,
+    ): PerformanceBudget {
+        if (!plan.fits || !plan.streamsExperts || safeLevel > 0 || profile == PerformanceProfile.CPU) {
+            return PerformanceBudget()
+        }
+        val budget = minOf(plan.budgetBytes, (memory.availableBytes - AI_MARGIN_BYTES).coerceAtLeast(0))
+        // GPU profiles disable CPU repacking; count its transfer copy separately below.
+        val fixedPeak = fixedBytes * if (plan.lowMemory || profile == PerformanceProfile.GPU) 1 else 2
+        var spare = (budget - fixedPeak - plan.kvBudgetBytes - WORKING_MEMORY_BYTES - plan.expertWorkingSetBytes)
+            .coerceAtLeast(0)
+        var layers = 0
+        if (profile == PerformanceProfile.GPU && largestSharedLayerBytes > 0) {
+            val gpuBuffers = 256L * 1024 * 1024
+            layers = ((spare - gpuBuffers).coerceAtLeast(0) / largestSharedLayerBytes).coerceAtMost(4).toInt()
+            if (layers > 0) spare -= gpuBuffers + layers * largestSharedLayerBytes
+        }
+        // Keep half the headroom for the file cache and transient memory pressure.
+        val cache = (spare / 2).coerceAtMost(512L * 1024 * 1024)
+        return PerformanceBudget(cacheBytes = cache, gpuLayers = layers)
+    }
+
     /**
      * Context memory for a model that already made the app close for lack of memory
      * ([ModelCrashGuard]): half after the first time, the minimum (a 2K context) after that.

@@ -1691,6 +1691,13 @@ path.write_text(text)
 print("Applied IA Offline model-loader patch")
 PY
 
+# Only headers are copied, never host libraries or system C/C++ headers.
+mkdir -p "${ROOT_DIR}/third_party/vulkan-include"
+for headers in vulkan vk_video spirv; do
+  cp -R "/usr/include/${headers}" "${ROOT_DIR}/third_party/vulkan-include/"
+done
+python3 "${ROOT_DIR}/scripts/patch_moe_performance.py" "${LLAMA_DIR}"
+
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
 chmod +x ./gradlew
 ./gradlew :lib:assembleRelease --no-daemon

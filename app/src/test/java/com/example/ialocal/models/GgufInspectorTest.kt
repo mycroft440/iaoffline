@@ -13,6 +13,23 @@ class GgufInspectorTest {
     private val inspector = GgufInspector()
 
     @Test
+    fun sharedGpuLayerBudgetExcludesExpertsAndGlobalEmbeddings() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3); u64(6); u64(0)
+            tensor("token_embd.weight", 0)
+            tensor("blk.0.attn_q.weight", 4096)
+            tensor("blk.0.ffn_up_exps.weight", 5120)
+            tensor("blk.0.ffn_up_shexp.weight", 9216)
+            tensor("blk.1.attn_q.weight", 11264)
+            tensor("output.weight", 15360)
+        }.toByteArray()
+        val metadata = inspector.inspect(ByteArrayInputStream(bytes))
+        assertEquals(4096L, metadata.largestSharedLayerBytes)
+        assertEquals(4096L, metadata.expertBytes)
+    }
+
+    @Test
     fun readsCoreMetadataWithoutTensorPayload() {
         val bytes = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))

@@ -664,6 +664,7 @@ private fun LocalAiApp(
                 privacyOptionsRequired = adsManager.privacyOptionsRequired,
                 onPrivacyOptions = onPrivacyOptions,
                 wikipediaSummary = wikipediaSummary(wikipediaStates),
+                onOpenPerformance = { navController.navigate("performance") },
                 onOpenAppearance = { navController.navigate("appearance") },
                 onOpenAiProfiles = { navController.navigate("ai-profiles") },
                 onOpenStorageScan = { navController.navigate("storage-scan") },
@@ -672,6 +673,17 @@ private fun LocalAiApp(
                 adsEnabled = adsManager.adsReady,
                 onBack = { navController.popBackStack() },
             )
+        }
+
+        composable("performance") {
+            val vm: com.example.ialocal.ui.settings.PerformanceViewModel = viewModel(
+                factory = com.example.ialocal.ui.settings.PerformanceViewModel.Factory(
+                    androidx.compose.ui.platform.LocalContext.current,
+                    container.modelRepository,
+                    container.modelRuntime,
+                ),
+            )
+            com.example.ialocal.ui.settings.PerformanceScreen(vm, onBack = { navController.popBackStack() })
         }
 
         composable("appearance") {

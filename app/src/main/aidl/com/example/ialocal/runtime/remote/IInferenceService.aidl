@@ -27,6 +27,8 @@ interface IInferenceService {
 
     void cancel(String requestId);
 
+    String benchmark(String modelJson, int safeLevel, String profile);
+
     void unload();
 
     boolean releaseIfIdle();

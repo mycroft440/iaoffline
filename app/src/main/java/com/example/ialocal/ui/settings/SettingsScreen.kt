@@ -51,6 +51,7 @@ fun SettingsScreen(
     privacyOptionsRequired: Boolean,
     onPrivacyOptions: () -> Unit,
     wikipediaSummary: String,
+    onOpenPerformance: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenAiProfiles: () -> Unit,
     onOpenStorageScan: () -> Unit,
@@ -91,6 +92,14 @@ fun SettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item {
+                SettingsEntry(
+                    icon = Icons.Default.Psychology,
+                    title = "Desempenho no aparelho",
+                    summary = "Compare quantizações, cache de especialistas e GPU",
+                    onClick = onOpenPerformance,
+                )
+            }
             item {
                 SettingsEntry(
                     icon = Icons.Default.Palette,

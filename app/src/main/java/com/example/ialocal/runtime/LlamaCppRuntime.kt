@@ -42,6 +42,7 @@ class LlamaCppRuntime(
     private val promptBuilder: PromptContextBuilder = PromptContextBuilder(),
     /** Memory level for a model after crashes, decided by the app ([ModelCrashGuard]). */
     private val safeLevelOf: (modelId: String) -> Int = { 0 },
+    private val performanceProfileOf: (String) -> PerformanceProfile = { PerformanceProfile.CACHE },
 ) : ModelRuntime {
     private val appContext = context.applicationContext
     private val mutex = Mutex()
@@ -51,6 +52,8 @@ class LlamaCppRuntime(
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
     private var loadedModelId: String? = null
+    private var loadedProfile: PerformanceProfile? = null
+    private var benchmarkProfile: PerformanceProfile? = null
     /** Context the native side allocated for the loaded model. */
     private var loadedContextTokens = RuntimeLimits.MIN_CONTEXT_TOKENS
     /** The conversation the native context holds, if the last answer ended normally. */
@@ -69,6 +72,50 @@ class LlamaCppRuntime(
     private val background = CoroutineScope(SupervisorJob() + nativeDispatcher)
 
     private data class Primed(val modelId: String, val key: String, val history: List<AiChatMessage>)
+
+    override suspend fun benchmark(model: AiModelEntity, profile: PerformanceProfile): String = withContext(nativeDispatcher) {
+        requests.incrementAndGet()
+        mutex.withLock {
+            busyWith = "teste de desempenho"
+            try {
+                unloadLocked()
+                benchmarkProfile = profile
+                val power = appContext.getSystemService(android.os.PowerManager::class.java)
+                val thermalBefore = power?.currentThermalStatus ?: -1
+                val started = android.os.SystemClock.elapsedRealtime()
+                ensureLoaded(model)
+                val loadMs = android.os.SystemClock.elapsedRealtime() - started
+                _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
+                // VmHWM covers the AI process lifetime; report sampled RSS for this run instead.
+                val peak = java.util.concurrent.atomic.AtomicLong(DeviceMemory.read(appContext).appBytes)
+                kotlinx.coroutines.coroutineScope {
+                    val sampling = launch(Dispatchers.Default) {
+                        while (true) {
+                            peak.updateAndGet { maxOf(it, DeviceMemory.read(appContext).appBytes) }
+                            kotlinx.coroutines.delay(100)
+                        }
+                    }
+                    try {
+                        val report = org.json.JSONObject(engine.bench(128, 64, 1, 3))
+                        require(!report.has("error")) { report.optString("error") }
+                        report.put("profile", profile.name).put("modelId", model.id).put("modelName", model.name)
+                            .put("modelBytes", model.sizeBytes).put("loadMs", loadMs)
+                            .put("contextTokens", loadedContextTokens)
+                            .put("gpuLayers", Os.getenv("IAOFFLINE_GPU_LAYERS")?.toIntOrNull() ?: 0)
+                            .put("peakRssBytes", maxOf(peak.get(), DeviceMemory.read(appContext).appBytes))
+                            .put("thermalBefore", thermalBefore).put("thermalAfter", power?.currentThermalStatus ?: -1)
+                            .put("timestamp", System.currentTimeMillis()).toString()
+                    } finally {
+                        sampling.cancel()
+                    }
+                }
+            } finally {
+                benchmarkProfile = null
+                unloadLocked()
+                busyWith = null
+            }
+        }
+    }
 
     override suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill?) = withContext(nativeDispatcher) {
         val ticket = requests.incrementAndGet()
@@ -431,7 +478,8 @@ class LlamaCppRuntime(
      */
     private suspend fun ensureLoaded(model: AiModelEntity, onStage: (GenerationStage) -> Unit = {}) {
         awaitEngineInitialized(onStage)
-        if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
+        val profile = benchmarkProfile ?: performanceProfileOf(model.id)
+        if (loadedModelId == model.id && loadedProfile == profile && engine.state.value is InferenceEngine.State.ModelReady) {
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             return
         }
@@ -461,7 +509,11 @@ class LlamaCppRuntime(
             logger?.error("MODEL_LOAD", message)
             throw IllegalStateException(message)
         }
-        val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
+        val performance = RuntimeLimits.performanceBudget(
+            plan, memory, (modelBytes - (layout?.expertBytes ?: 0L)).coerceAtLeast(0),
+            layout?.largestSharedLayerBytes ?: 0L, profile, safeLevel,
+        )
+        val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture) || profile == PerformanceProfile.GPU
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, experts read from storage for a mixture of experts that does not fit
@@ -474,7 +526,9 @@ class LlamaCppRuntime(
             else Os.setenv(EFFICIENCY_CPUS_ENV, CpuCores.encode(efficiency), true)
             Os.setenv(LOW_MEMORY_ENV, if (lowMemory) "1" else "0", true)
             Os.setenv(MOE_STREAM_ENV, if (plan.streamsExperts) "1" else "0", true)
-            Os.setenv(CONTEXT_TOKENS_ENV, RuntimeLimits.MAX_CONTEXT_TOKENS.toString(), true)
+            Os.setenv(CONTEXT_TOKENS_ENV, (if (benchmarkProfile != null) 2048 else RuntimeLimits.MAX_CONTEXT_TOKENS).toString(), true)
+            Os.setenv("IAOFFLINE_EXPERT_CACHE_MB", (performance.cacheBytes / MB).toString(), true)
+            Os.setenv("IAOFFLINE_GPU_LAYERS", minOf(performance.gpuLayers, layout?.blockCount ?: 0).toString(), true)
             Os.setenv(KV_BUDGET_ENV, kvBudgetMb.toString(), true)
             Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
             Os.unsetenv(ACTIVE_CONTEXT_ENV)
@@ -511,6 +565,7 @@ class LlamaCppRuntime(
                 },
             )
             loadedModelId = model.id
+            loadedProfile = profile
             session = null
             primed = null
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
