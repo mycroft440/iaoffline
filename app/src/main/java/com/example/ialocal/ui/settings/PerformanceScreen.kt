@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ialocal.runtime.PerformanceProfile
+import com.example.ialocal.runtime.BenchmarkConsistency
 import java.util.Locale
 import org.json.JSONObject
 
@@ -43,6 +44,13 @@ fun PerformanceScreen(viewModel: PerformanceViewModel, onBack: () -> Unit) {
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(view, progress != null) {
+        val previous = view.keepScreenOn
+        if (progress != null) view.keepScreenOn = true
+        onDispose { view.keepScreenOn = previous }
+    }
+    androidx.activity.compose.BackHandler(enabled = progress != null) { viewModel.stop() }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     Scaffold(topBar = {
         TopAppBar(title = { Text("Desempenho no aparelho") }, navigationIcon = {
@@ -52,7 +60,7 @@ fun PerformanceScreen(viewModel: PerformanceViewModel, onBack: () -> Unit) {
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text("Compare os modelos e quantizações já instalados. Cada perfil lê 128 tokens e calcula mais 64, três vezes, com o mesmo texto e contexto de 2.048 tokens.")
+                Text("Compare os modelos e quantizações já instalados. Cada perfil lê 128 tokens e calcula mais 64, três vezes, com o mesmo texto e contexto solicitado de 2.048 tokens.")
                 Text("O teste mede o motor com uma continuação fixa. Não mede a qualidade das respostas. O cache de arquivos do Android pode favorecer testes posteriores; repita a comparação com o aparelho frio.",
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
@@ -95,9 +103,12 @@ fun PerformanceScreen(viewModel: PerformanceViewModel, onBack: () -> Unit) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(report.optString("modelName"), style = MaterialTheme.typography.titleSmall)
                         Text(profile.label)
+                        Text(java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                            .format(java.util.Date(report.optLong("timestamp"))), style = MaterialTheme.typography.bodySmall)
                         if (report.has("error")) {
                             Text(report.optString("error"))
                         } else {
+                            Text("Arquivo: ${decimal(report.optLong("modelBytes") / 1e9)} GB", style = MaterialTheme.typography.bodySmall)
                             val runs = report.getJSONArray("runs")
                             val first = runs.getJSONObject(0)
                             val warm = (1 until runs.length()).map { runs.getJSONObject(it) }
@@ -116,7 +127,15 @@ fun PerformanceScreen(viewModel: PerformanceViewModel, onBack: () -> Unit) {
                             Text("Temperatura do sistema: ${thermal(report.optInt("thermalBefore", -1))} → ${thermal(report.optInt("thermalAfter", -1))}")
                             Text(if (actualGpu) "Vulkan · ${report.optInt("gpuLayers")} camadas parciais" else if (profile == PerformanceProfile.GPU) "GPU indisponível ou sem margem de RAM; teste executado em CPU" else "CPU")
                             Text("Contexto real: ${report.optInt("contextTokens")} tokens · carregamento: ${decimal(report.optLong("loadMs") / 1000.0)} s", style = MaterialTheme.typography.bodySmall)
-                            OutlinedButton(enabled = progress == null && models.any { it.id == modelId } && (profile != PerformanceProfile.GPU || actualGpu),
+                            if (profile == PerformanceProfile.GPU && actualGpu) {
+                                Text(if (report.has("cpuAgreementPercent"))
+                                    "Tokens mais prováveis iguais à CPU: ${report.getInt("cpuAgreementPercent")}% (checagem básica)"
+                                else "Aguardando comparação com a CPU no mesmo contexto")
+                                if (report.has("cpuAgreementPercent") && !BenchmarkConsistency.canApplyGpu(report)) {
+                                    Text("Diferença acima do limite do teste; mantenha a CPU.")
+                                }
+                            }
+                            OutlinedButton(enabled = progress == null && models.any { it.id == modelId } && (profile != PerformanceProfile.GPU || BenchmarkConsistency.canApplyGpu(report)),
                                 onClick = { viewModel.apply(modelId, profile) }) { Text("Usar este perfil") }
                         }
                     }

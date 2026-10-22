@@ -57,7 +57,7 @@ class GgufInspector {
         var architecture: String? = null
         var sizeLabel: String? = null
         var contextLength: Int? = null
-        var blockCount = 0
+        val blockCounts = HashMap<String, Int>()
         var hasChatTemplate = false
         var alignment = DEFAULT_ALIGNMENT
 
@@ -80,7 +80,7 @@ class GgufInspector {
                 "tokenizer.chat_template" -> hasChatTemplate = (value as? String)?.isNotBlank() == true
                 "general.alignment" -> alignment = (value as? Number)?.toLong()?.takeIf { it > 0 } ?: alignment
                 else -> if (key.endsWith(".block_count")) {
-                    blockCount = (value as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
+                    blockCounts[key] = (value as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
                 } else if (key.endsWith(".context_length")) {
                     contextLength = when (value) {
                         is Number -> value.toInt()
@@ -107,7 +107,7 @@ class GgufInspector {
             expertBytes = tensorBytes.experts,
             largestExpertLayerBytes = tensorBytes.largestExpertLayer,
             largestSharedLayerBytes = tensorBytes.largestSharedLayer,
-            blockCount = blockCount,
+            blockCount = blockCounts["$architecture.block_count"] ?: 0,
         )
     }
 

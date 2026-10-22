@@ -38,11 +38,22 @@
         const auto io_start = read_bytes();
         const auto faults_start = faults();
         const auto cache_start = g_expert_cache.stats();
+        std::vector<int> top_tokens;
+        const int vocabulary = llama_vocab_n_tokens(llama_model_get_vocab(g_model));
         start = ggml_time_us();
         for (int i = 0; i < tg; ++i) {
             batch.clear();
             batch.add(tokens[pp + i], pp + i, 0, true);
             if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) { failed = true; break; }
+            const float *logits = llama_get_logits_ith(g_context, -1);
+            int top = -1;
+            float best = -INFINITY;
+            for (int id = 0; id < vocabulary; ++id) {
+                if (std::isnan(logits[id]) || logits[id] == INFINITY) { failed = true; break; }
+                if (logits[id] > best) { best = logits[id]; top = id; }
+            }
+            if (failed || top < 0) { failed = true; break; }
+            top_tokens.push_back(top);
         }
         const auto decode_us = ggml_time_us() - start;
         const auto io_end = read_bytes();
@@ -56,7 +67,9 @@
                << ",\"cacheBytes\":" << cache.bytes << ",\"cacheCapacity\":" << cache.capacity
                << ",\"cacheRequested\":" << cache.requested - cache_start.requested
                << ",\"cacheHits\":" << cache.hits - cache_start.hits
-               << ",\"cacheCopied\":" << cache.copied - cache_start.copied << '}';
+               << ",\"cacheCopied\":" << cache.copied - cache_start.copied << ",\"topTokens\":[";
+        for (size_t i = 0; i < top_tokens.size(); ++i) { if (i) report << ','; report << top_tokens[i]; }
+        report << "]}";
     }
     llama_memory_clear(llama_get_memory(g_context), false);
     if (failed) return env->NewStringUTF("{\"error\":\"Decode failed; incomplete samples discarded\"}");

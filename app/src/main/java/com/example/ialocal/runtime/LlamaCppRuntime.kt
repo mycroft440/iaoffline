@@ -552,7 +552,15 @@ class LlamaCppRuntime(
         )
         onStage(GenerationStage(GenerationStage.Kind.LOADING_MODEL, model.name, total = (fileBytes / MB).toInt()))
         try {
-            engine.loadModel(model.filePath)
+            try {
+                engine.loadModel(model.filePath)
+            } catch (failure: Exception) {
+                if (profile != PerformanceProfile.GPU || performance.gpuLayers == 0) throw failure
+                // Includes recoverable GPU context/KV failures, not just weight allocation.
+                engine.cleanUp()
+                Os.setenv("IAOFFLINE_GPU_LAYERS", "0", true)
+                engine.loadModel(model.filePath)
+            }
             loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
                 ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
             val threads = runCatching { Os.getenv(ACTIVE_THREADS_ENV) }.getOrNull()

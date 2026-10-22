@@ -13,6 +13,18 @@ class GgufInspectorTest {
     private val inspector = GgufInspector()
 
     @Test
+    fun gpuLayerCountUsesTheLanguageArchitectureNotVisionMetadata() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3); u64(0); u64(3)
+            kvString("general.architecture", "gemma4")
+            kvU32("gemma4.block_count", 2)
+            kvU32("clip.vision.block_count", 64)
+        }.toByteArray()
+        assertEquals(2, inspector.inspect(ByteArrayInputStream(bytes)).blockCount)
+    }
+
+    @Test
     fun sharedGpuLayerBudgetExcludesExpertsAndGlobalEmbeddings() {
         val bytes = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))

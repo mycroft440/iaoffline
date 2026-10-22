@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.models.ModelRepository
+import com.example.ialocal.runtime.BenchmarkConsistency
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.PerformanceProfile
 import com.example.ialocal.runtime.RuntimeStatus
@@ -60,11 +61,15 @@ class PerformanceViewModel(
                 val sequence = prefs.getInt("sequence", 0)
                 prefs.edit().putInt("sequence", (sequence + 1) % 3).apply()
                 for (model in selected) {
+                    val group = java.util.UUID.randomUUID().toString()
+                    val completed = mutableListOf<JSONObject>()
                     val order = PerformanceProfile.entries.let { it.drop(sequence) + it.take(sequence) }
                     for (profile in order) {
                         _progress.value = "${model.name} · ${profile.label} · 3 passagens"
                         try {
                             val report = JSONObject(runtime.benchmark(model, profile))
+                            report.put("group", group)
+                            completed += report
                             save(report.toString())
                         } catch (cancel: CancellationException) {
                             throw cancel
@@ -78,6 +83,13 @@ class PerformanceViewModel(
                             return@launch
                         }
                     }
+                    completed.firstOrNull { it.optString("profile") == "CPU" }?.let { reference ->
+                        completed.forEach { report ->
+                            BenchmarkConsistency.agreement(reference, report)?.let { report.put("cpuAgreementPercent", it) }
+                        }
+                        _reports.value = _reports.value.filterNot { JSONObject(it).optString("group") == group }
+                        completed.forEach { save(it.toString()) }
+                    }
                 }
                 _message.value = "Comparação concluída. Escolha um perfil pelos resultados; a qualidade deve ser avaliada nas suas conversas."
             } finally {
@@ -88,7 +100,7 @@ class PerformanceViewModel(
     }
 
     fun stop() {
-        if (job?.isActive != true) return
+        if (_progress.value == null) return
         runtime.interruptNativeWork()
         job?.cancel()
         _message.value = "Teste cancelado."
@@ -96,6 +108,13 @@ class PerformanceViewModel(
 
     fun apply(modelId: String, profile: PerformanceProfile) {
         if (_progress.value != null) return
+        if (profile == PerformanceProfile.GPU && _reports.value.none { raw ->
+            val report = JSONObject(raw)
+            report.optString("modelId") == modelId && BenchmarkConsistency.canApplyGpu(report)
+        }) {
+            _message.value = "Conclua uma comparação válida entre GPU e CPU antes de aplicar o perfil."
+            return
+        }
         runtime.setPerformanceProfile(modelId, profile)
         _profiles.value = _profiles.value + (modelId to profile)
         _message.value = "Perfil salvo. Será usado no próximo carregamento do modelo."

@@ -51,6 +51,17 @@ int main() {
     cache.reset(512);
     for (int i = 0; i < 2100; ++i) use(a);
     assert(cache.stats().bytes <= 512);
+    cache.reset(512);
+    cache.begin_layer(true); cache.select(a.data(), a.size());
+    cache.begin_layer(true); cache.select(a.data(), a.size());
+    std::array<const void *, 8> pointers{};
+    readers.clear();
+    for (size_t t = 0; t < pointers.size(); ++t) readers.emplace_back([&, t] {
+        pointers[t] = cache.resolve(a.data(), a.size());
+    });
+    for (auto &thread : readers) thread.join();
+    for (auto *p : pointers) assert(p == pointers[0] && p != a.data());
+    assert(cache.stats().copied == a.size()); // one allocation/copy under concurrent admission
     iaoffline::PrefetchConfidence good, bad;
     for (int i = 0; i < 16; ++i) { good.observe(8, 7); bad.observe(8, 3); }
     assert(good.enabled && !bad.enabled);

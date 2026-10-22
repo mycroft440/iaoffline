@@ -68,7 +68,12 @@ class RemoteModelRuntime(
     private fun modelJson(model: AiModelEntity) = RemoteProtocol.encodeModel(model, performanceProfile(model.id).name)
 
     override suspend fun benchmark(model: AiModelEntity, profile: PerformanceProfile): String = withContext(Dispatchers.IO) {
-        call(model, ModelCrashGuard.Phase.LOAD) { it.benchmark(modelJson(model), safeLevel(model), profile.name) }
+        try {
+            call(model, ModelCrashGuard.Phase.LOAD) { it.benchmark(modelJson(model), safeLevel(model), profile.name) }
+        } catch (cancel: CancellationException) {
+            interruptNativeWork()
+            throw cancel
+        }
     }
 
     private val bindLock = Mutex()
