@@ -72,6 +72,13 @@ interface ModelRuntime {
         turn: TurnOptions = TurnOptions(),
     ): String
 
+    /** Fixed-text benchmark; returns small JSON metrics, with the model freed afterwards. */
+    suspend fun benchmark(model: AiModelEntity, profile: PerformanceProfile): String =
+        error("Teste de desempenho indisponível neste motor.")
+
+    fun performanceProfile(modelId: String): PerformanceProfile = PerformanceProfile.CACHE
+    fun setPerformanceProfile(modelId: String, profile: PerformanceProfile) {}
+
     suspend fun unload()
 
     /** Stops blocking native preparation when the user explicitly cancels a chat request. */

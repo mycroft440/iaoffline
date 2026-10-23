@@ -13,6 +13,35 @@ class GgufInspectorTest {
     private val inspector = GgufInspector()
 
     @Test
+    fun gpuLayerCountUsesTheLanguageArchitectureNotVisionMetadata() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3); u64(0); u64(3)
+            kvString("general.architecture", "gemma4")
+            kvU32("gemma4.block_count", 2)
+            kvU32("clip.vision.block_count", 64)
+        }.toByteArray()
+        assertEquals(2, inspector.inspect(ByteArrayInputStream(bytes)).blockCount)
+    }
+
+    @Test
+    fun sharedGpuLayerBudgetExcludesExpertsAndGlobalEmbeddings() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3); u64(6); u64(0)
+            tensor("token_embd.weight", 0)
+            tensor("blk.0.attn_q.weight", 4096)
+            tensor("blk.0.ffn_up_exps.weight", 5120)
+            tensor("blk.0.ffn_up_shexp.weight", 9216)
+            tensor("blk.1.attn_q.weight", 11264)
+            tensor("output.weight", 15360)
+        }.toByteArray()
+        val metadata = inspector.inspect(ByteArrayInputStream(bytes))
+        assertEquals(4096L, metadata.largestSharedLayerBytes)
+        assertEquals(4096L, metadata.expertBytes)
+    }
+
+    @Test
     fun readsCoreMetadataWithoutTensorPayload() {
         val bytes = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
@@ -35,6 +64,40 @@ class GgufInspectorTest {
         assertEquals("1.5B", metadata.sizeLabel)
         assertEquals(32768, metadata.contextLength)
         assertTrue(metadata.hasChatTemplate)
+    }
+
+    @Test
+    fun skipsTokenizerStringsBeforeReadingModelMetadata() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(2)
+            string("tokenizer.ggml.tokens")
+            u32(9) // array
+            u32(8) // strings
+            u64(20_000)
+            repeat(20_000) { string("token-$it") }
+            kvString("general.architecture", "qwen3moe")
+        }.toByteArray()
+        val metadata = inspector.inspect(ByteArrayInputStream(bytes))
+        assertEquals("qwen3moe", metadata.architecture)
+    }
+
+    @Test
+    fun stillReadsPastLargeIgnoredValuesWhenTheStreamCannotSkip() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(2)
+            kvString("ignored.large.value", "x".repeat(1024 * 1024))
+            kvString("general.architecture", "gemma4")
+        }.toByteArray()
+        val stream = object : ByteArrayInputStream(bytes) {
+            override fun skip(n: Long): Long = 0L
+        }
+        assertEquals("gemma4", inspector.inspect(stream).architecture)
     }
 
     @Test
@@ -99,7 +162,26 @@ class GgufInspectorTest {
         val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 9472L)
 
         assertEquals(7168L, metadata.expertBytes)
+        assertEquals(7168L, metadata.largestExpertLayerBytes)
         assertEquals(0L, metadata.onDemandBytes)
+    }
+
+    @Test
+    fun sizesExpertTensorsEvenWhenTensorOffsetsAreNotOrdered() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(4)
+            u64(0)
+            tensor("blk.0.ffn_down_exps.weight", offset = 4096)
+            tensor("blk.0.attn_q.weight", offset = 0)
+            tensor("blk.0.ffn_up_exps.weight", offset = 1024)
+            tensor("blk.0.ffn_gate_inp.weight", offset = 8192)
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 8448L)
+        // 4096 bytes from 4096 to 8192, plus 3072 bytes from 1024 to 4096.
+        assertEquals(7168L, metadata.expertBytes)
     }
 
     @Test
@@ -113,6 +195,28 @@ class GgufInspectorTest {
             tensor("blk.0.ffn_up.weight", offset = 1024)
         }.toByteArray()
         assertEquals(0L, inspector.inspect(ByteArrayInputStream(bytes), totalBytes = 4096L).expertBytes)
+    }
+
+    @Test
+    fun reservesTheLargestExpertLayerIncludingCombinedGateUpWeights() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(6)
+            u64(0)
+            // Tensor table order need not match either layer order or data offsets.
+            tensor("blk.1.ffn_down_exps.weight", offset = 8192)
+            tensor("blk.0.ffn_up_exps.weight", offset = 1024)
+            tensor("token_embd.weight", offset = 0)
+            tensor("blk.1.ffn_gate_up_exps.weight", offset = 4096)
+            tensor("blk.0.ffn_down_exps.weight", offset = 2048)
+            tensor("blk.1.ffn_gate_inp.weight", offset = 10240)
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 11264L)
+
+        assertEquals(9216L, metadata.expertBytes)
+        assertEquals(6144L, metadata.largestExpertLayerBytes)
     }
 
     /** Runs on the real Gemma 4 26B-A4B GGUF of the catalog when IAOFFLINE_GEMMA4_MOE_FILE points to it. */

@@ -29,6 +29,7 @@ class RemoteProtocolTest {
         assertEquals(model, RemoteProtocol.decodeModel(RemoteProtocol.encodeModel(model)))
         val full = model.copy(architecture = "gemma4", sizeLabel = "4B", lastError = "x", lastVerifiedAt = 5L)
         assertEquals(full, RemoteProtocol.decodeModel(RemoteProtocol.encodeModel(full)))
+        assertEquals("GPU", RemoteProtocol.decodeProfile(RemoteProtocol.encodeModel(model, "GPU")))
     }
 
     @Test
@@ -46,6 +47,7 @@ class RemoteProtocolTest {
                 systemPromptTail = "\n\nData de hoje no aparelho: sábado.",
             ),
             safeLevel = 1,
+            performanceProfile = "GPU",
         )
         assertEquals(request, RemoteProtocol.decodeRequest(RemoteProtocol.encodeRequest(request)))
     }

@@ -9,6 +9,36 @@ class RuntimeLimitsTest {
     private val gb = 1024L * 1024L * 1024L
 
     @Test
+    fun optionalCopiesFitBesideMappedExpertsAndNeverUseUnavailableRam() {
+        val memory = memory(11.0, 7.0)
+        val fixed = 2 * gb
+        val plan = RuntimeLimits.planMemory(12 * gb, memory, 10 * gb, 0, gb / 2)
+        val extra = RuntimeLimits.performanceBudget(plan, memory, fixed, gb / 8, PerformanceProfile.GPU, 0)
+        assertTrue(extra.gpuLayers in 1..4)
+        assertTrue(extra.cacheBytes in 0..(gb / 2))
+        val peak = fixed + plan.kvBudgetBytes + RuntimeLimits.WORKING_MEMORY_BYTES + plan.expertWorkingSetBytes +
+            extra.cacheBytes + extra.gpuLayers * gb / 8 + gb / 4
+        assertTrue(peak <= minOf(plan.budgetBytes, memory.availableBytes - RuntimeLimits.AI_MARGIN_BYTES))
+        val pressured = memory.copy(availableBytes = 2 * gb)
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(plan, pressured, fixed, gb / 8, PerformanceProfile.GPU, 0))
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(plan, memory, fixed, gb / 8, PerformanceProfile.GPU, 1))
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(plan, memory, fixed, gb / 8, PerformanceProfile.CPU, 0))
+    }
+
+    @Test
+    fun cacheCountsTheRepackPeakAndGpuNeedsKnownSharedLayerSizes() {
+        val memory = memory(11.0, 7.0)
+        val plan = RuntimeLimits.planMemory(12 * gb, memory, 10 * gb, 0, gb / 2).copy(lowMemory = false)
+        val cached = RuntimeLimits.performanceBudget(plan, memory, 2 * gb, 0, PerformanceProfile.CACHE, 0)
+        val available = minOf(plan.budgetBytes, memory.availableBytes - RuntimeLimits.AI_MARGIN_BYTES)
+        val spare = available - 4 * gb - plan.kvBudgetBytes - RuntimeLimits.WORKING_MEMORY_BYTES - plan.expertWorkingSetBytes
+        assertEquals(minOf(spare.coerceAtLeast(0) / 2, gb / 2), cached.cacheBytes)
+        assertEquals(0, RuntimeLimits.performanceBudget(plan, memory, 2 * gb, 0, PerformanceProfile.GPU, 0).gpuLayers)
+        val dense = plan.copy(streamsExperts = false)
+        assertEquals(RuntimeLimits.PerformanceBudget(), RuntimeLimits.performanceBudget(dense, memory, 2 * gb, gb / 8, PerformanceProfile.CACHE, 0))
+    }
+
+    @Test
     fun eightBillionModelOnTwelveGigabytePhoneUsesLowMemoryMode() {
         // S22 Ultra reports ~11 GB total; an 8B Q4_K_M file is ~4.9 GB.
         assertTrue(RuntimeLimits.needsLowMemoryMode(modelBytes = 49 * gb / 10, deviceTotalMemory = 11 * gb))
@@ -101,7 +131,42 @@ class RuntimeLimitsTest {
         // The other 2.4 GB fit twice (while repacked), so they are kept in RAM.
         assertFalse(plan.lowMemory)
         assertEquals(RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES, plan.kvBudgetBytes)
-        assertEquals(2_400_000_000L + RuntimeLimits.MIN_KV_BUDGET_BYTES + RuntimeLimits.WORKING_MEMORY_BYTES, plan.minimumBytes)
+        assertEquals(RuntimeLimits.DEFAULT_EXPERT_WORKING_SET_BYTES, plan.expertWorkingSetBytes)
+        assertEquals(
+            2_400_000_000L + plan.expertWorkingSetBytes + RuntimeLimits.MIN_KV_BUDGET_BYTES + RuntimeLimits.WORKING_MEMORY_BYTES,
+            plan.minimumBytes,
+        )
+    }
+
+    @Test
+    fun aStreamingMoeCapsKvToTheMemoryLeftAfterSharedWeights() {
+        // The AI has 4.7 GiB; shared weights, expert pages and buffers leave only 0.3 GiB.
+        val fixedBytes = 34 * gb / 10
+        val plan = RuntimeLimits.planMemory(10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0)
+
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        assertEquals(
+            plan.budgetBytes - fixedBytes - plan.expertWorkingSetBytes - RuntimeLimits.WORKING_MEMORY_BYTES,
+            plan.kvBudgetBytes,
+        )
+        assertTrue(plan.kvBudgetBytes < RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES)
+        assertTrue(plan.kvBudgetBytes >= RuntimeLimits.MIN_KV_BUDGET_BYTES)
+    }
+
+    @Test
+    fun aStreamingMoeAvoidsRepackingWhenActualKvWouldExceedMemory() {
+        // Two copies of the shared weights fit with 256 MiB, but not with 384 MiB.
+        val fixedBytes = 196 * gb / 100
+        val plan = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 10 * gb - fixedBytes, safeLevel = 0,
+            largestExpertLayerBytes = gb / 64,
+        )
+
+        assertTrue(plan.streamsExperts)
+        assertTrue(plan.fits)
+        assertEquals(RuntimeLimits.EXPERIMENTAL_KV_BUDGET_BYTES, plan.kvBudgetBytes)
+        assertTrue(plan.lowMemory)
     }
 
     @Test
@@ -111,6 +176,37 @@ class RuntimeLimitsTest {
         assertTrue(plan.streamsExperts)
         assertTrue(plan.fits)
         assertTrue(plan.lowMemory)
+    }
+
+    @Test
+    fun streamingCannotGiveExpertPageMemoryToTheKvCache() {
+        // The former plan accepted 3.9 GiB of fixed weights in 4.7 GiB, leaving no
+        // room for this model's 512 MiB expert layer after KV and compute buffers.
+        val plan = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 61 * gb / 10, safeLevel = 0,
+            largestExpertLayerBytes = gb / 2,
+        )
+        assertTrue(plan.streamsExperts)
+        assertFalse(plan.fits)
+        assertTrue(plan.minimumBytes > plan.budgetBytes)
+    }
+
+    @Test
+    fun measuredExpertLayersAllowSmallLayersWithoutUnderestimatingLargeOnes() {
+        val small = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 62 * gb / 10, safeLevel = 0,
+            largestExpertLayerBytes = gb / 8,
+        )
+        assertTrue(small.fits)
+        assertEquals(gb / 8, small.expertWorkingSetBytes)
+        assertTrue(38 * gb / 10 + small.expertWorkingSetBytes + small.kvBudgetBytes + RuntimeLimits.WORKING_MEMORY_BYTES <= small.budgetBytes)
+
+        val large = RuntimeLimits.planMemory(
+            10 * gb, memory(8.0, 3.0), expertBytes = 7 * gb, safeLevel = 0,
+            largestExpertLayerBytes = gb,
+        )
+        assertFalse(large.fits)
+        assertEquals(gb, large.expertWorkingSetBytes)
     }
 
     @Test

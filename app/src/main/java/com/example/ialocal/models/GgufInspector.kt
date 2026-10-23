@@ -29,6 +29,10 @@ class GgufInspector {
          * the router picks them; the rest is read for every token.
          */
         val expertBytes: Long = 0L,
+        /** Largest layer's expert weights: space needed while a prompt batch uses many experts. */
+        val largestExpertLayerBytes: Long = 0L,
+        val largestSharedLayerBytes: Long = 0L,
+        val blockCount: Int = 0,
     )
 
     fun inspect(file: File): Metadata =
@@ -53,6 +57,7 @@ class GgufInspector {
         var architecture: String? = null
         var sizeLabel: String? = null
         var contextLength: Int? = null
+        val blockCounts = HashMap<String, Int>()
         var hasChatTemplate = false
         var alignment = DEFAULT_ALIGNMENT
 
@@ -65,7 +70,7 @@ class GgufInspector {
                 key == "general.size_label" ||
                 key == "tokenizer.chat_template" ||
                 key == "general.alignment" ||
-                key.endsWith(".context_length")
+                key.endsWith(".context_length") || key.endsWith(".block_count")
             val value = readValue(input, type, wanted)
 
             when (key) {
@@ -74,7 +79,9 @@ class GgufInspector {
                 "general.size_label" -> sizeLabel = value?.toString()
                 "tokenizer.chat_template" -> hasChatTemplate = (value as? String)?.isNotBlank() == true
                 "general.alignment" -> alignment = (value as? Number)?.toLong()?.takeIf { it > 0 } ?: alignment
-                else -> if (key.endsWith(".context_length")) {
+                else -> if (key.endsWith(".block_count")) {
+                    blockCounts[key] = (value as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
+                } else if (key.endsWith(".context_length")) {
                     contextLength = when (value) {
                         is Number -> value.toInt()
                         else -> null
@@ -98,10 +105,18 @@ class GgufInspector {
             hasChatTemplate = hasChatTemplate,
             onDemandBytes = tensorBytes.onDemand,
             expertBytes = tensorBytes.experts,
+            largestExpertLayerBytes = tensorBytes.largestExpertLayer,
+            largestSharedLayerBytes = tensorBytes.largestSharedLayer,
+            blockCount = blockCounts["$architecture.block_count"] ?: 0,
         )
     }
 
-    private data class TensorBytes(val onDemand: Long = 0L, val experts: Long = 0L)
+    private data class TensorBytes(
+        val onDemand: Long = 0L,
+        val experts: Long = 0L,
+        val largestExpertLayer: Long = 0L,
+        val largestSharedLayer: Long = 0L,
+    )
 
     /**
      * Reads the tensor table that follows the metadata. A tensor's size is the distance to the next
@@ -112,6 +127,8 @@ class GgufInspector {
         val offsets = LongArray(tensorCount.toInt())
         val onDemand = ArrayList<Int>()
         val experts = ArrayList<Int>()
+        val expertLayers = HashMap<Int, Int>()
+        val sharedLayers = HashMap<Int, Int>()
         for (index in 0 until tensorCount.toInt()) {
             val name = readString(input, 64 * 1024)
             val dimensions = readU32(input)
@@ -120,18 +137,46 @@ class GgufInspector {
             readU32(input) // quantization type
             offsets[index] = readU64(input)
             if (name in ON_DEMAND_TENSORS) onDemand += index
-            if (EXPERT_TENSOR.containsMatchIn(name)) experts += index
+            if (EXPERT_TENSOR.containsMatchIn(name)) {
+                experts += index
+                // Unknown layer names share a conservative bucket instead of disappearing.
+                expertLayers[index] = EXPERT_LAYER.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+            } else if (name !in ON_DEMAND_TENSORS) {
+                EXPERT_LAYER.find(name)?.groupValues?.get(1)?.toIntOrNull()?.let { sharedLayers[index] = it }
+            }
         }
-        if (onDemand.isEmpty() && experts.isEmpty()) return TensorBytes()
+        if (onDemand.isEmpty() && experts.isEmpty() && sharedLayers.isEmpty()) return TensorBytes()
         val dataStart = (input.count + alignment - 1) / alignment * alignment
         val dataEnd = totalBytes?.minus(dataStart)
         val sorted = offsets.sortedArray()
         fun sizeOf(index: Int): Long {
             val start = offsets[index]
-            val next = sorted.firstOrNull { it > start } ?: dataEnd ?: start
+            // Upper-bound search avoids scanning the tensor table for every MoE tensor.
+            // Repeated offsets are skipped, as in the original strictly-greater lookup.
+            var lo = 0
+            var hi = sorted.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (sorted[mid] <= start) lo = mid + 1 else hi = mid
+            }
+            val next = sorted.getOrNull(lo) ?: dataEnd ?: start
             return (next - start).coerceAtLeast(0L)
         }
-        return TensorBytes(onDemand = onDemand.sumOf { sizeOf(it) }, experts = experts.sumOf { sizeOf(it) })
+        val bytesByLayer = HashMap<Int, Long>()
+        for (index in experts) {
+            val layer = expertLayers.getValue(index)
+            bytesByLayer[layer] = bytesByLayer.getOrDefault(layer, 0L) + sizeOf(index)
+        }
+        val sharedBytesByLayer = HashMap<Int, Long>()
+        for ((index, layer) in sharedLayers) {
+            sharedBytesByLayer[layer] = sharedBytesByLayer.getOrDefault(layer, 0L) + sizeOf(index)
+        }
+        return TensorBytes(
+            onDemand = onDemand.sumOf { sizeOf(it) },
+            experts = bytesByLayer.values.sum(),
+            largestExpertLayer = bytesByLayer.values.maxOrNull() ?: 0L,
+            largestSharedLayer = sharedBytesByLayer.values.maxOrNull() ?: 0L,
+        )
     }
 
     private fun readValue(input: InputStream, type: Int, materialize: Boolean): Any? = when (type) {
@@ -239,17 +284,21 @@ class GgufInspector {
         val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
         /** Expert weights, named as llama.cpp's --cpu-moe matches them ("blk.3.ffn_down_exps.weight"). */
         val EXPERT_TENSOR = Regex("\\.ffn_(up|down|gate|gate_up)_(ch|)exps")
+        val EXPERT_LAYER = Regex("^blk\\.(\\d+)\\.")
     }
 
     private fun skipFully(input: InputStream, count: Long) {
         var remaining = count
-        val scratch = ByteArray(64 * 1024)
+        // File streams normally skip directly. A tokenizer can contain hundreds of thousands
+        // of strings; allocating a buffer for every skipped string creates gigabytes of garbage.
+        var scratch: ByteArray? = null
         while (remaining > 0) {
             val skipped = input.skip(remaining)
             if (skipped > 0) {
                 remaining -= skipped
             } else {
-                val read = input.read(scratch, 0, minOf(scratch.size.toLong(), remaining).toInt())
+                val buffer = scratch ?: ByteArray(64 * 1024).also { scratch = it }
+                val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
                 if (read < 0) throw IOException("Fim inesperado do arquivo GGUF.")
                 remaining -= read
             }

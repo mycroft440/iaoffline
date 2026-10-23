@@ -6,6 +6,7 @@ import android.os.IBinder
 import android.os.Process
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.LlamaCppRuntime
+import com.example.ialocal.runtime.PerformanceProfile
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -25,8 +26,10 @@ class InferenceService : Service() {
     private val logger by lazy { AiEventLogger(applicationContext) }
     /** Memory level the app chose for each model after earlier crashes (ModelCrashGuard). */
     private val safeLevels = ConcurrentHashMap<String, Int>()
+    private val profiles = ConcurrentHashMap<String, PerformanceProfile>()
     private val runtime by lazy {
-        LlamaCppRuntime(applicationContext, logger, safeLevelOf = { modelId -> safeLevels[modelId] ?: 0 })
+        LlamaCppRuntime(applicationContext, logger, safeLevelOf = { modelId -> safeLevels[modelId] ?: 0 },
+            performanceProfileOf = { profiles[it] ?: PerformanceProfile.CACHE })
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val generations = ConcurrentHashMap<String, Job>()
@@ -55,6 +58,7 @@ class InferenceService : Service() {
         override fun warmUp(modelJson: String, safeLevel: Int, prefillJson: String?) = forApp {
             val model = RemoteProtocol.decodeModel(modelJson)
             safeLevels[model.id] = safeLevel
+            profiles[model.id] = PerformanceProfile.parse(RemoteProtocol.decodeProfile(modelJson))
             val prefill = prefillJson?.takeIf { it.isNotEmpty() }?.let(RemoteProtocol::decodePrefill)
             runBlocking { runtime.warmUp(model, prefill) }
         }
@@ -62,12 +66,14 @@ class InferenceService : Service() {
         override fun verify(modelJson: String, safeLevel: Int, keepLoaded: Boolean): String = forApp {
             val model = RemoteProtocol.decodeModel(modelJson)
             safeLevels[model.id] = safeLevel
+            profiles[model.id] = PerformanceProfile.parse(RemoteProtocol.decodeProfile(modelJson))
             runBlocking { runtime.verify(model, keepLoaded) }.output
         }
 
         override fun generate(requestId: String, requestJson: String, callback: IInferenceCallback) {
             val request = forApp { RemoteProtocol.decodeRequest(requestJson) }
             safeLevels[request.model.id] = request.safeLevel
+            profiles[request.model.id] = PerformanceProfile.parse(request.performanceProfile)
             generations[requestId] = scope.launch {
                 try {
                     runtime.streamComplete(
@@ -94,6 +100,12 @@ class InferenceService : Service() {
 
         override fun cancel(requestId: String) {
             generations[requestId]?.cancel()
+        }
+
+        override fun benchmark(modelJson: String, safeLevel: Int, profile: String): String = forApp {
+            val model = RemoteProtocol.decodeModel(modelJson)
+            safeLevels[model.id] = safeLevel
+            runBlocking { runtime.benchmark(model, PerformanceProfile.parse(profile)) }
         }
 
         override fun unload() = forApp { runBlocking { runtime.unload() } }

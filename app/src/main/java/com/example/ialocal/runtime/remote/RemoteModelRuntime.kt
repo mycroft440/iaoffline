@@ -14,6 +14,7 @@ import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.runtime.GenerationStage
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.PerformanceProfile
 import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.RuntimeState
 import com.example.ialocal.runtime.RuntimeStatus
@@ -58,6 +59,22 @@ class RemoteModelRuntime(
     private val appContext = context.applicationContext
     private val _state = MutableStateFlow(RuntimeState())
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
+
+    private val performancePrefs = appContext.getSharedPreferences("model_performance", Context.MODE_PRIVATE)
+    override fun performanceProfile(modelId: String) = PerformanceProfile.parse(performancePrefs.getString(modelId, null))
+    override fun setPerformanceProfile(modelId: String, profile: PerformanceProfile) {
+        performancePrefs.edit().putString(modelId, profile.name).apply()
+    }
+    private fun modelJson(model: AiModelEntity) = RemoteProtocol.encodeModel(model, performanceProfile(model.id).name)
+
+    override suspend fun benchmark(model: AiModelEntity, profile: PerformanceProfile): String = withContext(Dispatchers.IO) {
+        try {
+            call(model, ModelCrashGuard.Phase.LOAD) { it.benchmark(modelJson(model), safeLevel(model), profile.name) }
+        } catch (cancel: CancellationException) {
+            interruptNativeWork()
+            throw cancel
+        }
+    }
 
     private val bindLock = Mutex()
     @Volatile private var service: IInferenceService? = null
@@ -107,13 +124,13 @@ class RemoteModelRuntime(
 
     override suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill?) = withContext(Dispatchers.IO) {
         val prefillJson = prefill?.let(RemoteProtocol::encodePrefill).orEmpty()
-        call(model, ModelCrashGuard.Phase.LOAD) { it.warmUp(RemoteProtocol.encodeModel(model), safeLevel(model), prefillJson) }
+        call(model, ModelCrashGuard.Phase.LOAD) { it.warmUp(modelJson(model), safeLevel(model), prefillJson) }
     }
 
     override suspend fun verify(model: AiModelEntity, keepLoaded: Boolean): VerificationResult = withContext(Dispatchers.IO) {
         VerificationResult(
             call(model, ModelCrashGuard.Phase.LOAD) {
-                it.verify(RemoteProtocol.encodeModel(model), safeLevel(model), keepLoaded)
+                it.verify(modelJson(model), safeLevel(model), keepLoaded)
             },
         )
     }
@@ -153,7 +170,7 @@ class RemoteModelRuntime(
             }
         }
         try {
-            val request = GenerateRequest(model, systemPrompt, messages, temperature, maxTokens, turn, safeLevel(model))
+            val request = GenerateRequest(model, systemPrompt, messages, temperature, maxTokens, turn, safeLevel(model), performanceProfile(model.id).name)
             remote.generate(requestId, RemoteProtocol.encodeRequest(request), callback)
         } catch (dead: DeadObjectException) {
             onAiProcessDied(remote.asBinder())
@@ -290,6 +307,11 @@ class RemoteModelRuntime(
         val userStopped = intentionalDeaths.remove(deadBinder)
         val current = service?.asBinder()
         if (current != null && current !== deadBinder && current.isBinderAlive) return@synchronized
+        if (!userStopped) runs.values.forEach { run ->
+            if (performanceProfile(run.model.id) == PerformanceProfile.GPU) {
+                setPerformanceProfile(run.model.id, PerformanceProfile.CACHE)
+            }
+        }
         // Bound again on the next request, so a process stopped for lack of memory is not
         // restarted, empty, while memory is still short.
         disconnect()
