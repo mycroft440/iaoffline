@@ -140,6 +140,10 @@ edit(a, '        model_params.use_extra_bufts = false;\n        model = llama_mo
         g_gpu_active = false;
         model = llama_model_load_from_file(model_path, model_params);''')
 edit(a, '    g_model = model;\n    return 0;', '    g_model = model;\n    setenv("IAOFFLINE_ACTIVE_BACKEND", g_gpu_active ? "Vulkan" : "CPU", 1);\n    return 0;')
+# Otherwise the scheduler may copy CPU-mapped experts to Vulkan for prompt batches,
+# overriding the intended CPU placement and exceeding the GPU memory estimate.
+edit(a, '        ctx_params.cb_eval = iaoffline_moe_eval_callback;',
+     '        ctx_params.op_offload = false; // CPU-mapped experts must stay on CPU, including prefill\n        ctx_params.cb_eval = iaoffline_moe_eval_callback;')
 # A real, fixed token sequence; one existing context, no additional KV allocation.
 text = a.read_text()
 start = text.index('    auto *context = init_context(g_model, pp);', text.index('InferenceEngineImpl_benchModel'))

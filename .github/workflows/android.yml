@@ -70,8 +70,9 @@ jobs:
       - name: Test cached CPU kernels against original quantized weights
         run: |
           cmake -S scripts/native -B /tmp/moe-kernel -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/moe-kernel -j 2 --target test-moe-kernel
+          cmake --build /tmp/moe-kernel -j 2 --target test-moe-kernel test-moe-router
           /tmp/moe-kernel/test-moe-kernel
+          /tmp/moe-kernel/test-moe-router
 
       - name: Unit tests + lint + debug build
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --stacktrace --info
