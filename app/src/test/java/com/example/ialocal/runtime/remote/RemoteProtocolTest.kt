@@ -61,6 +61,7 @@ class RemoteProtocolTest {
             longContext = TuningSwitch.ON,
             rewind = TuningSwitch.OFF,
             longPromptMoe = TuningSwitch.AUTO,
+            fastMoe = TuningSwitch.ON,
             readyConversations = 10,
             performanceBlocked = setOf("m1", "m2"),
         )

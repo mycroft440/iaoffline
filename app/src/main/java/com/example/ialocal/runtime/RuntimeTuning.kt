@@ -30,6 +30,11 @@ data class RuntimeTuning(
     val rewind: TuningSwitch = TuningSwitch.AUTO,
     /** Larger micro-batches when a mixture of experts reads a long message; ON is the maximum. */
     val longPromptMoe: TuningSwitch = TuningSwitch.AUTO,
+    /**
+     * "Modo rápido de MoE": each token goes through about a quarter fewer experts
+     * ([RuntimeLimits.fastMoeExperts]). AUTO only for mixtures of experts read from storage.
+     */
+    val fastMoe: TuningSwitch = TuningSwitch.AUTO,
     /** Conversations kept on storage, ready to continue without being read again. */
     val readyConversations: Int = DEFAULT_READY_CONVERSATIONS,
     /** Models whose optimized copy of the weights made the AI process close; they load without it. */

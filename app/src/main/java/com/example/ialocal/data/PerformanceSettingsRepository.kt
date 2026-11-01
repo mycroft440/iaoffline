@@ -46,6 +46,8 @@ class PerformanceSettingsRepository(context: Context) {
 
     fun setLongPromptMoe(choice: TuningSwitch) = updateTuning { it.copy(longPromptMoe = choice) }
 
+    fun setFastMoe(choice: TuningSwitch) = updateTuning { it.copy(fastMoe = choice) }
+
     fun setReadyConversations(count: Int) = updateTuning {
         it.copy(readyConversations = count.coerceIn(RuntimeTuning.READY_CONVERSATION_CHOICES.min(), RuntimeTuning.READY_CONVERSATION_CHOICES.max()))
     }
@@ -67,6 +69,7 @@ class PerformanceSettingsRepository(context: Context) {
             .putString(KEY_LONG_CONTEXT, tuning.longContext.name)
             .putString(KEY_REWIND, tuning.rewind.name)
             .putString(KEY_LONG_PROMPT_MOE, tuning.longPromptMoe.name)
+            .putString(KEY_FAST_MOE, tuning.fastMoe.name)
             .putInt(KEY_READY_CONVERSATIONS, tuning.readyConversations)
             .apply()
         _tuning.value = tuning
@@ -77,6 +80,7 @@ class PerformanceSettingsRepository(context: Context) {
         longContext = enumOf(prefs.getString(KEY_LONG_CONTEXT, null), TuningSwitch.AUTO),
         rewind = enumOf(prefs.getString(KEY_REWIND, null), TuningSwitch.AUTO),
         longPromptMoe = enumOf(prefs.getString(KEY_LONG_PROMPT_MOE, null), TuningSwitch.AUTO),
+        fastMoe = enumOf(prefs.getString(KEY_FAST_MOE, null), TuningSwitch.AUTO),
         readyConversations = prefs.getInt(KEY_READY_CONVERSATIONS, RuntimeTuning.DEFAULT_READY_CONVERSATIONS),
     )
 
@@ -89,6 +93,7 @@ class PerformanceSettingsRepository(context: Context) {
         const val KEY_LONG_CONTEXT = "long_context"
         const val KEY_REWIND = "rewind"
         const val KEY_LONG_PROMPT_MOE = "long_prompt_moe"
+        const val KEY_FAST_MOE = "fast_moe"
         const val KEY_READY_CONVERSATIONS = "ready_conversations"
         const val KEY_KEEP_LOADED = "keep_loaded"
         const val KEY_PRELOAD = "preload"

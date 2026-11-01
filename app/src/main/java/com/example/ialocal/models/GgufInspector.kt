@@ -43,6 +43,15 @@ class GgufInspector {
         val largestRequantizedValues: Long = 0L,
         /** Recurrent or hybrid model (Mamba, Gated DeltaNet, short convolutions): its state cannot be cut back. */
         val recurrent: Boolean = false,
+        /** Experts of each mixture-of-experts layer ("<arch>.expert_count"); null for a dense model. */
+        val expertCount: Int? = null,
+        /**
+         * Experts each token goes through ("<arch>.expert_used_count"), when the GGUF gives one number
+         * for every layer: the value llama.cpp's metadata override can replace ("Modo rápido de MoE").
+         */
+        val expertUsedCount: Int? = null,
+        /** The key of [expertUsedCount] as the file names it, for that override. */
+        val expertUsedCountKey: String? = null,
     )
 
     fun inspect(file: File): Metadata =
@@ -70,6 +79,8 @@ class GgufInspector {
         var hasChatTemplate = false
         var recurrent = false
         var alignment = DEFAULT_ALIGNMENT
+        // Read before general.architecture may be known; matched to it after the loop.
+        val expertCounts = HashMap<String, Int>()
 
         var i = 0L
         while (i < kvCount) {
@@ -80,7 +91,9 @@ class GgufInspector {
                 key == "general.size_label" ||
                 key == "tokenizer.chat_template" ||
                 key == "general.alignment" ||
-                key.endsWith(".context_length")
+                key.endsWith(".context_length") ||
+                key.endsWith(EXPERT_COUNT_SUFFIX) ||
+                key.endsWith(EXPERT_USED_COUNT_SUFFIX)
             val value = readValue(input, type, wanted)
             if (RECURRENT_KEYS.any { key.endsWith(it) }) recurrent = true
 
@@ -95,10 +108,15 @@ class GgufInspector {
                         is Number -> value.toInt()
                         else -> null
                     } ?: contextLength
+                } else if (key.endsWith(EXPERT_COUNT_SUFFIX) || key.endsWith(EXPERT_USED_COUNT_SUFFIX)) {
+                    // A per-layer array (a list here) is not one number to override.
+                    (value as? Number)?.toLong()?.takeIf { it in 1..MAX_EXPERTS }?.let { expertCounts[key] = it.toInt() }
                 }
             }
             i++
         }
+
+        val expertUsedKey = architecture?.let { it + EXPERT_USED_COUNT_SUFFIX }?.takeIf { it in expertCounts }
 
         // Only sizes memory use: a header read without its tensor table still describes the model.
         val tensorBytes = runCatching { readTensorBytes(input, tensorCount, alignment, totalBytes) }.getOrDefault(TensorBytes())
@@ -119,6 +137,9 @@ class GgufInspector {
             requantizedBytes = tensorBytes.requantized,
             largestRequantizedValues = tensorBytes.largestRequantizedValues,
             recurrent = recurrent,
+            expertCount = architecture?.let { expertCounts[it + EXPERT_COUNT_SUFFIX] },
+            expertUsedCount = expertUsedKey?.let { expertCounts[it] },
+            expertUsedCountKey = expertUsedKey,
         )
     }
 
@@ -290,6 +311,10 @@ class GgufInspector {
         const val DEFAULT_ALIGNMENT = 32L
         const val MAX_TENSORS = 1_000_000L
         const val MAX_DIMENSIONS = 8L
+        const val EXPERT_COUNT_SUFFIX = ".expert_count"
+        const val EXPERT_USED_COUNT_SUFFIX = ".expert_used_count"
+        /** llama.cpp's LLAMA_MAX_EXPERTS in the pinned version. */
+        const val MAX_EXPERTS = 1024L
         /** Tensors llama.cpp reads row by row from the file when lazy mode is on, as the app sets it. */
         val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
         /** Expert weights, named as llama.cpp's --cpu-moe matches them ("blk.3.ffn_down_exps.weight"). */

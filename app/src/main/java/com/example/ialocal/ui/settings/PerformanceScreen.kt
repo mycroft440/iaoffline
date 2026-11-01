@@ -138,6 +138,23 @@ fun PerformanceScreen(
             }
             item {
                 ChoiceCard(
+                    title = "Modo rápido de MoE",
+                    description = "Cada palavra passa por cerca de um quarto menos especialistas: 6 em vez de 8 no " +
+                        "Gemma 4 26B-A4B e nos Qwen 30B-A3B. Nos MoE lidos do armazenamento, lê do arquivo um quarto a " +
+                        "menos por palavra, o que deve deixar a resposta de 15 a 25% mais rápida. Não usa RAM a mais, " +
+                        "mas as respostas podem perder um pouco de qualidade. Modelos que usam 2 ou 3 especialistas " +
+                        "ficam como estão.",
+                    options = listOf(
+                        TuningSwitch.AUTO to "Automático (só MoE lidos do armazenamento)",
+                        TuningSwitch.OFF to "Desligado",
+                        TuningSwitch.ON to "Em todos os modelos MoE",
+                    ),
+                    selected = tuning.fastMoe,
+                    onSelect = settings::setFastMoe,
+                )
+            }
+            item {
+                ChoiceCard(
                     title = "Conversas prontas para continuar",
                     description = "Quantas conversas recentes ficam salvas no armazenamento com a memória da IA, para " +
                         "voltar a elas em cerca de um segundo. Usa só armazenamento (até 1 GB), não RAM.",

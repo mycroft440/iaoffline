@@ -38,6 +38,61 @@ class GgufInspectorTest {
     }
 
     @Test
+    fun readsTheExpertCountsOfAMixtureOfExperts() {
+        val bytes = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(4)
+            // Keys of the architecture may come before general.architecture.
+            kvU32("gemma4.expert_used_count", 8)
+            kvString("general.architecture", "gemma4")
+            kvU32("gemma4.expert_count", 128)
+            kvU32("gemma4.expert_shared_count", 1)
+        }.toByteArray()
+
+        val metadata = inspector.inspect(ByteArrayInputStream(bytes))
+
+        assertEquals(128, metadata.expertCount)
+        assertEquals(8, metadata.expertUsedCount)
+        assertEquals("gemma4.expert_used_count", metadata.expertUsedCountKey)
+    }
+
+    @Test
+    fun perLayerOrMissingExpertCountsAreNotOverridden() {
+        val perLayer = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(3)
+            kvString("general.architecture", "test")
+            kvU32("test.expert_count", 64)
+            // An array of u32, one per layer: llama.cpp reads it without the metadata override.
+            string("test.expert_used_count")
+            u32(9)
+            u32(4)
+            u64(2)
+            u32(8)
+            u32(6)
+        }.toByteArray()
+        val layered = inspector.inspect(ByteArrayInputStream(perLayer))
+        assertEquals(64, layered.expertCount)
+        assertEquals(null, layered.expertUsedCount)
+        assertEquals(null, layered.expertUsedCountKey)
+
+        val dense = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(0)
+            u64(1)
+            kvString("general.architecture", "qwen3")
+        }.toByteArray()
+        val plain = inspector.inspect(ByteArrayInputStream(dense))
+        assertEquals(null, plain.expertCount)
+        assertEquals(null, plain.expertUsedCountKey)
+    }
+
+    @Test
     fun sizesPerLayerEmbeddingsThatStayInTheFile() {
         val header = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))

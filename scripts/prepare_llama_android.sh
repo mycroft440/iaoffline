@@ -2737,6 +2737,114 @@ path.write_text(text)
 print("Applied IA Offline sampler and repack-release patch")
 PY
 
+# 22. Faster mixtures of experts and a check of the CPU build on the phone:
+#     a) "Modo rápido de MoE": with IAOFFLINE_MOE_EXPERTS="<arch>.expert_used_count=N" (the GGUF's own
+#        key, set by the app), the model routes each token to N experts instead of the number in the
+#        file, through llama.cpp's metadata override (the same as --override-kv). A mixture of experts
+#        read from storage then reads about a quarter fewer experts per token, and one in RAM computes a
+#        quarter fewer; no memory is added. Without the variable, nothing changes.
+#     b) The features of the CPU backend variant llama.cpp picked for the processor (DOTPROD,
+#        MATMUL_INT8, SME, KLEIDIAI, REPACK...) are published as IAOFFLINE_CPU_FEATURES, which the app
+#        writes to its log when a model loads: the optimized kernels can be confirmed on each phone.
+python3 - "${AI_CHAT_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp Android binding native source shape (step 22): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+replace_once(
+    "    // Initialize backends\n"
+    "    llama_backend_init();\n"
+    "    LOGi(\"Backend initiated; Log handler set.\");\n",
+    r'''    // Initialize backends
+    llama_backend_init();
+    LOGi("Backend initiated; Log handler set.");
+
+    // IA Offline (step 22 b): what the CPU backend variant chosen for this processor can use.
+    std::string iaoffline_features;
+    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        auto get_features = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+        if (get_features == nullptr) continue;
+        for (const ggml_backend_feature *feature = get_features(reg); feature != nullptr && feature->name != nullptr; feature++) {
+            if (!iaoffline_features.empty()) iaoffline_features += ' ';
+            iaoffline_features += feature->name;
+            if (feature->value != nullptr && strcmp(feature->value, "1") != 0) {
+                iaoffline_features += '=';
+                iaoffline_features += feature->value;
+            }
+        }
+    }
+    LOGi("CPU backend features: %s", iaoffline_features.c_str());
+    setenv("IAOFFLINE_CPU_FEATURES", iaoffline_features.c_str(), 1);
+''',
+)
+
+replace_once(
+    "extern \"C\"\n"
+    "JNIEXPORT jint JNICALL\n"
+    "Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {\n",
+    r'''// IA Offline (step 22 a): the expert count the app asks for in IAOFFLINE_MOE_EXPERTS
+// ("<arch>.expert_used_count=N", the key as the GGUF names it), as a metadata override; false when it
+// asks for none or the value is not one.
+static bool iaoffline_expert_override(llama_model_kv_override &ovrd) {
+    const char *value = getenv("IAOFFLINE_MOE_EXPERTS");
+    if (value == nullptr || value[0] == '\0') return false;
+    static const char suffix[] = ".expert_used_count";
+    const size_t suffix_len = sizeof(suffix) - 1;
+    const char *separator = strrchr(value, '=');
+    const size_t key_len = separator != nullptr ? (size_t) (separator - value) : 0;
+    char *end = nullptr;
+    const long count = separator != nullptr ? strtol(separator + 1, &end, 10) : 0;
+    if (key_len <= suffix_len || key_len >= sizeof(ovrd.key) ||
+        strncmp(value + key_len - suffix_len, suffix, suffix_len) != 0 ||
+        end == separator + 1 || end == nullptr || *end != '\0' || count < 1 || count > 64) {
+        LOGw("%s: ignoring IAOFFLINE_MOE_EXPERTS=%s", __func__, value);
+        return false;
+    }
+    memset(&ovrd, 0, sizeof(ovrd));
+    ovrd.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
+    memcpy(ovrd.key, value, key_len);
+    ovrd.key[key_len] = '\0';
+    ovrd.val_i64 = count;
+    return true;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
+''',
+)
+
+replace_once(
+    "    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);\n"
+    "    LOGd(\"%s: Loading model from: \\n%s\\n\", __func__, model_path);\n",
+    r'''    // Fewer experts per token when the app asks for it (step 22 a). The list ends with an empty key.
+    static llama_model_kv_override iaoffline_kv_overrides[2];
+    memset(iaoffline_kv_overrides, 0, sizeof(iaoffline_kv_overrides));
+    if (iaoffline_expert_override(iaoffline_kv_overrides[0])) {
+        model_params.kv_overrides = iaoffline_kv_overrides;
+        LOGi("%s: routing each token to %lld experts (%s)", __func__,
+             (long long) iaoffline_kv_overrides[0].val_i64, iaoffline_kv_overrides[0].key);
+    }
+
+    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
+    LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
+''',
+)
+
+path.write_text(text)
+print("Applied IA Offline MoE expert-count and CPU-features patch")
+PY
+
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
 chmod +x ./gradlew
 ./gradlew :lib:assembleRelease --no-daemon
@@ -2747,6 +2855,28 @@ if [[ ! -f "${AAR_SOURCE}" ]]; then
   echo "AAR do llama.cpp não encontrado em ${AAR_SOURCE}" >&2
   exit 1
 fi
+
+# The fast ARM kernels live in CPU backend variants that llama.cpp picks at run time
+# (GGML_CPU_ALL_VARIANTS): i8mm (armv8.6) for most recent phones and SME (armv9.2) for the newest. A
+# change upstream that dropped them would still build and run, only several times slower, so the build
+# stops here instead of publishing that APK.
+python3 - "${AAR_SOURCE}" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as aar:
+    names = set(aar.namelist())
+required = [
+    "arm64-v8a/libggml-cpu-android_armv8.2_1.so",
+    "arm64-v8a/libggml-cpu-android_armv8.6_1.so",
+    "arm64-v8a/libggml-cpu-android_armv9.2_2.so",
+]
+missing = [lib for lib in required if not any(name.endswith("/" + lib) for name in names)]
+if missing:
+    variants = sorted(name for name in names if "libggml-cpu" in name)
+    raise SystemExit(f"AAR sem as variantes otimizadas da CPU: {missing}; encontradas: {variants}")
+print("AAR com as variantes de CPU dotprod, i8mm e SME")
+PY
 
 cp "${AAR_SOURCE}" "${AAR_DEST}"
 echo "llama.cpp Android AAR preparado em ${AAR_DEST}"

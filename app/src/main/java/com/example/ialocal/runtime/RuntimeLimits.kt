@@ -76,6 +76,7 @@ object RuntimeLimits {
         longContext = TuningSwitch.OFF,
         rewind = TuningSwitch.OFF,
         longPromptMoe = TuningSwitch.OFF,
+        fastMoe = TuningSwitch.OFF,
     )
 
     /** "Contexto longo": more memory for the conversation, so long chats are not read again. */
@@ -291,6 +292,32 @@ object RuntimeLimits {
         streamsExperts -> 1024
         mixtureOfExperts -> 512
         else -> DEFAULT_UBATCH
+    }
+
+    /** "Modo rápido de MoE" keeps this share of the experts each token goes through, rounded up. */
+    const val FAST_MOE_KEEP_FRACTION = 0.75
+    /** Models that route each token to fewer experts (Mixtral: 2) keep them all. */
+    const val FAST_MOE_MIN_EXPERTS = 4
+    /** The automatic mode only trims models that use at least this many (8 → 6), where little is lost. */
+    const val FAST_MOE_AUTO_MIN_EXPERTS = 8
+
+    /**
+     * Experts per token for "Modo rápido de MoE", or null to keep the number in the GGUF
+     * ([usedExperts] of [totalExperts]). Fewer experts per token means a quarter fewer read from
+     * storage when they are streamed ([streamsExperts]) and a quarter less computed in RAM, with no
+     * memory added; the answers may lose a little quality. AUTO only trims models read from
+     * storage, where the gain is largest, and only from 8 experts per token.
+     */
+    fun fastMoeExperts(usedExperts: Int?, totalExperts: Int?, choice: TuningSwitch, streamsExperts: Boolean): Int? {
+        if (usedExperts == null || usedExperts < FAST_MOE_MIN_EXPERTS) return null
+        if (totalExperts != null && totalExperts < usedExperts) return null
+        val enabled = when (choice) {
+            TuningSwitch.OFF -> false
+            TuningSwitch.ON -> true
+            TuningSwitch.AUTO -> streamsExperts && usedExperts >= FAST_MOE_AUTO_MIN_EXPERTS
+        }
+        if (!enabled) return null
+        return kotlin.math.ceil(usedExperts * FAST_MOE_KEEP_FRACTION).toInt().coerceIn(2, usedExperts - 1)
     }
 
     /**

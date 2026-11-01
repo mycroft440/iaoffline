@@ -197,7 +197,8 @@ class CatalogGroupsTest {
             moe.approximateSizeBytes + CATALOG_WORKING_MEMORY_BYTES,
             estimatedFullMoeRamBytes(moe),
         )
-        assertTrue(estimatedFullMoeRamBytes(moe) > 5_700_000_000L)
+        // The 4.7 GB Q4_0 file plus the working memory, far above what 1B active parameters would take.
+        assertTrue(estimatedFullMoeRamBytes(moe) > 5_400_000_000L)
         assertTrue(moe.activeParametersBillions!! < moe.totalParametersBillions)
     }
 

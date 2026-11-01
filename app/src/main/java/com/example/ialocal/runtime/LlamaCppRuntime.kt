@@ -63,6 +63,12 @@ class LlamaCppRuntime(
     private var loadedKey: LoadKey? = null
     /** How the loaded model's weights are held, for freeing it and warming it up again. */
     private var loadedLayout: LoadedLayout? = null
+    /**
+     * Experts per token the loaded model was trimmed to ("Modo rápido de MoE"), or null when it uses
+     * the number in its GGUF. Part of the keys of its saved prompts and conversations: a context
+     * computed with the other number of experts is not reused.
+     */
+    private var loadedFastExperts: Int? = null
     /** The context was freed on memory trim while the model, read from its file, stayed loaded. */
     private var contextReleased = false
     /** The conversation the native context holds, if the last answer ended normally. */
@@ -120,6 +126,7 @@ class LlamaCppRuntime(
         val performance: PerformanceLevel,
         val longContext: TuningSwitch,
         val longPromptMoe: TuningSwitch,
+        val fastMoe: TuningSwitch,
         val performanceBlocked: Boolean,
         val safeLevel: Int,
     )
@@ -511,7 +518,7 @@ class LlamaCppRuntime(
     ) {
         val tail = turn.systemPromptTail.trimEnd()
         val stable = if (tail.isNotEmpty() && systemPrompt.endsWith(tail)) systemPrompt.dropLast(tail.length) else systemPrompt
-        val file = PromptCache.file(appContext, model.id, turn.templateThinking, stable)
+        val file = PromptCache.file(appContext, model.id, turn.templateThinking, stable + expertsKeySuffix())
         runCatching {
             file.parentFile?.mkdirs()
             Os.setenv(PROMPT_CACHE_ENV, file.path, true)
@@ -630,7 +637,10 @@ class LlamaCppRuntime(
     }
 
     private fun sessionKey(systemPrompt: String, templateThinking: Boolean) =
-        systemPrompt + "\u0000thinking=" + templateThinking
+        systemPrompt + "\u0000thinking=" + templateThinking + expertsKeySuffix()
+
+    /** Empty unless the loaded model uses fewer experts than its GGUF ("Modo rápido de MoE"). */
+    private fun expertsKeySuffix(): String = loadedFastExperts?.let { "\u0000experts=$it" }.orEmpty()
 
     /**
      * Copy of the recurrent state kept at the start of each user turn, so "Refazer" works for
@@ -684,6 +694,7 @@ class LlamaCppRuntime(
         performance = tuning.performance,
         longContext = tuning.longContext,
         longPromptMoe = tuning.longPromptMoe,
+        fastMoe = tuning.fastMoe,
         performanceBlocked = modelId in tuning.performanceBlocked,
         safeLevel = safeLevelOf(modelId),
     )
@@ -766,6 +777,11 @@ class LlamaCppRuntime(
         val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
         val repackRelease = plan.repackRelease && !lowMemory
         val kvBudgetMb = plan.kvBudgetBytes / MB
+        // "Modo rápido de MoE": the GGUF's own key, replaced through llama.cpp's metadata override.
+        val expertsKey = layout?.expertUsedCountKey
+        val fastExperts = layout?.takeIf { expertsKey != null }?.let {
+            RuntimeLimits.fastMoeExperts(it.expertUsedCount, it.expertCount, loadKey.fastMoe, plan.streamsExperts)
+        }
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, experts read from storage for a mixture of experts that does not fit
         // at all, the memory that sizes the (Q4_0) context, the presence penalty the model card
@@ -783,6 +799,8 @@ class LlamaCppRuntime(
             Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
             Os.setenv(UBATCH_ENV, plan.ubatch.toString(), true)
             Os.setenv(REPACK_RELEASE_ENV, if (repackRelease) "1" else "0", true)
+            if (fastExperts != null) Os.setenv(MOE_EXPERTS_ENV, "$expertsKey=$fastExperts", true)
+            else Os.unsetenv(MOE_EXPERTS_ENV)
             Os.unsetenv(ACTIVE_CONTEXT_ENV)
             Os.unsetenv(ACTIVE_THREADS_ENV)
         }
@@ -802,6 +820,7 @@ class LlamaCppRuntime(
                 (if (lowMemory) " em modo de pouca memória" else "; cópia otimizada dos pesos na RAM") +
                 (if (repackRelease) " (páginas do arquivo liberadas ao copiar)" else "") +
                 (if (plan.ubatch != RuntimeLimits.DEFAULT_UBATCH) "; micro-lote de ${plan.ubatch} tokens" else "") +
+                (if (fastExperts != null) "; modo rápido de MoE: $fastExperts especialistas por token em vez de ${layout?.expertUsedCount}" else "") +
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
         onStage(GenerationStage(GenerationStage.Kind.LOADING_MODEL, model.name, total = (fileBytes / MB).toInt()))
@@ -811,6 +830,8 @@ class LlamaCppRuntime(
             loadedContextTokens = activeContextTokens()
             val threads = runCatching { Os.getenv(ACTIVE_THREADS_ENV) }.getOrNull()
             val writingThreads = runCatching { Os.getenv(ACTIVE_GENERATION_THREADS_ENV) }.getOrNull()
+            // What the CPU backend variant llama.cpp chose can use (step 22 b of the native patch).
+            val cpuFeatures = runCatching { Os.getenv(CPU_FEATURES_ENV) }.getOrNull()
             logger?.info(
                 "MODEL_LOAD",
                 buildString {
@@ -818,11 +839,13 @@ class LlamaCppRuntime(
                     if (threads != null) append("; $threads threads da CPU")
                     if (writingThreads != null && writingThreads != threads) append(" ($writingThreads ao escrever)")
                     if (!efficiency.isNullOrEmpty()) append("; núcleos de eficiência: ${CpuCores.encode(efficiency)}")
+                    if (!cpuFeatures.isNullOrBlank()) append("; CPU: $cpuFeatures")
                 },
             )
             loadedModelId = model.id
             loadedKey = loadKey
             loadedLayout = LoadedLayout(model.filePath, fileBytes, onDemandBytes, lowMemory, plan.streamsExperts)
+            loadedFastExperts = fastExperts
             contextReleased = false
             session = null
             primed = null
@@ -833,6 +856,7 @@ class LlamaCppRuntime(
             loadedModelId = null
             loadedKey = null
             loadedLayout = null
+            loadedFastExperts = null
             session = null
             primed = null
             turnMark = null
@@ -899,6 +923,7 @@ class LlamaCppRuntime(
             loadedModelId = null
             loadedKey = null
             loadedLayout = null
+            loadedFastExperts = null
             contextReleased = false
             _state.value = finalState
             return
@@ -915,6 +940,7 @@ class LlamaCppRuntime(
         loadedModelId = null
         loadedKey = null
         loadedLayout = null
+        loadedFastExperts = null
         contextReleased = false
         _state.value = finalState
     }
@@ -973,6 +999,8 @@ class LlamaCppRuntime(
         private const val REPACK_RELEASE_ENV = "IAOFFLINE_REPACK_RELEASE"
         private const val TURN_MARK_ENV = "IAOFFLINE_TURN_MARK"
         private const val CHECKPOINT_ENV = "IAOFFLINE_CHECKPOINT_MAX_MB"
+        private const val MOE_EXPERTS_ENV = "IAOFFLINE_MOE_EXPERTS"
+        private const val CPU_FEATURES_ENV = "IAOFFLINE_CPU_FEATURES"
         private const val KLEIDIAI_SME_ENV = "GGML_KLEIDIAI_SME"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
         /**

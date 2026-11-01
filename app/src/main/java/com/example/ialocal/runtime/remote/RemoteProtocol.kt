@@ -105,6 +105,7 @@ internal object RemoteProtocol {
         .put("longContext", tuning.longContext.name)
         .put("rewind", tuning.rewind.name)
         .put("longPromptMoe", tuning.longPromptMoe.name)
+        .put("fastMoe", tuning.fastMoe.name)
         .put("readyConversations", tuning.readyConversations)
         .put("performanceBlocked", JSONArray(tuning.performanceBlocked.toList()))
         .toString()
@@ -119,6 +120,7 @@ internal object RemoteProtocol {
             longContext = switchOf(o.optString("longContext")),
             rewind = switchOf(o.optString("rewind")),
             longPromptMoe = switchOf(o.optString("longPromptMoe")),
+            fastMoe = switchOf(o.optString("fastMoe")),
             readyConversations = o.optInt("readyConversations", RuntimeTuning.DEFAULT_READY_CONVERSATIONS),
             performanceBlocked = List(blocked?.length() ?: 0) { blocked!!.getString(it) }.toSet(),
         )

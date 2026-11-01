@@ -2,6 +2,7 @@ package com.example.ialocal.runtime
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -320,6 +321,28 @@ class RuntimeLimitsTest {
         )
         assertTrue(plan.streamsExperts)
         assertEquals(1024, plan.ubatch)
+    }
+
+    @Test
+    fun fastMoeTrimsAQuarterOfTheExperts() {
+        // Gemma 4 26B-A4B and the Qwen 30B-A3B: 8 of 128 → 6; gpt-oss and LFM2: 4 of 32 → 3.
+        assertEquals(6, RuntimeLimits.fastMoeExperts(8, 128, TuningSwitch.ON, streamsExperts = false))
+        assertEquals(3, RuntimeLimits.fastMoeExperts(4, 32, TuningSwitch.ON, streamsExperts = false))
+        assertEquals(5, RuntimeLimits.fastMoeExperts(6, 64, TuningSwitch.ON, streamsExperts = false))
+        assertEquals(8, RuntimeLimits.fastMoeExperts(10, 512, TuningSwitch.ON, streamsExperts = false))
+        // Models with 2 or 3 experts per token (Mixtral) and dense models keep theirs.
+        assertNull(RuntimeLimits.fastMoeExperts(2, 8, TuningSwitch.ON, streamsExperts = true))
+        assertNull(RuntimeLimits.fastMoeExperts(3, 16, TuningSwitch.ON, streamsExperts = true))
+        assertNull(RuntimeLimits.fastMoeExperts(null, null, TuningSwitch.ON, streamsExperts = true))
+        // A GGUF that claims more experts per token than it has is left alone.
+        assertNull(RuntimeLimits.fastMoeExperts(8, 4, TuningSwitch.ON, streamsExperts = true))
+        // Automatic: only experts read from storage, and only from 8 per token.
+        assertEquals(6, RuntimeLimits.fastMoeExperts(8, 128, TuningSwitch.AUTO, streamsExperts = true))
+        assertNull(RuntimeLimits.fastMoeExperts(8, 128, TuningSwitch.AUTO, streamsExperts = false))
+        assertNull(RuntimeLimits.fastMoeExperts(4, 32, TuningSwitch.AUTO, streamsExperts = true))
+        assertNull(RuntimeLimits.fastMoeExperts(8, 128, TuningSwitch.OFF, streamsExperts = true))
+        // The tests and older callers keep every expert.
+        assertEquals(TuningSwitch.OFF, RuntimeLimits.LEGACY_TUNING.fastMoe)
     }
 
     @Test
