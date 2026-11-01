@@ -1675,6 +1675,1068 @@ path.write_text(text)
 print("Applied IA Offline model-loader patch")
 PY
 
+# 19. Faster answers and less re-reading, on the binding patched above:
+#     a) Each generated token is decoded at the start of the next call, after its text already went to
+#        the app, so every piece of the answer shows up one forward pass sooner. The end-of-generation
+#        token is still decoded before the answer ends: the context keeps the whole turn and the next
+#        message can continue it.
+#     b) Earlier turns are decoded together (processHistoryMessages) instead of one llama_decode per
+#        turn: short turns made tiny batches, and a mixture of experts read from storage read nearly all
+#        its experts again for each one.
+#     c) "Refazer" and an edit of the last message go back to the start of that user turn
+#        (nativeRewindLastTurn) instead of reading the conversation again. The app marks the user's own
+#        turn (IAOFFLINE_TURN_MARK=1, not the rounds after a tool); recurrent and hybrid models
+#        (Qwen3.5/3.6, Nemotron-H, LFM2) cannot cut their state back, so a copy of it is kept at the
+#        mark when it fits IAOFFLINE_CHECKPOINT_MAX_MB, restored before the attention cache is cut, the
+#        order llama.cpp's server uses for its context checkpoints.
+#     d) When a long conversation fills the context, its oldest turns are dropped in place
+#        (nativeDropOldestTurns, the same seq_rm/seq_add the context shift uses) instead of reading the
+#        conversation again; every message's position is tracked for it and saved with the session.
+#     e) requestAbort() ends a long prompt decode between two operations (llama_set_abort_callback):
+#        a new message stops the preparation of another one, and Stop does not wait for the model to
+#        finish reading. The aborted call returns 3; the engine stays ready.
+#     f) nativeReleaseContext frees the context and keeps the model, whose weights the kernel can drop
+#        from the page cache when they are mapped from the file: coming back costs a new context
+#        instead of a whole load.
+#     g) The micro-batch comes from IAOFFLINE_UBATCH (default 256): a mixture of experts read from
+#        storage reads nearly all its experts again for each micro-batch of a long message.
+#     h) The context reserves logits for 16 tokens (n_outputs_max) instead of a whole micro-batch:
+#        the binding reads one per call, and the reservation took about 250 MB for 250K vocabularies.
+#     i) With six fast cores or more, writing (memory-bound) leaves one of them to the app's screen
+#        and Binder threads, which otherwise preempt a generation thread that every operation waits for.
+#     j) Gemma 4 E2B/E4B layers that reuse another layer's cache (shared_kv_layers) no longer count
+#        in the context's memory estimate, so the same memory holds a longer context.
+#     k) State files are dropped from the page cache after they are written or read
+#        (POSIX_FADV_DONTNEED): in low-memory mode and for experts read from storage, the page cache
+#        holds the model's weights, which hundreds of MB of state would push out.
+#     l) nativeAdviseWillNeed asks the kernel to read a model file back into the page cache in the
+#        background (POSIX_FADV_WILLNEED), when the app opens a chat on a model whose weights the
+#        kernel may have dropped while the app was away; the first answer then does not read them one
+#        page fault at a time.
+python3 - "${AI_CHAT_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp Android binding native source shape (step 19): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+def replace_all(old: str, new: str, expected: int) -> None:
+    global text
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(f"Unexpected llama.cpp Android binding native source shape (step 19): expected {expected} matches, got {count}")
+    text = text.replace(old, new)
+
+replace_once(
+    "#include <condition_variable>\n",
+    "#include <atomic>\n#include <condition_variable>\n",
+)
+replace_once(
+    "#include <sys/resource.h>\n",
+    "#include <sys/resource.h>\n#include <fcntl.h>\n",
+)
+
+# i) Threads while writing.
+replace_once(
+    r'''static void iaoffline_update_threads(llama_context *context) {
+    int n_allowed = 0;
+    int n_fast = 0;
+    const int threads = iaoffline_thread_count(&n_allowed, &n_fast);
+    if (threads == llama_n_threads(context) && threads == llama_n_threads_batch(context)) return;
+    LOGi("%s: %d threads (%d cores available now, %d of them fast)", __func__, threads, n_allowed, n_fast);
+    llama_set_n_threads(context, threads, threads);
+}''',
+    r'''// Writing one token is limited by memory bandwidth rather than by the cores: with six fast cores or
+// more, one is left to the app's screen and Binder threads, which would otherwise preempt a
+// generation thread and make every operation wait for it. Reading a prompt keeps all of them.
+static int iaoffline_generation_threads(int threads, int n_fast) {
+    return g_cpu_types_known && n_fast >= 6 && threads >= n_fast ? threads - 1 : threads;
+}
+
+static void iaoffline_update_threads(llama_context *context) {
+    int n_allowed = 0;
+    int n_fast = 0;
+    const int threads = iaoffline_thread_count(&n_allowed, &n_fast);
+    const int generation = iaoffline_generation_threads(threads, n_fast);
+    if (generation == llama_n_threads(context) && threads == llama_n_threads_batch(context)) return;
+    LOGi("%s: %d threads, %d while writing (%d cores available now, %d of them fast)", __func__, threads,
+         generation, n_allowed, n_fast);
+    llama_set_n_threads(context, generation, threads);
+}''',
+)
+
+# j) Gemma 4 shared KV layers.
+replace_once(
+    "    if (full_attention_interval > 1) n_layer = std::max(1, n_layer / full_attention_interval);\n",
+    "    if (full_attention_interval > 1) n_layer = std::max(1, n_layer / full_attention_interval);\n"
+    "    // Gemma 4 E2B/E4B: the last shared_kv_layers layers read the cache of earlier ones.\n"
+    "    const int shared_kv_layers = iaoffline_meta_int(model, \".attention.shared_kv_layers\");\n"
+    "    if (shared_kv_layers > 0 && shared_kv_layers < n_layer) n_layer -= shared_kv_layers;\n",
+)
+
+# e) Abort, decode failure code.
+replace_once(
+    "static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {\n",
+    r'''// Set by requestAbort() from another thread (a new request, or the user's Stop) to end a long decode
+// between two operations; cleared when the next system prompt, history or user prompt starts.
+static std::atomic<bool> g_abort_requested{false};
+
+static bool iaoffline_abort_callback(void * /*data*/) {
+    return g_abort_requested.load(std::memory_order_relaxed);
+}
+
+// What a processing call whose decode failed returns: 3 when it was aborted on request.
+static int iaoffline_decode_failure() {
+    return g_abort_requested.load() ? 3 : 2;
+}
+
+static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
+''',
+)
+replace_once(
+    r'''    const int n_threads = iaoffline_thread_count(&n_allowed_cores, &n_fast_cores);
+    LOGi("%s: Using %d threads (%d cores available, %d of them fast)", __func__, n_threads,
+         n_allowed_cores, n_fast_cores);''',
+    r'''    const int n_threads = iaoffline_thread_count(&n_allowed_cores, &n_fast_cores);
+    const int n_threads_generation = iaoffline_generation_threads(n_threads, n_fast_cores);
+    LOGi("%s: Using %d threads, %d while writing (%d cores available, %d of them fast)", __func__, n_threads,
+         n_threads_generation, n_allowed_cores, n_fast_cores);''',
+)
+# g) h) Micro-batch and output reservation.
+replace_once(
+    r'''    ctx_params.n_batch = BATCH_SIZE;
+    ctx_params.n_ubatch = BATCH_SIZE / 2;
+    ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads;''',
+    r'''    // The micro-batch the app chose (IAOFFLINE_UBATCH, 256 by default). Calls pass up to n_batch
+    // tokens and llama.cpp splits them into micro-batches.
+    const int n_ubatch = (int) std::min<long>(2048, std::max<long>(64, iaoffline_env_long("IAOFFLINE_UBATCH", BATCH_SIZE / 2)));
+    ctx_params.n_batch = std::max(BATCH_SIZE, n_ubatch);
+    ctx_params.n_ubatch = n_ubatch;
+    // The binding reads the logits of one token per call; the compute buffer otherwise reserves them
+    // for every token of a micro-batch.
+    ctx_params.n_outputs_max = 16;
+    ctx_params.n_threads = n_threads_generation;
+    ctx_params.n_threads_batch = n_threads;''',
+)
+replace_once(
+    r'''        ctx_params.type_k = GGML_TYPE_F16;
+        ctx_params.type_v = GGML_TYPE_F16;''',
+    r'''        ctx_params.type_k = GGML_TYPE_F16;
+        ctx_params.type_v = GGML_TYPE_F16;
+        // Without flash attention the attention scores grow with the micro-batch: keep the default one.
+        ctx_params.n_batch = BATCH_SIZE;
+        ctx_params.n_ubatch = BATCH_SIZE / 2;''',
+)
+replace_once(
+    r'''        LOGe("%s: llama_new_context_with_model() returned null)", __func__);
+    }
+    return context;''',
+    r'''        LOGe("%s: llama_new_context_with_model() returned null)", __func__);
+    } else {
+        llama_set_abort_callback(context, iaoffline_abort_callback, nullptr);
+    }
+    return context;''',
+)
+replace_once(
+    '    setenv("IAOFFLINE_ACTIVE_THREADS", std::to_string(llama_n_threads(context)).c_str(), 1);',
+    '    setenv("IAOFFLINE_ACTIVE_THREADS", std::to_string(llama_n_threads_batch(context)).c_str(), 1);\n'
+    '    setenv("IAOFFLINE_ACTIVE_GENERATION_THREADS", std::to_string(llama_n_threads(context)).c_str(), 1);',
+)
+
+# g) Calls pass up to n_batch tokens, which follows the micro-batch.
+replace_once(
+    r'''    for (int i = 0; i < (int) tokens.size(); i += BATCH_SIZE) {
+        const int cur_batch_size = std::min((int) tokens.size() - i, BATCH_SIZE);''',
+    r'''    const int n_batch = (int) llama_n_batch(context);
+    for (int i = 0; i < (int) tokens.size(); i += n_batch) {
+        const int cur_batch_size = std::min((int) tokens.size() - i, n_batch);''',
+)
+
+# c) d) Message positions and the marked turn.
+replace_once(
+    "static bool g_kv_ends_with_newline = false;\n",
+    r'''static bool g_kv_ends_with_newline = false;
+// Where each message of chat_msgs starts in the context, in step with it (dropOldestTurns); a size that
+// differs from chat_msgs means unknown (a context shift, a session saved by an older version).
+static std::vector<llama_pos> g_msg_pos;
+// The user turn "Refazer" or an edit goes back to (IAOFFLINE_TURN_MARK=1): where it starts, the turns
+// and newline state before it and, for recurrent and hybrid models, their recurrent state there.
+static bool g_turn_mark_valid = false;
+static llama_pos g_turn_pos = 0;
+static size_t g_turn_msgs = 0;
+static bool g_turn_nl = false;
+static std::vector<uint8_t> g_turn_checkpoint;
+// Where the answer being written starts, for its entry in g_msg_pos.
+static llama_pos g_answer_pos = 0;
+''',
+)
+replace_once(
+    r'''    system_prompt_position = 0;
+    current_position = 0;
+
+    if (clear_kv_cache)
+        llama_memory_clear(llama_get_memory(g_context), false);''',
+    r'''    system_prompt_position = 0;
+    current_position = 0;
+    g_msg_pos.clear();
+    g_turn_mark_valid = false;
+
+    // The context is null after nativeReleaseContext.
+    if (clear_kv_cache && g_context != nullptr)
+        llama_memory_clear(llama_get_memory(g_context), false);''',
+)
+replace_once(
+    "    current_position -= n_discard;\n",
+    "    current_position -= n_discard;\n"
+    "    // The turns no longer line up with their positions, and the marked turn may be gone.\n"
+    "    g_msg_pos.clear();\n"
+    "    g_turn_mark_valid = false;\n",
+)
+replace_once(
+    "                                       const bool generation_prompt = true) {\n",
+    "                                       const bool generation_prompt = true, const llama_pos position = -1) {\n",
+)
+replace_once(
+    "    chat_msgs.push_back(new_msg);\n",
+    "    chat_msgs.push_back(new_msg);\n"
+    "    if (g_msg_pos.size() + 1 == chat_msgs.size()) g_msg_pos.push_back(position >= 0 ? position : current_position);\n",
+)
+
+# a) The token sampled last, decoded at the start of the next call.
+replace_once(
+    r'''static void reset_short_term_states() {
+    stop_generation_position = 0;
+    cached_token_chars.clear();
+    assistant_ss.str("");
+}''',
+    r'''// Sampled and returned as text, decoded at the start of the next generateNextToken call.
+static llama_token g_pending_token = LLAMA_TOKEN_NULL;
+
+static void reset_short_term_states() {
+    stop_generation_position = 0;
+    cached_token_chars.clear();
+    assistant_ss.str("");
+    g_pending_token = LLAMA_TOKEN_NULL;
+}
+
+// Decodes one generated token at the current position, shifting the context first when it is full.
+static bool iaoffline_decode_token(llama_token token) {
+    // Infinite text generation via context shifting
+    if (current_position >= (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM) {
+        LOGw("%s: Context full! Shifting...", __func__);
+        shift_context();
+    }
+    g_batch.clear();
+    g_batch.add(token, current_position, 0, true);
+    if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, g_batch.get()) != 0) {
+        LOGe("%s: llama_decode() failed for generated token", __func__);
+        return false;
+    }
+    current_position++;
+    return true;
+}''',
+)
+
+# k) Page cache of state files.
+replace_once(
+    "// Restores the longest prefix of [tokens] that the saved state holds; returns its length.\n",
+    r'''// Drops a state file just written or read from the page cache, where it would push out the model's
+// weights mapped from the file (low-memory mode, experts read from storage).
+static void iaoffline_drop_file_cache(const char *path) {
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+    close(fd);
+}
+
+// Restores the longest prefix of [tokens] that the saved state holds; returns its length.
+''',
+)
+replace_once(
+    "    saved.resize(n_loaded);\n",
+    "    saved.resize(n_loaded);\n    iaoffline_drop_file_cache(path);\n",
+)
+replace_once(
+    '    LOGi("%s: saved %zu system prompt tokens", __func__, tokens.size());\n',
+    '    iaoffline_drop_file_cache(path);\n    LOGi("%s: saved %zu system prompt tokens", __func__, tokens.size());\n',
+)
+
+# e) An aborted decode returns 3; every processing call clears the request first.
+replace_all(
+    '        LOGe("%s: llama_decode() failed!", __func__);\n        return 2;\n',
+    '        LOGe("%s: llama_decode() failed!", __func__);\n        return iaoffline_decode_failure();\n',
+    3,
+)
+replace_all(
+    '            LOGe("%s: llama_decode() failed!", __func__);\n            return 2;\n',
+    '            LOGe("%s: llama_decode() failed!", __func__);\n            return iaoffline_decode_failure();\n',
+    1,
+)
+replace_once(
+    r'''    common_sampler_reset(g_sampler);
+    setenv("IAOFFLINE_SESSION_CLEAN", "0", 1);
+
+    // Obtain system prompt from JEnv''',
+    r'''    common_sampler_reset(g_sampler);
+    setenv("IAOFFLINE_SESSION_CLEAN", "0", 1);
+    g_abort_requested.store(false);
+
+    // Obtain system prompt from JEnv''',
+)
+replace_once(
+    "    const auto *role_chars = env->GetStringUTFChars(jrole, nullptr);\n",
+    "    g_abort_requested.store(false);\n    const auto *role_chars = env->GetStringUTFChars(jrole, nullptr);\n",
+)
+
+# c) The marked turn.
+replace_once(
+    'extern "C"\nJNIEXPORT jint JNICALL\nJava_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(',
+    r'''// Records the user turn about to be read as the one "Refazer" goes back to (IAOFFLINE_TURN_MARK=1).
+// The rounds after a tool keep the mark of the user's own turn.
+static void iaoffline_mark_turn() {
+    const char *mark = getenv("IAOFFLINE_TURN_MARK");
+    if (mark == nullptr || mark[0] != '1') return;
+    g_turn_mark_valid = false;
+    g_turn_pos = current_position;
+    g_turn_msgs = chat_msgs.size();
+    g_turn_nl = g_kv_ends_with_newline;
+    if (llama_model_is_recurrent(g_model) || llama_model_is_hybrid(g_model)) {
+        const size_t cap = (size_t) iaoffline_env_long("IAOFFLINE_CHECKPOINT_MAX_MB", 0) * 1024 * 1024;
+        const size_t size = cap > 0 ? llama_state_seq_get_size_ext(g_context, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) : 0;
+        if (size == 0 || size > cap) {
+            std::vector<uint8_t>().swap(g_turn_checkpoint);
+            return;
+        }
+        g_turn_checkpoint.resize(size);
+        if (llama_state_seq_get_data_ext(g_context, g_turn_checkpoint.data(), size, 0,
+                                         LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != size) {
+            return;
+        }
+    }
+    g_turn_mark_valid = true;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(''',
+)
+replace_once(
+    r'''    // Reset short-term states
+    reset_short_term_states();
+    setenv("IAOFFLINE_SESSION_CLEAN", "0", 1);
+
+    // Obtain and tokenize user prompt''',
+    r'''    // Reset short-term states
+    reset_short_term_states();
+    setenv("IAOFFLINE_SESSION_CLEAN", "0", 1);
+    g_abort_requested.store(false);
+    iaoffline_mark_turn();
+
+    // Obtain and tokenize user prompt''',
+)
+replace_once(
+    "    stop_generation_position = current_position + n_predict;\n",
+    "    stop_generation_position = current_position + n_predict;\n    g_answer_pos = current_position;\n",
+)
+
+# a) generateNextToken.
+replace_once(
+    r'''    iaoffline_update_threads(g_context);
+
+    // Infinite text generation via context shifting
+    if (current_position >= (int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM) {
+        LOGw("%s: Context full! Shifting...", __func__);
+        shift_context();
+    }
+
+    // Stop if reaching the marked position''',
+    r'''    iaoffline_update_threads(g_context);
+
+    // The token returned by the previous call is decoded now, after its text went to the app.
+    if (g_pending_token != LLAMA_TOKEN_NULL) {
+        const llama_token pending = g_pending_token;
+        g_pending_token = LLAMA_TOKEN_NULL;
+        const int64_t decode_start_us = ggml_time_us();
+        if (!iaoffline_decode_token(pending)) return nullptr;
+        g_perf_answer_us += ggml_time_us() - decode_start_us;
+    }
+
+    // Stop if reaching the marked position''',
+)
+replace_once(
+    r'''    common_sampler_accept(g_sampler, new_token_id, true);
+
+    // Populate the batch with new token, then decode
+    g_batch.clear();
+    g_batch.add(new_token_id, current_position, 0, true);
+    if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, g_batch.get()) != 0) {
+        LOGe("%s: llama_decode() failed for generated token", __func__);
+        return nullptr;
+    }
+
+    g_perf_answer_us += ggml_time_us() - token_start_us;
+    g_perf_answer_tokens++;
+
+    // Update position
+    current_position++;
+
+    // Stop if next token is EOG
+    if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+        LOGd("id: %d,\tIS EOG!\nSTOP.", new_token_id);
+        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());''',
+    r'''    common_sampler_accept(g_sampler, new_token_id, true);
+
+    g_perf_answer_us += ggml_time_us() - token_start_us;
+    g_perf_answer_tokens++;
+
+    // Stop if next token is EOG
+    if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+        LOGd("id: %d,\tIS EOG!\nSTOP.", new_token_id);
+        // Decoded before the answer ends, so the context holds the whole turn.
+        const int64_t decode_start_us = ggml_time_us();
+        if (!iaoffline_decode_token(new_token_id)) return nullptr;
+        g_perf_answer_us += ggml_time_us() - decode_start_us;
+        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str(), true, g_answer_pos);''',
+)
+replace_once(
+    r'''    // If not EOG, convert to text
+    auto new_token_chars = common_token_to_piece(g_context, new_token_id);''',
+    r'''    g_pending_token = new_token_id;
+
+    // If not EOG, convert to text
+    auto new_token_chars = common_token_to_piece(g_context, new_token_id);''',
+)
+
+# d) Session format 2: the position of each turn.
+replace_once(
+    "IAOFFLINE_SESSION_VERSION = 1;",
+    "IAOFFLINE_SESSION_VERSION = 2;",
+)
+replace_once(
+    "    return fclose(file) == 0 && ok;\n",
+    r'''    // Version 2: where each turn starts in the context (none when unknown).
+    const uint32_t n_pos = g_msg_pos.size() == chat_msgs.size() ? (uint32_t) g_msg_pos.size() : 0;
+    ok = ok && fwrite(&n_pos, sizeof(n_pos), 1, file) == 1 &&
+         (n_pos == 0 || fwrite(g_msg_pos.data(), sizeof(llama_pos), n_pos, file) == n_pos);
+    return fclose(file) == 0 && ok;
+''',
+)
+replace_once(
+    "                                        std::vector<common_chat_msg> &msgs) {\n",
+    "                                        std::vector<common_chat_msg> &msgs, std::vector<llama_pos> &positions) {\n",
+)
+replace_once(
+    "header.version == IAOFFLINE_SESSION_VERSION",
+    "(header.version == 1 || header.version == IAOFFLINE_SESSION_VERSION)",
+)
+replace_once(
+    "    fclose(file);\n    return ok;\n",
+    r'''    if (ok && header.version >= 2) {
+        uint32_t n_pos = 0;
+        ok = fread(&n_pos, sizeof(n_pos), 1, file) == 1 && (n_pos == 0 || n_pos == header.messages);
+        if (ok && n_pos > 0) {
+            positions.resize(n_pos);
+            ok = fread(positions.data(), sizeof(llama_pos), n_pos, file) == n_pos;
+        }
+    }
+    fclose(file);
+    return ok;
+''',
+)
+replace_once(
+    "    std::vector<common_chat_msg> msgs;\n",
+    "    std::vector<common_chat_msg> msgs;\n    std::vector<llama_pos> positions;\n",
+)
+replace_once(
+    'iaoffline_read_session_meta(path + ".meta", header, msgs)',
+    'iaoffline_read_session_meta(path + ".meta", header, msgs, positions)',
+)
+replace_once(
+    "    chat_msgs = std::move(msgs);\n",
+    "    chat_msgs = std::move(msgs);\n"
+    "    if (positions.size() == chat_msgs.size()) g_msg_pos = std::move(positions);\n",
+)
+replace_once(
+    '    LOGi("%s: saved the conversation',
+    '    iaoffline_drop_file_cache(path.c_str());\n    LOGi("%s: saved the conversation',
+)
+replace_once(
+    '    LOGi("%s: restored the conversation',
+    '    iaoffline_drop_file_cache(path.c_str());\n    LOGi("%s: restored the conversation',
+)
+
+# b) c) d) e) f) New entry points.
+replace_once(
+    "static bool is_valid_utf8(const char *string) {",
+    r'''extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_processHistoryMessages(
+        JNIEnv *env,
+        jobject /*unused*/,
+        jobjectArray jroles,
+        jobjectArray jcontents
+) {
+    g_abort_requested.store(false);
+    const jsize count = env->GetArrayLength(jroles);
+    if (count != env->GetArrayLength(jcontents)) return 1;
+    const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
+    // Each turn formatted and tokenized as processHistoryMessage does, then decoded together.
+    llama_tokens tokens;
+    std::string formatted;
+    for (jsize i = 0; i < count; i++) {
+        auto jrole = (jstring) env->GetObjectArrayElement(jroles, i);
+        auto jcontent = (jstring) env->GetObjectArrayElement(jcontents, i);
+        const std::string role = iaoffline_jstring(env, jrole) == ROLE_ASSISTANT ? ROLE_ASSISTANT : ROLE_USER;
+        const std::string content = iaoffline_jstring(env, jcontent);
+        env->DeleteLocalRef(jrole);
+        env->DeleteLocalRef(jcontent);
+        const llama_pos position = current_position + (llama_pos) tokens.size();
+        if (has_chat_template) {
+            formatted = chat_add_and_format(role, content, /* generation_prompt */ false, position);
+        } else {
+            formatted = (role == ROLE_USER ? "\nUser: " : "\nAssistant: ") + content + "\n";
+        }
+        const auto turn = common_tokenize(g_context, formatted, position == 0, has_chat_template);
+        tokens.insert(tokens.end(), turn.begin(), turn.end());
+    }
+    if (tokens.empty()) return 0;
+    if (decode_tokens_in_batches(g_context, g_batch, tokens, current_position)) {
+        LOGe("%s: llama_decode() failed!", __func__);
+        return iaoffline_decode_failure();
+    }
+    current_position += (int) tokens.size();
+    g_kv_ends_with_newline = !formatted.empty() && formatted.back() == '\n';
+    return 0;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_nativeRewindLastTurn(JNIEnv * /*env*/, jobject /*unused*/) {
+    if (!g_turn_mark_valid || g_turn_msgs > chat_msgs.size() || g_turn_pos > current_position) return -1;
+    llama_memory_t mem = llama_get_memory(g_context);
+    // The recurrent state at the start of the turn comes back first; then only the attention cache
+    // still holds the turn and its answer, and their positions are removed.
+    if ((llama_model_is_recurrent(g_model) || llama_model_is_hybrid(g_model)) &&
+        (g_turn_checkpoint.empty() ||
+         llama_state_seq_set_data_ext(g_context, g_turn_checkpoint.data(), g_turn_checkpoint.size(), 0,
+                                      LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != g_turn_checkpoint.size())) {
+        LOGw("%s: the recurrent state of the turn could not be restored; reading the conversation instead", __func__);
+        reset_long_term_states();
+        return -1;
+    }
+    // A sliding-window cache must still hold the window before the first token decoded next.
+    const int n_swa = llama_model_n_swa(g_model);
+    const llama_pos needed = n_swa > 0 ? std::max<llama_pos>(0, g_turn_pos - n_swa + 1) : 0;
+    if (!llama_memory_seq_rm(mem, 0, g_turn_pos, -1) || llama_memory_seq_pos_max(mem, 0) + 1 != g_turn_pos ||
+        (g_turn_pos > 0 && llama_memory_seq_pos_min(mem, 0) > needed)) {
+        LOGw("%s: the context cannot go back to the turn; reading the conversation instead", __func__);
+        reset_long_term_states();
+        return -1;
+    }
+    chat_msgs.resize(g_turn_msgs);
+    if (g_msg_pos.size() > g_turn_msgs) g_msg_pos.resize(g_turn_msgs);
+    current_position = g_turn_pos;
+    g_kv_ends_with_newline = g_turn_nl;
+    reset_short_term_states();
+    // Repetition penalties start over, as when the conversation is read again.
+    common_sampler_reset(g_sampler);
+    setenv("IAOFFLINE_SESSION_CLEAN", "0", 1);
+    LOGi("%s: back to the start of the last turn (%d tokens, %zu turns)", __func__, (int) current_position,
+         chat_msgs.size());
+    return current_position;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_nativeDropOldestTurns(JNIEnv * /*env*/, jobject /*unused*/, jint jcount) {
+    const size_t first = !chat_msgs.empty() && chat_msgs[0].role == ROLE_SYSTEM ? 1 : 0;
+    const size_t count = jcount > 0 ? (size_t) jcount : 0;
+    llama_memory_t mem = llama_get_memory(g_context);
+    if (count == 0 || !common_chat_templates_was_explicit(g_chat_templates.get()) ||
+        g_msg_pos.size() != chat_msgs.size() || first + count >= chat_msgs.size() ||
+        llama_model_is_recurrent(g_model) || llama_model_is_hybrid(g_model) || !llama_memory_can_shift(mem)) {
+        return -1;
+    }
+    const llama_pos p0 = g_msg_pos[first];
+    const llama_pos p1 = g_msg_pos[first + count];
+    if (p0 < system_prompt_position || p1 <= p0 || p1 > current_position) return -1;
+    if (!llama_memory_seq_rm(mem, 0, p0, p1)) {
+        LOGw("%s: the oldest turns cannot be removed; reading the conversation instead", __func__);
+        reset_long_term_states();
+        return -1;
+    }
+    const llama_pos delta = p1 - p0;
+    llama_memory_seq_add(mem, 0, p1, current_position, -delta);
+    chat_msgs.erase(chat_msgs.begin() + (long) first, chat_msgs.begin() + (long) (first + count));
+    g_msg_pos.erase(g_msg_pos.begin() + (long) first, g_msg_pos.begin() + (long) (first + count));
+    for (size_t i = first; i < g_msg_pos.size(); i++) g_msg_pos[i] -= delta;
+    current_position -= delta;
+    g_turn_mark_valid = false;
+    LOGi("%s: dropped the %zu oldest turns (%d tokens); %d tokens left", __func__, count, (int) delta,
+         (int) current_position);
+    return current_position;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_nativeReleaseContext(JNIEnv * /*env*/, jobject /*unused*/) {
+    if (g_context == nullptr) return;
+    reset_long_term_states(false);
+    reset_short_term_states();
+    iaoffline_reset_prefetch();
+    common_sampler_free(g_sampler);
+    g_sampler = nullptr;
+    g_chat_templates.reset();
+    g_batch = common_batch();
+    llama_free(g_context);
+    g_context = nullptr;
+    LOGi("%s: context freed; the model stays loaded", __func__);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_nativeRequestAbort(JNIEnv * /*env*/, jobject /*unused*/) {
+    g_abort_requested.store(true);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_nativeAdviseWillNeed(JNIEnv *env, jobject /*unused*/, jstring jpath) {
+    // Asking the kernel to read a multi-GB file may block while it queues the reads: on a thread of its own.
+    std::thread([path = iaoffline_jstring(env, jpath)] {
+        const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return;
+        posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
+        close(fd);
+    }).detach();
+}
+
+static bool is_valid_utf8(const char *string) {''',
+)
+
+# f) Unloading after nativeReleaseContext.
+replace_once(
+    "    llama_free(g_context);\n    llama_model_free(g_model);\n",
+    "    llama_free(g_context);\n    llama_model_free(g_model);\n"
+    "    g_sampler = nullptr;\n    g_context = nullptr;\n    g_model = nullptr;\n",
+)
+
+path.write_text(text)
+print("Applied IA Offline faster-answers native patch")
+PY
+
+# 20. The Kotlin side of step 19: addHistoryMessages, rewindLastTurn, dropOldestTurns,
+#     releaseContext/restoreContext and requestAbort. An aborted call (3) leaves the engine ready and
+#     throws CancellationException; while the context is released, every call that would use it fails
+#     with IllegalStateException instead of reaching native code.
+python3 - "${ENGINE_FILE}" "${INTERFACE_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = None
+text = ""
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp Android binding source shape in {path.name} (step 20): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+path = Path(sys.argv[1])
+text = path.read_text()
+replace_once(
+    "        private val TAG = InferenceEngineImpl::class.java.simpleName\n",
+    "        private val TAG = InferenceEngineImpl::class.java.simpleName\n\n"
+    "        /** What a processing call returns when requestAbort() ended its decode. */\n"
+    "        private const val ABORTED = 3\n",
+)
+replace_once(
+    "    private external fun restoreSessionState(path: String): Int\n",
+    r'''    private external fun restoreSessionState(path: String): Int
+
+    private external fun processHistoryMessages(roles: Array<String>, contents: Array<String>): Int
+
+    private external fun nativeRewindLastTurn(): Int
+
+    private external fun nativeDropOldestTurns(count: Int): Int
+
+    private external fun nativeReleaseContext()
+
+    private external fun nativeRequestAbort()
+
+    private external fun nativeAdviseWillNeed(path: String)
+''',
+)
+replace_once(
+    "    private var _nativeModelLoaded = false\n",
+    "    private var _nativeModelLoaded = false\n"
+    "    /** Set by releaseContext(): the model is loaded, its context is not. */\n"
+    "    @Volatile\n"
+    "    private var _contextReleased = false\n\n"
+    "    private fun checkContext() = check(!_contextReleased) { \"The context was released; restore it first!\" }\n",
+)
+replace_once(
+    r'''                "Cannot process system prompt in ${_state.value.javaClass.simpleName}!"
+            }
+''',
+    r'''                "Cannot process system prompt in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+''',
+)
+replace_once(
+    r'''            processSystemPrompt(prompt).let { result ->
+                if (result != 0) {''',
+    r'''            processSystemPrompt(prompt).let { result ->
+                if (result == ABORTED) {
+                    _state.value = InferenceEngine.State.ModelReady
+                    throw CancellationException("System prompt aborted")
+                }
+                if (result != 0) {''',
+)
+replace_once(
+    r'''                "Cannot add history in ${_state.value.javaClass.simpleName}!"
+            }
+            _state.value = InferenceEngine.State.ProcessingSystemPrompt
+            val result = processHistoryMessage(role, content)
+            _state.value = InferenceEngine.State.ModelReady
+            if (result != 0) throw IOException("Failed to process history message: $result")
+        }
+''',
+    r'''                "Cannot add history in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+            _state.value = InferenceEngine.State.ProcessingSystemPrompt
+            val result = processHistoryMessage(role, content)
+            _state.value = InferenceEngine.State.ModelReady
+            if (result == ABORTED) throw CancellationException("History aborted")
+            if (result != 0) throw IOException("Failed to process history message: $result")
+        }
+
+    /**
+     * Adds several earlier turns after the system prompt in one decode, without generating.
+     */
+    override suspend fun addHistoryMessages(roles: List<String>, contents: List<String>) =
+        withContext(llamaDispatcher) {
+            require(roles.size == contents.size) { "Each turn needs a role and a text!" }
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot add history in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+            _state.value = InferenceEngine.State.ProcessingSystemPrompt
+            val result = processHistoryMessages(roles.toTypedArray(), contents.toTypedArray())
+            _state.value = InferenceEngine.State.ModelReady
+            if (result == ABORTED) throw CancellationException("History aborted")
+            if (result != 0) throw IOException("Failed to process history messages: $result")
+        }
+
+    /**
+     * Goes back to the start of the last marked user turn; returns its position, or -1.
+     */
+    override suspend fun rewindLastTurn(): Int =
+        withContext(llamaDispatcher) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot go back in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+            nativeRewindLastTurn()
+        }
+
+    /**
+     * Drops the [count] oldest turns after the system prompt; returns the tokens left, or -1.
+     */
+    override suspend fun dropOldestTurns(count: Int): Int =
+        withContext(llamaDispatcher) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot drop turns in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+            nativeDropOldestTurns(count)
+        }
+
+    /**
+     * Frees the context and keeps the model loaded, until [restoreContext].
+     */
+    override suspend fun releaseContext() =
+        withContext(llamaDispatcher) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot release the context in ${_state.value.javaClass.simpleName}!"
+            }
+            if (!_contextReleased) {
+                nativeReleaseContext()
+                _contextReleased = true
+            }
+        }
+
+    /**
+     * Creates the context again after [releaseContext].
+     */
+    override suspend fun restoreContext() =
+        withContext(llamaDispatcher) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot restore the context in ${_state.value.javaClass.simpleName}!"
+            }
+            if (_contextReleased) {
+                prepare().let {
+                    if (it != 0) {
+                        val nativeDetail = runCatching { lastError().trim() }.getOrDefault("").take(3000)
+                        throw IOException(buildString {
+                            append("Failed to prepare resources")
+                            if (nativeDetail.isNotBlank()) append(". Detalhe nativo: " + nativeDetail)
+                        })
+                    }
+                }
+                _contextReleased = false
+            }
+        }
+
+    /**
+     * Ends a long decode in progress from any thread; the call it ends throws CancellationException.
+     */
+    override fun requestAbort() = nativeRequestAbort()
+
+    /**
+     * Asks the kernel to read the file at [path] into the page cache in the background, from any thread.
+     */
+    override fun adviseWillNeed(path: String) = nativeAdviseWillNeed(path)
+''',
+)
+replace_once(
+    r'''                "Cannot save the session in ${_state.value.javaClass.simpleName}!"
+            }
+''',
+    r'''                "Cannot save the session in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+''',
+)
+replace_once(
+    r'''                "Cannot restore a session in ${_state.value.javaClass.simpleName}!"
+            }
+''',
+    r'''                "Cannot restore a session in ${_state.value.javaClass.simpleName}!"
+            }
+            checkContext()
+''',
+)
+replace_once(
+    r'''            "User prompt discarded due to: ${_state.value.javaClass.simpleName}"
+        }
+''',
+    r'''            "User prompt discarded due to: ${_state.value.javaClass.simpleName}"
+        }
+        checkContext()
+''',
+)
+replace_once(
+    r'''            processUserPrompt(message, predictLength).let { result ->
+                if (result != 0) {''',
+    r'''            processUserPrompt(message, predictLength).let { result ->
+                if (result == ABORTED) throw CancellationException("User prompt aborted")
+                if (result != 0) {''',
+)
+replace_once(
+    "                    unload()\n                    _nativeModelLoaded = false\n\n",
+    "                    unload()\n                    _nativeModelLoaded = false\n                    _contextReleased = false\n\n",
+)
+replace_once(
+    "                        unload()\n                        _nativeModelLoaded = false\n",
+    "                        unload()\n                        _nativeModelLoaded = false\n                        _contextReleased = false\n",
+)
+path.write_text(text)
+
+path = Path(sys.argv[2])
+text = path.read_text()
+replace_once(
+    "    suspend fun restoreSession(path: String): Int\n",
+    r'''    suspend fun restoreSession(path: String): Int
+
+    /**
+     * Adds several earlier turns after the system prompt in one decode, without generating.
+     */
+    suspend fun addHistoryMessages(roles: List<String>, contents: List<String>)
+
+    /**
+     * Goes back to the start of the last user turn marked with IAOFFLINE_TURN_MARK=1, so it can be
+     * answered again or replaced: its position, or -1 when the context cannot go back there.
+     */
+    suspend fun rewindLastTurn(): Int
+
+    /**
+     * Drops the [count] oldest turns after the system prompt from the context: the tokens left, or -1.
+     */
+    suspend fun dropOldestTurns(count: Int): Int
+
+    /**
+     * Frees the context (the memory of the conversation) and keeps the model loaded.
+     */
+    suspend fun releaseContext()
+
+    /**
+     * Creates the context again after [releaseContext].
+     */
+    suspend fun restoreContext()
+
+    /**
+     * Ends a long prompt decode in progress, from any thread; the call it ends throws CancellationException.
+     */
+    fun requestAbort()
+
+    /**
+     * Asks the kernel to read the file at [path] (the model) into the page cache in the background.
+     */
+    fun adviseWillNeed(path: String)
+''',
+)
+path.write_text(text)
+print("Applied IA Offline faster-answers inference-engine patch")
+PY
+
+# 21. llama.cpp itself:
+#     a) The repetition penalties looked up every candidate token (150-260 thousand per token for
+#        Qwen and Gemma vocabularies) in their table of recent tokens. Right after the logits are
+#        copied, the candidates are the whole vocabulary in token order, so the at most
+#        penalty_last_n recent tokens are penalized directly; the result is the same.
+#     b) With IAOFFLINE_REPACK_RELEASE=1 (set by the app when it keeps an optimized copy of the
+#        weights in RAM for a model that would not fit twice), the file is not read in full up front,
+#        and the pages of each tensor copied into its repacked buffer are dropped from this process and
+#        from the page cache right away. The model is then in RAM about once during the load instead of
+#        twice. MADV_DONTNEED on the read-only shared mapping is safe: a tensor still mapped from the
+#        same range (tied embeddings) reads it from the file again.
+python3 - "${LLAMA_DIR}/src/llama-sampler.cpp" "${MODEL_FILE}" "${MODEL_LOADER_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = None
+text = ""
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp source shape in {path.name} (step 21): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+path = Path(sys.argv[1])
+text = path.read_text()
+replace_once(
+    "static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {\n",
+    r'''// IA Offline: applies the penalties by looking up the candidates of the recent tokens, when the
+// candidates are still the whole vocabulary in token order; false otherwise.
+static bool iaoffline_penalties_apply_direct(const llama_sampler_penalties * ctx, llama_token_data_array * cur_p) {
+    if (cur_p->sorted || cur_p->size == 0 || cur_p->data[0].id != 0 ||
+        cur_p->data[cur_p->size - 1].id != (llama_token) (cur_p->size - 1)) {
+        return false;
+    }
+    for (const auto & entry : ctx->token_count) {
+        if (entry.first < 0 || (size_t) entry.first >= cur_p->size || cur_p->data[entry.first].id != entry.first) {
+            return false;
+        }
+    }
+    for (const auto & entry : ctx->token_count) {
+        auto & cur = cur_p->data[entry.first];
+        const int count = entry.second;
+        if (cur.logit <= 0) {
+            cur.logit *= ctx->penalty_repeat;
+        } else {
+            cur.logit /= ctx->penalty_repeat;
+        }
+        cur.logit -= float(count) * ctx->penalty_freq + float(count > 0) * ctx->penalty_present;
+    }
+    return true;
+}
+
+static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+''',
+)
+replace_once(
+    "    // Apply frequency and presence penalties to the cur_p\n",
+    r'''    if (iaoffline_penalties_apply_direct(ctx, cur_p)) {
+        cur_p->sorted = false;
+        return;
+    }
+
+    // Apply frequency and presence penalties to the cur_p
+''',
+)
+path.write_text(text)
+
+path = Path(sys.argv[2])
+text = path.read_text()
+replace_once(
+    "    const bool iaoffline_prefetch = iaoffline_moe_stream == nullptr || iaoffline_moe_stream[0] != '1';\n",
+    "    // Nor when each repacked tensor's pages are released right after it is copied (IAOFFLINE_REPACK_RELEASE).\n"
+    "    const char * iaoffline_repack_release = getenv(\"IAOFFLINE_REPACK_RELEASE\");\n"
+    "    const bool iaoffline_prefetch = (iaoffline_moe_stream == nullptr || iaoffline_moe_stream[0] != '1') &&\n"
+    "                                    (iaoffline_repack_release == nullptr || iaoffline_repack_release[0] != '1');\n",
+)
+path.write_text(text)
+
+path = Path(sys.argv[3])
+text = path.read_text()
+replace_once(
+    '#include "llama-model-loader.h"\n',
+    r'''#include "llama-model-loader.h"
+
+#if defined(__linux__)
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+// IA Offline: set by the app (IAOFFLINE_REPACK_RELEASE=1) when the repacked copy of the weights and
+// the file mapping would not fit in RAM together.
+static bool iaoffline_repack_release() {
+    const char * value = getenv("IAOFFLINE_REPACK_RELEASE");
+    return value != nullptr && value[0] == '1';
+}
+
+// Drops the whole pages of [data, data + size), read from the file at file_offset, from this process
+// and from the page cache. The mapping is read-only and shared, so a later read faults them in again.
+static void iaoffline_release_range(const uint8_t * data, size_t size, int fd, size_t file_offset) {
+#if defined(__linux__)
+    const uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
+    const uintptr_t first = ((uintptr_t) data + page - 1) & ~(page - 1);
+    const uintptr_t last = ((uintptr_t) data + size) & ~(page - 1);
+    if (last <= first) {
+        return;
+    }
+    madvise((void *) first, last - first, MADV_DONTNEED);
+    posix_fadvise(fd, (off_t) (file_offset + (first - (uintptr_t) data)), (off_t) (last - first), POSIX_FADV_DONTNEED);
+#else
+    (void) data;
+    (void) size;
+    (void) fd;
+    (void) file_offset;
+#endif
+}
+''',
+)
+replace_once(
+    r'''            } else {
+                ggml_backend_tensor_set(cur, data, 0, n_size);
+            }''',
+    r'''            } else {
+                ggml_backend_tensor_set(cur, data, 0, n_size);
+                // IA Offline: the tensor now lives in its repacked copy.
+                if (iaoffline_repack_release() && !lazy.has(cur)) {
+                    iaoffline_release_range(data, n_size, files.at(weight->idx)->file_id(), weight->offs);
+                }
+            }''',
+)
+path.write_text(text)
+print("Applied IA Offline sampler and repack-release patch")
+PY
+
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
 chmod +x ./gradlew
 ./gradlew :lib:assembleRelease --no-daemon

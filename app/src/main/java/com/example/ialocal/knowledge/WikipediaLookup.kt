@@ -26,6 +26,20 @@ object WikipediaQueryPlanner {
     }
 
     /**
+     * What a factual question asks about, for the automatic excerpts: quoted phrases and the subject
+     * of question forms only. A name merely mentioned ("me ajuda com meu código em Python") is not
+     * looked up: its excerpt would make the model read hundreds of tokens more before answering.
+     */
+    fun questionCandidates(question: String, limit: Int = 3): List<String> {
+        val text = question.trim().take(MAX_QUESTION_CHARS)
+        if (text.isEmpty()) return emptyList()
+        val found = LinkedHashSet<String>()
+        QUOTED.findAll(text).forEach { found += it.groupValues[1].trim() }
+        SUBJECT.findAll(text).forEach { match -> subjectOf(match.groupValues[1])?.let { found += it } }
+        return found.filter { it.length in 2..MAX_CANDIDATE_CHARS }.take(limit)
+    }
+
+    /**
      * Spellings to try for a title, since titles are matched exactly: as written, sentence case
      * ("Fotossíntese"), title case ("Revolução Francesa") and lowercase after the first letter,
      * keeping acronyms ("Sede da ONU").
@@ -161,17 +175,18 @@ class WikipediaLookup(private val archives: () -> List<ZimArchive>) {
     }
 
     /**
-     * Short excerpts of the articles the question is about, for the system prompt; null when it
-     * names nothing found. The budget stays small so the prompt costs little to process.
+     * A short excerpt of the article a factual question is about, sent with the question; null when
+     * it asks about nothing found. The model reads it before the first word of the answer, so it
+     * stays small: one article, a few facts.
      */
-    fun contextFor(question: String, maxArticles: Int = 2, charsPerArticle: Int = 650): String? {
+    fun contextFor(question: String, maxArticles: Int = 1, charsPerArticle: Int = 350): String? {
         if (question.length > MAX_AUTO_CONTEXT_QUESTION || "```" in question) return null
         val hits = LinkedHashMap<String, WikipediaHit>()
-        for (candidate in WikipediaQueryPlanner.candidates(question)) {
+        for (candidate in WikipediaQueryPlanner.questionCandidates(question)) {
             if (hits.size >= maxArticles) break
             val (archive, entry) = findArticle(candidate) ?: continue
             if (entry.title in hits) continue
-            val hit = runCatching { read(archive, entry, charsPerArticle, maxFacts = 6) }.getOrNull() ?: continue
+            val hit = runCatching { read(archive, entry, charsPerArticle, maxFacts = AUTO_CONTEXT_FACTS) }.getOrNull() ?: continue
             if (hit.text.isNotBlank()) hits[entry.title] = hit
         }
         if (hits.isEmpty()) return null
@@ -190,5 +205,6 @@ class WikipediaLookup(private val archives: () -> List<ZimArchive>) {
         private const val MAX_ARTICLE_BYTES = 1024 * 1024
         /** Longer messages are documents, code or attachments, not questions to look up. */
         private const val MAX_AUTO_CONTEXT_QUESTION = 600
+        private const val AUTO_CONTEXT_FACTS = 3
     }
 }

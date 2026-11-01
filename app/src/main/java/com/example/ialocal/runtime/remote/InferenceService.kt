@@ -93,12 +93,24 @@ class InferenceService : Service() {
         }
 
         override fun cancel(requestId: String) {
-            generations[requestId]?.cancel()
+            val generation = generations[requestId] ?: return
+            // A prompt being read only stops between two operations of the native decode; a request
+            // still waiting for another conversation's answer leaves that answer alone.
+            runtime.abortPromptReading(owner = generation)
+            generation.cancel()
         }
 
         override fun unload() = forApp { runBlocking { runtime.unload() } }
 
         override fun releaseIfIdle(): Boolean = forApp { runBlocking { runtime.releaseIfIdle() } }
+
+        override fun setTuning(tuningJson: String) {
+            runCatching { RemoteProtocol.decodeTuning(tuningJson) }.onSuccess(runtime::setTuning)
+        }
+
+        override fun saveSessionNow() = forApp { runBlocking { runtime.saveSessionNow() } }
+
+        override fun abortNativeWork(): Boolean = runtime.abortPromptReading()
     }
 
     /** Binder carries IllegalStateException with its message to the app; other exceptions it does not. */

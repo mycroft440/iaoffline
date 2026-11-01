@@ -70,6 +70,12 @@ class WikipediaTextTest {
         assertTrue("Albert Einstein" in WikipediaQueryPlanner.candidates("what was Albert Einstein known for"))
         assertTrue("ONU" in WikipediaQueryPlanner.candidates("Quando a ONU foi criada?"))
         assertTrue(WikipediaQueryPlanner.candidates("bom dia, tudo bem?").isEmpty())
+
+        // The automatic excerpts only answer what a question asks about, not every name mentioned.
+        assertEquals("Tiradentes", WikipediaQueryPlanner.questionCandidates("Quem foi Tiradentes?").first())
+        assertTrue("Pompeia" in WikipediaQueryPlanner.questionCandidates("O que foi \"Pompeia\"?"))
+        assertTrue(WikipediaQueryPlanner.questionCandidates("Me ajuda com meu código em Python").isEmpty())
+        assertTrue(WikipediaQueryPlanner.questionCandidates("Qual era a relação entre Júlio César e Pompeia?").isEmpty())
     }
 
     @Test

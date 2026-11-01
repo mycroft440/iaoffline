@@ -159,7 +159,11 @@ class AiOrchestrator(
         val wikipediaNote = guidance.turnSuffix(messages) {
             onStage(GenerationStage(GenerationStage.Kind.CONSULTING_WIKIPEDIA))
         }
-        val firstTurn = toolTurn.copy(userSuffix = wikipediaNote + plan.userSuffix)
+        // The first round answers the user's own message: "Refazer" goes back to its start.
+        val firstTurn = toolTurn.copy(
+            userSuffix = wikipediaNote + tools.turnInstructions() + plan.userSuffix,
+            markTurn = true,
+        )
         var lastWritingReport = 0L
 
         val chunks = agentStream(

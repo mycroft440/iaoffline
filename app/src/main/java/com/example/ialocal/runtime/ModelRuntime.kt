@@ -29,6 +29,11 @@ data class TurnOptions(
      * keeps the system prompt processed up to it between loads, so only this part is read again.
      */
     val systemPromptTail: String = "",
+    /**
+     * Set on the first round of an answer (not on the rounds after a tool): the runtime remembers
+     * where this user turn starts, so "Refazer" or an edit of it continues the context from there.
+     */
+    val markTurn: Boolean = false,
 )
 
 /** What the next answer starts from, processed while the user is still writing the message. */
@@ -79,4 +84,13 @@ interface ModelRuntime {
 
     /** Frees the loaded model unless it is loading or answering; true if it was freed. */
     suspend fun releaseIfIdle(): Boolean = false
+
+    /** The performance settings for the next loads and answers ([RuntimeTuning]). */
+    fun setTuning(tuning: RuntimeTuning) {}
+
+    /**
+     * Writes the conversation held in the context to storage now, when reading it again would be
+     * slow, instead of waiting for the idle delay: the app is leaving the foreground.
+     */
+    suspend fun saveSessionNow() {}
 }

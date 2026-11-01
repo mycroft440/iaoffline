@@ -9,6 +9,7 @@ import com.example.ialocal.chat.ChatGenerationManager
 import com.example.ialocal.chat.GenerationProgress
 import com.example.ialocal.chat.GenerationTarget
 import com.example.ialocal.chat.QueuedChatMessage
+import com.example.ialocal.chat.withStreamingReply
 import com.example.ialocal.data.AgentEntity
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ChatRepository
@@ -61,7 +62,11 @@ class ChatViewModel(
 ) : ViewModel() {
     val conversation: StateFlow<ConversationEntity?> = repository.observeConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-    val messages: StateFlow<List<MessageWithAttachments>> = repository.observeMessages(conversationId)
+    /** The stored messages with the answer being written as the AI writes it, ahead of the database. */
+    val messages: StateFlow<List<MessageWithAttachments>> = combine(
+        repository.observeMessages(conversationId),
+        generationManager.session(conversationId).streaming,
+    ) { stored, streaming -> withStreamingReply(stored, streaming) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val conversations: StateFlow<List<ConversationListItem>> = repository.conversations
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

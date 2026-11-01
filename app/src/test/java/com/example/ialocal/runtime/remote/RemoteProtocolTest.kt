@@ -2,7 +2,10 @@ package com.example.ialocal.runtime.remote
 
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.runtime.PerformanceLevel
 import com.example.ialocal.runtime.PromptPrefill
+import com.example.ialocal.runtime.RuntimeTuning
+import com.example.ialocal.runtime.TuningSwitch
 import com.example.ialocal.runtime.TurnOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -44,10 +47,26 @@ class RemoteProtocolTest {
                 assistantPrefix = "<think>\n\n</think>\n\n",
                 templateThinking = false,
                 systemPromptTail = "\n\nData de hoje no aparelho: sábado.",
+                markTurn = true,
             ),
             safeLevel = 1,
         )
         assertEquals(request, RemoteProtocol.decodeRequest(RemoteProtocol.encodeRequest(request)))
+    }
+
+    @Test
+    fun performanceSettingsCrossTheProcessUnchanged() {
+        val tuning = RuntimeTuning(
+            performance = PerformanceLevel.MAX,
+            longContext = TuningSwitch.ON,
+            rewind = TuningSwitch.OFF,
+            longPromptMoe = TuningSwitch.AUTO,
+            readyConversations = 10,
+            performanceBlocked = setOf("m1", "m2"),
+        )
+        assertEquals(tuning, RemoteProtocol.decodeTuning(RemoteProtocol.encodeTuning(tuning)))
+        // Values from a newer version of the app fall back to the defaults.
+        assertEquals(RuntimeTuning(), RemoteProtocol.decodeTuning("{\"performance\":\"TURBO\"}"))
     }
 
     @Test

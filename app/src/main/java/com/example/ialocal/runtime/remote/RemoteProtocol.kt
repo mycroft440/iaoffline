@@ -2,7 +2,10 @@ package com.example.ialocal.runtime.remote
 
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
+import com.example.ialocal.runtime.PerformanceLevel
 import com.example.ialocal.runtime.PromptPrefill
+import com.example.ialocal.runtime.RuntimeTuning
+import com.example.ialocal.runtime.TuningSwitch
 import com.example.ialocal.runtime.TurnOptions
 import org.json.JSONArray
 import org.json.JSONObject
@@ -87,13 +90,41 @@ internal object RemoteProtocol {
         .put("assistantPrefix", turn.assistantPrefix)
         .put("templateThinking", turn.templateThinking)
         .put("systemPromptTail", turn.systemPromptTail)
+        .put("markTurn", turn.markTurn)
 
     private fun turn(o: JSONObject) = TurnOptions(
         userSuffix = o.optString("userSuffix"),
         assistantPrefix = o.optString("assistantPrefix"),
         templateThinking = o.optBoolean("templateThinking", true),
         systemPromptTail = o.optString("systemPromptTail"),
+        markTurn = o.optBoolean("markTurn"),
     )
+
+    fun encodeTuning(tuning: RuntimeTuning): String = JSONObject()
+        .put("performance", tuning.performance.name)
+        .put("longContext", tuning.longContext.name)
+        .put("rewind", tuning.rewind.name)
+        .put("longPromptMoe", tuning.longPromptMoe.name)
+        .put("readyConversations", tuning.readyConversations)
+        .put("performanceBlocked", JSONArray(tuning.performanceBlocked.toList()))
+        .toString()
+
+    /** Unknown values (from a newer version of the app) fall back to the defaults. */
+    fun decodeTuning(json: String): RuntimeTuning {
+        val o = JSONObject(json)
+        val blocked = o.optJSONArray("performanceBlocked")
+        return RuntimeTuning(
+            performance = PerformanceLevel.entries.firstOrNull { it.name == o.optString("performance") }
+                ?: PerformanceLevel.AUTO,
+            longContext = switchOf(o.optString("longContext")),
+            rewind = switchOf(o.optString("rewind")),
+            longPromptMoe = switchOf(o.optString("longPromptMoe")),
+            readyConversations = o.optInt("readyConversations", RuntimeTuning.DEFAULT_READY_CONVERSATIONS),
+            performanceBlocked = List(blocked?.length() ?: 0) { blocked!!.getString(it) }.toSet(),
+        )
+    }
+
+    private fun switchOf(name: String) = TuningSwitch.entries.firstOrNull { it.name == name } ?: TuningSwitch.AUTO
 
     /** The most recent messages within [limit] characters; the latest one is always kept. */
     fun fitToLimit(messages: List<AiChatMessage>, limit: Int = MAX_CONVERSATION_CHARS): List<AiChatMessage> {

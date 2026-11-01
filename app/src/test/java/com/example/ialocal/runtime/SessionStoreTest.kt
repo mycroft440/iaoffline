@@ -4,7 +4,6 @@ import com.example.ialocal.ai.AiChatMessage
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -25,49 +24,77 @@ class SessionStoreTest {
         tokens = 1_337,
     )
 
+    private fun SessionStore.save(session: ChatSession) {
+        // Written by the native side between beginSave and finishSave.
+        beginSave(session).writeText("state")
+        finishSave(session)
+    }
+
+    private fun SessionStore.saved(): List<ChatSession> = all().map { it.session }
+
     @Test
     fun keepsTheConversationWithItsContext() {
         val store = SessionStore(File(folder.root, "session-cache"))
-        val state = store.beginSave()
-        // Written by the native side between beginSave and finishSave.
-        state.writeText("state")
-        store.finishSave(session)
+        store.save(session)
 
-        assertEquals(session, store.load())
+        assertEquals(listOf(session), store.saved())
+        assertEquals(session, store.find { it.modelId == session.modelId }?.session)
     }
 
     @Test
     fun withoutTheNativeContextThereIsNothingToRestore() {
         val store = SessionStore(File(folder.root, "session-cache"))
-        assertNull(store.load())
+        assertTrue(store.all().isEmpty())
 
-        store.beginSave()
+        store.beginSave(session)
         store.finishSave(session)
-        assertNull(store.load())
+        assertTrue(store.all().isEmpty())
     }
 
     @Test
-    fun aSaveInProgressHidesThePreviousConversation() {
+    fun aSaveInProgressHidesThePreviousStateOfTheConversation() {
         val store = SessionStore(File(folder.root, "session-cache"))
-        store.beginSave().writeText("state")
-        store.finishSave(session)
+        store.save(session)
 
-        // The native side may fail halfway through the next save.
-        store.beginSave()
-        assertNull(store.load())
+        // The native side may fail halfway through the next save of the same conversation.
+        store.beginSave(session.copy(tokens = 2_000))
+        assertTrue(store.all().isEmpty())
     }
 
     @Test
-    fun forgetsOnlyTheConversationOfTheDeletedModel() {
-        val store = SessionStore(File(folder.root, "session-cache"))
-        store.beginSave().writeText("state")
-        store.finishSave(session)
+    fun keepsSeveralConversationsAndDropsTheLeastRecentlyUsed() {
+        var ready = 2
+        val store = SessionStore(File(folder.root, "session-cache"), capacity = { ready })
+        val other = session.copy(conversation = listOf(AiChatMessage("user", "Outra conversa")), opening = "Outra conversa")
+        val third = session.copy(conversation = listOf(AiChatMessage("user", "Terceira")), opening = "Terceira")
+        store.save(session)
+        store.save(other)
+        assertEquals(2, store.all().size)
 
-        store.forget("another-model")
-        assertEquals(session, store.load())
+        // The newer state of a conversation replaces the older one.
+        store.save(session.copy(tokens = 2_000))
+        assertEquals(2, store.all().size)
+        assertEquals(2_000, store.find { it.opening.isEmpty() }?.session?.tokens)
+
+        // Beyond the capacity, the least recently used goes.
+        store.save(third)
+        assertEquals(setOf("Terceira", ""), store.saved().map { it.opening }.toSet())
+        ready = 1
+        store.save(other)
+        assertEquals(listOf(other), store.saved())
+    }
+
+    @Test
+    fun forgetsOnlyTheConversationsOfTheDeletedModel() {
+        val store = SessionStore(File(folder.root, "session-cache"), capacity = { 5 })
+        val another = session.copy(modelId = "another-model")
+        store.save(session)
+        store.save(another)
+
+        store.forget("missing-model")
+        assertEquals(2, store.all().size)
         store.forget(session.modelId)
-        assertNull(store.load())
-        assertFalse(store.stateFile.exists())
+        assertEquals(listOf(another), store.saved())
     }
 
     @Test

@@ -15,6 +15,7 @@ import com.example.ialocal.api.LocalApiServer
 import com.example.ialocal.chat.ChatGenerationManager
 import com.example.ialocal.data.AppDatabase
 import com.example.ialocal.data.ChatRepository
+import com.example.ialocal.data.PerformanceSettingsRepository
 import com.example.ialocal.data.ThemeRepository
 import com.example.ialocal.diagnostics.AiEventLogger
 import com.example.ialocal.diagnostics.IntegrationSelfTest
@@ -32,6 +33,10 @@ import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.remote.RemoteModelRuntime
 import com.example.ialocal.ui.codeeditor.CodeEditSessionStore
 import com.example.ialocal.ui.codeeditor.CodeLanguagePackRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -49,6 +54,9 @@ class AppContainer(context: Context) {
     val modelRepository = ModelRepository(appContext, database.modelDao(), logger = diagnostics)
     val modelCrashGuard = ModelCrashGuard(appContext, diagnostics)
     val modelRuntime: ModelRuntime = RemoteModelRuntime(appContext, diagnostics, modelCrashGuard)
+    /** Settings › Desempenho da IA; the AI process gets each change. */
+    val performanceSettings = PerformanceSettingsRepository(appContext)
+    private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val modelDownloader = ModelDownloader(appContext, logger = diagnostics)
     val modelManager = ModelManager(
         appContext,
@@ -111,5 +119,6 @@ class AppContainer(context: Context) {
 
     init {
         apiServer.start()
+        settingsScope.launch { performanceSettings.tuning.collect { modelRuntime.setTuning(it) } }
     }
 }

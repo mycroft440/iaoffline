@@ -33,7 +33,9 @@ data class GenerationStage(
         READING_HISTORY,
         /**
          * The conversation is already in the model's memory ([detail]: [REUSED_SESSION] or
-         * [REUSED_PREFILL]), or comes back to it from storage ([REUSED_STORAGE]).
+         * [REUSED_PREFILL]), comes back to it from storage ([REUSED_STORAGE]), goes back to the start
+         * of the last message ([REUSED_REWIND], "Refazer") or continues without its oldest messages
+         * ([REUSED_TRIMMED]).
          */
         CONTEXT_REUSED,
         CONSULTING_WIKIPEDIA,
@@ -69,6 +71,8 @@ data class GenerationStage(
         const val REUSED_SESSION = "session"
         const val REUSED_PREFILL = "prefill"
         const val REUSED_STORAGE = "storage"
+        const val REUSED_REWIND = "rewind"
+        const val REUSED_TRIMMED = "trimmed"
         const val MESSAGE_TOOL_RESULT = "tool"
 
         /** Null for anything that is not a stage, such as one from a newer version of the app. */

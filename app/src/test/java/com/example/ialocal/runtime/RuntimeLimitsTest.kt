@@ -163,6 +163,165 @@ class RuntimeLimitsTest {
         assertEquals(RuntimeLimits.MAX_KV_BUDGET_BYTES / 2, plan.kvBudgetBytes)
     }
 
+    private val q4Weights = RuntimeLimits.WeightProfile(
+        known = true,
+        repackableBytes = 2_700_000_000L,
+        requantizedBytes = 300_000_000L,
+        largestRequantizedValues = 600_000_000L,
+    )
+
+    @Test
+    fun economyKeepsTheWeightsInTheFile() {
+        val plan = RuntimeLimits.planMemory(
+            2 * gb,
+            memory(16.0, 12.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = q4Weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.ECONOMY),
+        )
+        assertTrue(plan.lowMemory)
+    }
+
+    @Test
+    fun maximumKeepsAnOptimizedCopyWhenOneCopyFits() {
+        // Qwen3.5 4B Q4_K_M (2.7 GB) on an 8 GB phone: two copies do not fit, one does.
+        val legacy = RuntimeLimits.planMemory(2_700_000_000L, memory(7.5, 4.0), expertBytes = 0, safeLevel = 0, weights = q4Weights)
+        assertTrue(legacy.lowMemory)
+
+        val max = RuntimeLimits.planMemory(
+            2_700_000_000L,
+            memory(7.5, 4.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = q4Weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.MAX),
+        )
+        assertFalse(max.lowMemory)
+        // The loader drops the file's pages as each tensor is copied.
+        assertTrue(max.repackRelease)
+
+        // Automatic keeps the copy for phones of 12 GB and up only.
+        val auto = RuntimeLimits.planMemory(
+            2_700_000_000L,
+            memory(7.5, 4.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = q4Weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+        )
+        assertTrue(auto.lowMemory)
+    }
+
+    @Test
+    fun automaticKeepsTheCopyOnLargePhones() {
+        // 8B Q4_K_M (4.9 GB) on a 16 GB phone, above the 30% rule.
+        val weights = q4Weights.copy(repackableBytes = 4_900_000_000L)
+        val auto = RuntimeLimits.planMemory(
+            4_900_000_000L,
+            memory(15.0, 11.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+        )
+        assertFalse(auto.lowMemory)
+
+        // A copy that made the AI process close is not kept again, nor after a crash.
+        val blocked = RuntimeLimits.planMemory(
+            4_900_000_000L,
+            memory(15.0, 11.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+            performanceBlocked = true,
+        )
+        assertTrue(blocked.lowMemory)
+        val crashed = RuntimeLimits.planMemory(
+            4_900_000_000L,
+            memory(15.0, 11.0),
+            expertBytes = 0,
+            safeLevel = 1,
+            weights = weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.MAX),
+        )
+        assertTrue(crashed.lowMemory)
+    }
+
+    @Test
+    fun weightsWithoutRepackedKernelsGainNothingFromTheCopy() {
+        // A Q3_K_M file: little of it is of a repackable type.
+        val weights = q4Weights.copy(repackableBytes = 300_000_000L, requantizedBytes = 300_000_000L)
+        val plan = RuntimeLimits.planMemory(
+            4_900_000_000L,
+            memory(15.0, 11.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = weights,
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+        )
+        assertTrue(plan.lowMemory)
+    }
+
+    @Test
+    fun longContextAddsMemoryToDenseModelsOnLargePhones() {
+        val weights = q4Weights.copy(repackableBytes = 3 * gb)
+        val normal = RuntimeLimits.planMemory(3 * gb, memory(11.2, 8.0), expertBytes = 0, safeLevel = 0, weights = weights)
+        val long = RuntimeLimits.planMemory(
+            3 * gb,
+            memory(11.2, 8.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = weights,
+            tuning = RuntimeTuning(longContext = TuningSwitch.AUTO),
+        )
+        assertEquals(RuntimeLimits.LONG_CONTEXT_BOOST_BYTES, long.kvBudgetBytes - normal.kvBudgetBytes)
+        assertEquals(RuntimeLimits.LONG_CONTEXT_BOOST_BYTES, long.longContextBytes)
+
+        // Models with recurrent layers already get long contexts from little memory.
+        val hybrid = RuntimeLimits.planMemory(
+            3 * gb,
+            memory(11.2, 8.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = weights.copy(recurrent = true),
+            tuning = RuntimeTuning(longContext = TuningSwitch.AUTO),
+        )
+        assertEquals(0L, hybrid.longContextBytes)
+        // Nor after a crash.
+        val crashed = RuntimeLimits.planMemory(
+            3 * gb,
+            memory(11.2, 8.0),
+            expertBytes = 0,
+            safeLevel = 1,
+            weights = weights,
+            tuning = RuntimeTuning(longContext = TuningSwitch.ON),
+        )
+        assertEquals(0L, crashed.longContextBytes)
+    }
+
+    @Test
+    fun largerMicroBatchesOnlyForMixturesOfExperts() {
+        val phone = memory(11.2, 6.0)
+        assertEquals(1024, RuntimeLimits.ubatchFor(TuningSwitch.AUTO, true, true, phone, safeLevel = 0))
+        assertEquals(2048, RuntimeLimits.ubatchFor(TuningSwitch.ON, true, true, phone, safeLevel = 0))
+        assertEquals(512, RuntimeLimits.ubatchFor(TuningSwitch.AUTO, false, true, phone, safeLevel = 0))
+        assertEquals(256, RuntimeLimits.ubatchFor(TuningSwitch.AUTO, false, false, phone, safeLevel = 0))
+        assertEquals(256, RuntimeLimits.ubatchFor(TuningSwitch.OFF, true, true, phone, safeLevel = 0))
+        assertEquals(256, RuntimeLimits.ubatchFor(TuningSwitch.ON, true, true, phone, safeLevel = 1))
+
+        val plan = RuntimeLimits.planMemory(
+            12_710_000_000L,
+            memory(11.0, 5.0),
+            expertBytes = 10_310_000_000L,
+            safeLevel = 0,
+            tuning = RuntimeTuning(longPromptMoe = TuningSwitch.AUTO),
+        )
+        assertTrue(plan.streamsExperts)
+        assertEquals(1024, plan.ubatch)
+    }
+
     @Test
     fun experimentalModelsGetAFixedKvBudget() {
         assertEquals(

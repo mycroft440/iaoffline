@@ -11,12 +11,16 @@ import android.os.RemoteException
 import com.example.ialocal.ai.AiChatMessage
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.diagnostics.AiEventLogger
+import com.example.ialocal.runtime.DeviceMemory
 import com.example.ialocal.runtime.GenerationStage
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
+import com.example.ialocal.runtime.PerformanceLevel
 import com.example.ialocal.runtime.PromptPrefill
 import com.example.ialocal.runtime.RuntimeState
 import com.example.ialocal.runtime.RuntimeStatus
+import com.example.ialocal.runtime.RuntimeLimits
+import com.example.ialocal.runtime.RuntimeTuning
 import com.example.ialocal.runtime.TurnOptions
 import com.example.ialocal.runtime.VerificationResult
 import java.util.UUID
@@ -39,6 +43,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -68,6 +73,8 @@ class RemoteModelRuntime(
     private class Run(
         val model: AiModelEntity,
         val phase: ModelCrashGuard.Phase,
+        /** The run may keep an optimized copy of the weights in RAM ([PerformanceLevel.MAX]). */
+        val performanceInUse: Boolean = false,
         val onDeath: (String) -> Unit = {},
     ) {
         /** Set when the AI process died during this run. */
@@ -80,6 +87,41 @@ class RemoteModelRuntime(
     @Volatile private var aiPid = -1
     /** Binder warm-up/verification calls are synchronous; await them off the caller's Job. */
     private val blockingCalls = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** The performance settings, sent to the AI process when it connects and when they change. */
+    @Volatile private var tuning = RuntimeTuning()
+
+    override fun setTuning(tuning: RuntimeTuning) {
+        this.tuning = tuning
+        val remote = service ?: return
+        blockingCalls.launch { sendTuning(remote) }
+    }
+
+    /** The settings with the models whose optimized copy already made the AI process close. */
+    private fun sendTuning(remote: IInferenceService) {
+        val blocked = crashGuard?.performanceBlocked().orEmpty()
+        runCatching { remote.setTuning(RemoteProtocol.encodeTuning(tuning.copy(performanceBlocked = blocked))) }
+            .onFailure { logger?.error("AI_PROCESS", "Falha ao enviar as configurações de desempenho", it) }
+    }
+
+    /**
+     * Whether a run of [model] may keep an optimized copy of its weights: then its first crash only
+     * turns the copy off ([ModelCrashGuard.performanceBlocked]).
+     */
+    private fun performanceInUse(model: AiModelEntity): Boolean {
+        if (crashGuard?.performanceBlocked()?.contains(model.id) == true) return false
+        return when (tuning.performance) {
+            PerformanceLevel.MAX -> true
+            PerformanceLevel.AUTO ->
+                DeviceMemory.read(appContext).advertisedGigabytes >= RuntimeLimits.AUTO_PERFORMANCE_MIN_GB
+            else -> false
+        }
+    }
+
+    override suspend fun saveSessionNow() = withContext(Dispatchers.IO) {
+        val remote = service?.takeIf { it.asBinder().isBinderAlive } ?: return@withContext
+        runCatching { remote.saveSessionNow() }.onFailure { logger?.error("AI_PROCESS", "Falha ao salvar a conversa", it) }
+        Unit
+    }
 
     /**
      * A JNI model load or prompt read can ignore coroutine cancellation for many seconds.
@@ -87,6 +129,11 @@ class RemoteModelRuntime(
      * when no other conversation is generating (or Stop All was requested).
      */
     override fun interruptNativeWork() {
+        // A prompt being read ends between two operations of the native decode: the model stays
+        // loaded. Only a load, which cannot be interrupted, stops the whole AI process.
+        val aborted = service?.takeIf { it.asBinder().isBinderAlive }
+            ?.let { remote -> runCatching { remote.abortNativeWork() }.getOrDefault(false) } == true
+        if (aborted) return
         val pid = synchronized(deathLock) {
             val remote = service ?: return
             val binder = remote.asBinder()
@@ -129,10 +176,11 @@ class RemoteModelRuntime(
     ): Flow<String> = callbackFlow {
         val remote = connected(onStage)
         val requestId = UUID.randomUUID().toString()
-        val run = Run(model, ModelCrashGuard.Phase.GENERATION) { message -> close(IllegalStateException(message)) }
+        val performance = performanceInUse(model)
+        val run = Run(model, ModelCrashGuard.Phase.GENERATION, performance) { message -> close(IllegalStateException(message)) }
         val finished = AtomicBoolean(false)
         runs[requestId] = run
-        crashGuard?.begin(model.id, model.name, ModelCrashGuard.Phase.GENERATION)
+        crashGuard?.begin(model.id, model.name, ModelCrashGuard.Phase.GENERATION, performance)
         val callback = object : IInferenceCallback.Stub() {
             override fun onStage(stageJson: String) {
                 GenerationStage.decode(stageJson)?.let(onStage)
@@ -203,9 +251,10 @@ class RemoteModelRuntime(
         // Waiting for a separate supervisor Job lets Stop release the chat immediately.
         val task = blockingCalls.async {
             val runId = UUID.randomUUID().toString()
-            val run = Run(model, phase)
+            val performance = performanceInUse(model)
+            val run = Run(model, phase, performance)
             runs[runId] = run
-            crashGuard?.begin(model.id, model.name, phase)
+            crashGuard?.begin(model.id, model.name, phase, performance)
             try {
                 block(remote)
             } catch (dead: DeadObjectException) {
@@ -244,6 +293,7 @@ class RemoteModelRuntime(
                         aiPid = remote.pid()
                         logger?.info("AI_PROCESS", "Processo da IA conectado (pid $aiPid)")
                     }
+                    blockingCalls.launch { sendTuning(remote) }
                     service = remote
                     ready.complete(remote)
                 }
@@ -318,12 +368,14 @@ class RemoteModelRuntime(
     }
 
     private fun deathMessage(run: Run): String {
-        val recovery = crashGuard?.recordAiProcessDeath(run.model.id, run.model.name, run.phase)
+        val recovery = crashGuard?.recordAiProcessDeath(run.model.id, run.model.name, run.phase, run.performanceInUse)
         val moment = if (run.phase == ModelCrashGuard.Phase.LOAD) "carregava" else "respondia com"
         return buildString {
             append("O Android encerrou a IA enquanto ela $moment ${run.model.name}, por falta de memória ou falha no motor. ")
             append("O app continua aberto.")
-            if (recovery != null) {
+            if (recovery?.performanceBlocked == true) {
+                append(" Na próxima tentativa o modelo carrega sem a cópia otimizada dos pesos, que usa mais RAM.")
+            } else if (recovery != null) {
                 append(" Na próxima tentativa o modelo usa menos memória: pesos lidos do armazenamento e ")
                 append(if (recovery.level >= ModelCrashGuard.MAX_LEVEL) "o menor contexto." else "metade do contexto.")
             }

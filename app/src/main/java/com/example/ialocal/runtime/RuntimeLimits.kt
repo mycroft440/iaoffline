@@ -60,6 +60,40 @@ object RuntimeLimits {
     const val AI_MARGIN_BYTES = 512L * 1024 * 1024
     /** Compute buffers (about 290 MB with 256-token micro-batches) and native overhead. */
     const val WORKING_MEMORY_BYTES = 512L * 1024 * 1024
+    /**
+     * The same for a dense model without recurrent layers, now that the context reserves logits for
+     * 16 tokens instead of a whole micro-batch (step 19 h of the native patch). Recurrent state
+     * and the activations of mixtures of experts keep [WORKING_MEMORY_BYTES].
+     */
+    const val DENSE_WORKING_MEMORY_BYTES = 384L * 1024 * 1024
+    /** Activations a micro-batch token needs beyond the default 256 (a large mixture of experts). */
+    const val UBATCH_TOKEN_BYTES = 200L * 1024
+    const val DEFAULT_UBATCH = 256
+
+    /** What [RuntimeTuning] was before it existed: the plans of the tests and of older callers. */
+    val LEGACY_TUNING = RuntimeTuning(
+        performance = PerformanceLevel.BALANCED,
+        longContext = TuningSwitch.OFF,
+        rewind = TuningSwitch.OFF,
+        longPromptMoe = TuningSwitch.OFF,
+    )
+
+    /** "Contexto longo": more memory for the conversation, so long chats are not read again. */
+    const val LONG_CONTEXT_BOOST_BYTES = 512L * 1024 * 1024
+    const val LARGE_PHONE_LONG_CONTEXT_BOOST_BYTES = 1024L * 1024 * 1024
+    const val LARGE_PHONE_MAX_KV_BUDGET_BYTES = 3L * 1024 * 1024 * 1024
+    /** Free RAM a setting that takes more of it must still leave, for the screen and other apps. */
+    const val TUNING_HEADROOM_BYTES = 1024L * 1024 * 1024
+    /** "Desempenho: automático" keeps the optimized copy for phones of this size and up. */
+    const val AUTO_PERFORMANCE_MIN_GB = 12.0
+    /** ...for weights that are mostly of repackable types... */
+    const val AUTO_PERFORMANCE_MIN_REPACKABLE_FRACTION = 0.70
+    /** ...and whose copy, which Android cannot drop, stays under this share of the RAM. */
+    const val AUTO_PERFORMANCE_MAX_RAM_FRACTION = 0.35
+    /** KleidiAI keeps Q6_K and Q8_0 weights as int8 per channel: about this much larger. */
+    const val REQUANTIZED_EXPANSION = 1.22
+    /** A mixture of experts read from storage needs page cache for the experts it uses. */
+    const val EXPERT_CACHE_RESERVE_BYTES = 1024L * 1024 * 1024
 
     /**
      * RAM the AI may use: what is free, or what Android frees by closing background apps,
@@ -67,6 +101,25 @@ object RuntimeLimits {
      */
     fun aiBudgetBytes(memory: MemorySnapshot): Long =
         (memory.foregroundBudgetBytes - AI_MARGIN_BYTES).coerceAtLeast(0L)
+
+    /** What the GGUF says about the weights ([com.example.ialocal.models.GgufInspector]). */
+    data class WeightProfile(
+        /** False when the GGUF could not be read: the plan then assumes the larger working memory. */
+        val known: Boolean = false,
+        val repackableBytes: Long = 0L,
+        val fixedRepackableBytes: Long = 0L,
+        val requantizedBytes: Long = 0L,
+        val largestRequantizedValues: Long = 0L,
+        val recurrent: Boolean = false,
+    ) {
+        /** Anonymous memory of the repacked copy of [repackableBytes]. */
+        val repackedCopyBytes: Long
+            get() = repackableBytes + ((REQUANTIZED_EXPANSION - 1.0) * requantizedBytes).toLong()
+
+        /** The same for the weights read for every token of a mixture of experts. */
+        val fixedRepackedCopyBytes: Long
+            get() = (fixedRepackableBytes * REQUANTIZED_EXPANSION).toLong()
+    }
 
     /** How a model is loaded within the AI's share of the RAM. */
     data class MemoryPlan(
@@ -83,6 +136,15 @@ object RuntimeLimits {
          * as the router picks them. [lowMemory] then only concerns the rest of the weights.
          */
         val streamsExperts: Boolean = false,
+        /** Micro-batch for reading prompts (IAOFFLINE_UBATCH). */
+        val ubatch: Int = DEFAULT_UBATCH,
+        /**
+         * The repacked copy is kept although the copy and the mapped file do not fit together: the
+         * native loader drops each tensor's pages from the file as soon as it is copied.
+         */
+        val repackRelease: Boolean = false,
+        /** Part of [kvBudgetBytes] that "Contexto longo" added. */
+        val longContextBytes: Long = 0L,
     )
 
     /**
@@ -92,22 +154,50 @@ object RuntimeLimits {
      * its time reading them from storage and stops responding. A mixture of experts
      * ([expertBytes] of its weights are experts) reads only a few experts per token, so when it
      * does not fit its experts are read from storage and only the rest must fit.
+     *
+     * [tuning] is what the user chose in Settings; a model that already made the AI process close
+     * ([safeLevel] above 0) or whose optimized copy did ([performanceBlocked]) loads without
+     * the choices that take more RAM.
      */
     fun planMemory(
         residentWeightsBytes: Long,
         memory: MemorySnapshot,
         expertBytes: Long,
         safeLevel: Int,
+        weights: WeightProfile = WeightProfile(),
+        tuning: RuntimeTuning = LEGACY_TUNING,
+        performanceBlocked: Boolean = false,
     ): MemoryPlan {
         val budget = aiBudgetBytes(memory)
-        val minimum = residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
-        if (expertBytes > 0 && minimum > budget) {
+        val baseWorking = if (weights.known && !weights.recurrent && expertBytes == 0L) DENSE_WORKING_MEMORY_BYTES else WORKING_MEMORY_BYTES
+        val performance = when {
+            performanceBlocked && tuning.performance != PerformanceLevel.ECONOMY -> PerformanceLevel.BALANCED
+            else -> tuning.performance
+        }
+        val streams = expertBytes > 0 && residentWeightsBytes + MIN_KV_BUDGET_BYTES + baseWorking > budget
+        val ubatch = ubatchFor(tuning.longPromptMoe, streams, expertBytes > 0, memory, safeLevel)
+        val working = baseWorking + (ubatch - DEFAULT_UBATCH).coerceAtLeast(0) * UBATCH_TOKEN_BYTES
+        val minimum = residentWeightsBytes + MIN_KV_BUDGET_BYTES + working
+        val stagingBytes = weights.largestRequantizedValues
+        if (streams) {
             // Attention, shared experts and output: read for every token, so they must fit.
             val fixedBytes = (residentWeightsBytes - expertBytes).coerceAtLeast(0L)
-            val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES
+            val fixedMinimum = fixedBytes + MIN_KV_BUDGET_BYTES + working
+            // While the weights are repacked, the copy and the mapped file are in RAM together...
+            val repackFitsTwice = 2 * fixedBytes + MIN_KV_BUDGET_BYTES + working <= budget
+            // ...unless the file is not read up front (experts are streamed): then one copy and the
+            // staging of the largest requantized tensor, leaving page cache for the experts.
+            val repackFitsOnce = weights.fixedRepackableBytes > 0 &&
+                fixedBytes - weights.fixedRepackableBytes + weights.fixedRepackedCopyBytes + stagingBytes +
+                MIN_KV_BUDGET_BYTES + working + EXPERT_CACHE_RESERVE_BYTES <= budget
+            val repack = when (performance) {
+                PerformanceLevel.ECONOMY -> false
+                PerformanceLevel.BALANCED -> repackFitsTwice
+                PerformanceLevel.AUTO, PerformanceLevel.MAX -> repackFitsTwice || repackFitsOnce
+            }
             return MemoryPlan(
                 budgetBytes = budget,
-                lowMemory = safeLevel > 0 || 2 * fixedBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES > budget,
+                lowMemory = safeLevel > 0 || !repack,
                 kvBudgetBytes = safeKvBudgetBytes(
                     kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true),
                     safeLevel,
@@ -115,22 +205,92 @@ object RuntimeLimits {
                 fits = fixedMinimum <= budget,
                 minimumBytes = fixedMinimum,
                 streamsExperts = true,
+                ubatch = ubatch,
+                repackRelease = safeLevel == 0 && repack && !repackFitsTwice,
             )
         }
         // While the weights are repacked, the copy and the mapped file are in RAM together.
-        val repackFits = 2 * residentWeightsBytes + MIN_KV_BUDGET_BYTES + WORKING_MEMORY_BYTES <= budget
-        val lowMemory = safeLevel > 0 || !repackFits || needsLowMemoryMode(residentWeightsBytes, memory.totalBytes)
+        val repackFitsTwice = 2 * residentWeightsBytes + MIN_KV_BUDGET_BYTES + working <= budget
+        val legacyLowMemory = !repackFitsTwice || needsLowMemoryMode(residentWeightsBytes, memory.totalBytes)
         val kvBudget = minOf(
             kvCacheBudgetBytes(residentWeightsBytes, memory.totalBytes, experimental = false),
-            budget - residentWeightsBytes - WORKING_MEMORY_BYTES,
+            budget - residentWeightsBytes - working,
         ).coerceAtLeast(MIN_KV_BUDGET_BYTES)
+        // The copy Android cannot drop, the weights of other types still read from the file, the
+        // context and the int8 staging of the largest requantized tensor while it is repacked.
+        val copyBytes = weights.repackedCopyBytes
+        val optimizedDemand = copyBytes + (residentWeightsBytes - weights.repackableBytes).coerceAtLeast(0L) +
+            kvBudget + working + stagingBytes
+        val optimizedFits = copyBytes > 0 && optimizedDemand <= budget
+        val autoOptimized = optimizedFits &&
+            memory.advertisedGigabytes >= AUTO_PERFORMANCE_MIN_GB &&
+            weights.repackableBytes >= AUTO_PERFORMANCE_MIN_REPACKABLE_FRACTION * residentWeightsBytes &&
+            copyBytes <= AUTO_PERFORMANCE_MAX_RAM_FRACTION * memory.totalBytes &&
+            optimizedDemand + TUNING_HEADROOM_BYTES <= budget
+        val lowMemory = safeLevel > 0 || when (performance) {
+            PerformanceLevel.ECONOMY -> true
+            PerformanceLevel.BALANCED -> legacyLowMemory
+            PerformanceLevel.MAX -> legacyLowMemory && !optimizedFits
+            PerformanceLevel.AUTO -> legacyLowMemory && !autoOptimized
+        }
+        val boost = longContextBoost(tuning.longContext, memory, weights, safeLevel) { extra ->
+            budget - residentWeightsBytes - kvBudget - working - extra >= TUNING_HEADROOM_BYTES
+        }
+        val kvCap = if (memory.advertisedGigabytes >= 16.0) LARGE_PHONE_MAX_KV_BUDGET_BYTES else MAX_KV_BUDGET_BYTES
+        val boostedKv = if (boost > 0) {
+            minOf(kvBudget + boost, maxOf(kvBudget, kvCap), budget - residentWeightsBytes - working).coerceAtLeast(kvBudget)
+        } else {
+            kvBudget
+        }
         return MemoryPlan(
             budgetBytes = budget,
             lowMemory = lowMemory,
-            kvBudgetBytes = safeKvBudgetBytes(kvBudget, safeLevel),
+            kvBudgetBytes = safeKvBudgetBytes(boostedKv, safeLevel),
             fits = minimum <= budget,
             minimumBytes = minimum,
+            ubatch = ubatch,
+            repackRelease = !lowMemory && !repackFitsTwice,
+            longContextBytes = if (safeLevel > 0) 0L else boostedKv - kvBudget,
         )
+    }
+
+    /**
+     * Extra context memory for "Contexto longo": automatic on phones of 12 GB and up for models
+     * without recurrent layers (those already get long contexts from little memory); when the user
+     * turns it on, only while [fits] still leaves room for the screen and other apps.
+     */
+    private fun longContextBoost(
+        choice: TuningSwitch,
+        memory: MemorySnapshot,
+        weights: WeightProfile,
+        safeLevel: Int,
+        fits: (Long) -> Boolean,
+    ): Long {
+        if (safeLevel > 0 || choice == TuningSwitch.OFF) return 0L
+        val boost = if (memory.advertisedGigabytes >= 16.0) LARGE_PHONE_LONG_CONTEXT_BOOST_BYTES else LONG_CONTEXT_BOOST_BYTES
+        return when (choice) {
+            TuningSwitch.AUTO -> if (memory.advertisedGigabytes >= AUTO_PERFORMANCE_MIN_GB && weights.known &&
+                !weights.recurrent && fits(boost)
+            ) {
+                boost
+            } else {
+                0L
+            }
+            else -> if (fits(boost)) boost else 0L
+        }
+    }
+
+    /**
+     * Micro-batch for reading a prompt. Each micro-batch of a long message makes a mixture of experts
+     * use nearly all its experts, so when they are read from storage a larger one reads the file fewer
+     * times; for a dense model in RAM a larger one is not faster.
+     */
+    fun ubatchFor(choice: TuningSwitch, streamsExperts: Boolean, mixtureOfExperts: Boolean, memory: MemorySnapshot, safeLevel: Int): Int = when {
+        safeLevel > 0 || choice == TuningSwitch.OFF -> DEFAULT_UBATCH
+        streamsExperts && choice == TuningSwitch.ON && memory.advertisedGigabytes >= AUTO_PERFORMANCE_MIN_GB -> 2048
+        streamsExperts -> 1024
+        mixtureOfExperts -> 512
+        else -> DEFAULT_UBATCH
     }
 
     /**

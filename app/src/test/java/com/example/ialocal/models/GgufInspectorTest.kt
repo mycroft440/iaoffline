@@ -103,6 +103,32 @@ class GgufInspectorTest {
     }
 
     @Test
+    fun sizesTheWeightsTheArmKernelsRepack() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(5)
+            u64(1)
+            kvU32("qwen35.full_attention_interval", 4)
+            tensor("token_embd.weight", offset = 0, type = 14) // Q6_K
+            tensor("blk.0.attn_q.weight", offset = 1024, type = 11) // Q3_K: no ARM repack
+            tensor("blk.0.ffn_down.weight", offset = 2048, type = 12) // Q4_K
+            tensor("blk.0.ffn_down_exps.weight", offset = 3072, type = 2) // Q4_0
+            tensor("per_layer_token_embd.weight", offset = 7168, type = 8) // read on demand
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 8192L)
+
+        assertEquals(1024L + 1024L + 4096L, metadata.repackableBytes)
+        assertEquals(1024L + 1024L, metadata.fixedRepackableBytes)
+        assertEquals(1024L, metadata.requantizedBytes)
+        assertEquals(1024L, metadata.largestRequantizedValues)
+        assertEquals(1024L, metadata.onDemandBytes)
+        assertTrue(metadata.recurrent)
+    }
+
+    @Test
     fun denseModelsHaveNoExperts() {
         val bytes = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
@@ -149,12 +175,12 @@ class GgufInspectorTest {
         inspector.inspect(ByteArrayInputStream("NOPE".toByteArray()))
     }
 
-    private fun ByteArrayOutputStream.tensor(name: String, offset: Long) {
+    private fun ByteArrayOutputStream.tensor(name: String, offset: Long, type: Int = 8 /* Q8_0 */) {
         string(name)
         u32(2)
         u64(256)
         u64(4)
-        u32(8) // Q8_0
+        u32(type)
         u64(offset)
     }
 

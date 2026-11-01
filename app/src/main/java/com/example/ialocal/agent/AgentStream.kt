@@ -4,6 +4,43 @@ import com.example.ialocal.ai.AiChatMessage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
+/**
+ * Whether an answer that starts like [answer] can still be a tool call, in the format the tools ask
+ * for (`{"tool":"…","arguments":{…}}`, optionally in a json code fence): true when it has that shape,
+ * false when it cannot have it (prose, inline code, a fence of another language), null while too
+ * little of it arrived to tell. Only a possible tool call is held back; everything else shows as it
+ * is written.
+ */
+internal fun mayBeToolCall(answer: CharSequence): Boolean? {
+    val text = answer.trimStart()
+    if (text.isEmpty()) return null
+    if (text.startsWith("{")) return jsonToolCallPrefix(text)
+    if (!text.startsWith("`")) return false
+    if (text.length < FENCE.length) return if (FENCE.startsWith(text)) null else false
+    if (!text.startsWith(FENCE)) return false
+    val newline = text.indexOf('\n')
+    val info = (if (newline < 0) text.substring(FENCE.length) else text.substring(FENCE.length, newline)).trim().lowercase()
+    if (info.isNotEmpty() && !"json".startsWith(info)) return false
+    if (newline < 0) return null
+    if (info.isNotEmpty() && info != "json") return false
+    val body = text.substring(newline + 1).trimStart()
+    if (body.isEmpty()) return null
+    return if (body.startsWith("{")) jsonToolCallPrefix(body) else false
+}
+
+/** [text] starts with `{`: whether, ignoring whitespace, it starts with a tool call's first key. */
+private fun jsonToolCallPrefix(text: CharSequence): Boolean? {
+    val compact = text.filterNot { it.isWhitespace() }
+    return when {
+        TOOL_CALL_STARTS.any { compact.startsWith(it) } -> true
+        TOOL_CALL_STARTS.any { it.startsWith(compact) } -> null
+        else -> false
+    }
+}
+
+private const val FENCE = "```"
+private val TOOL_CALL_STARTS = listOf("{\"tool\"", "{\"arguments\"")
+
 /** Result of a tool the model asked for during a profile run. */
 data class ToolRoundResult(val name: String, val output: String)
 
@@ -11,7 +48,7 @@ data class ToolRoundResult(val name: String, val output: String)
  * Runs up to [maxRounds] generations for a profile and streams what the user should see.
  *
  * Reasoning is re-emitted inside one canonical `<think>…</think>` block across rounds so the chat
- * can show it live. An answer that starts like a tool call (`{` or a code fence) is held back until
+ * can show it live. An answer that starts like a tool call ([mayBeToolCall]) is held back until
  * the round ends; [toolRound] then decides whether it was a tool call, in which case its result is
  * fed back to the model and another round runs. While nothing is visible yet, [onHiddenTokens]
  * gets the number of tokens the round has written, so the chat can say the answer is being written.
@@ -69,11 +106,12 @@ internal fun agentStream(
                         when (live) {
                             true -> emitAnswer(part.text)
                             false -> Unit
-                            null -> {
-                                val trimmed = answer.trimStart()
-                                if (trimmed.isNotEmpty()) {
-                                    live = !(trimmed.startsWith("{") || trimmed.startsWith("`"))
-                                    if (live == true) emitAnswer(trimmed.toString())
+                            null -> when (mayBeToolCall(answer)) {
+                                null -> Unit
+                                true -> live = false
+                                false -> {
+                                    live = true
+                                    emitAnswer(answer.trimStart().toString())
                                 }
                             }
                         }

@@ -46,6 +46,8 @@ internal fun stageText(stage: GenerationStage, finished: Boolean): String {
             else "Lendo a conversa: mensagem ${stage.done} de ${stage.total}"
         Kind.CONTEXT_REUSED -> when (detail) {
             GenerationStage.REUSED_PREFILL -> "Conversa já lida enquanto você escrevia"
+            GenerationStage.REUSED_REWIND -> "Conversa retomada do ponto da sua mensagem, sem lê-la de novo"
+            GenerationStage.REUSED_TRIMMED -> "Mensagens mais antigas deixadas de lado para a conversa continuar"
             GenerationStage.REUSED_STORAGE ->
                 if (finished) "Conversa restaurada do armazenamento, sem lê-la de novo"
                 else "Restaurando a conversa salva no armazenamento"

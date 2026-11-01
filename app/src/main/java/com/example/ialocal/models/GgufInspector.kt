@@ -29,6 +29,20 @@ class GgufInspector {
          * the router picks them; the rest is read for every token.
          */
         val expertBytes: Long = 0L,
+        /**
+         * Weights of the types llama.cpp repacks for the ARM kernels (Q4_0, Q4_K, Q5_K, Q6_K, Q8_0,
+         * IQ4_NL, MXFP4, Q1_0) outside [onDemandBytes]: what an optimized copy in RAM holds. Other
+         * types (Q3_K, Q2_K, IQ3, IQ4_XS, Q2_0) stay read from the file and gain nothing from it.
+         */
+        val repackableBytes: Long = 0L,
+        /** The part of [repackableBytes] outside the experts: the weights read for every token. */
+        val fixedRepackableBytes: Long = 0L,
+        /** Q6_K and Q8_0 weights, which the KleidiAI kernels turn into int8 at about 1.22 times their size. */
+        val requantizedBytes: Long = 0L,
+        /** Values of the largest Q6_K or Q8_0 tensor, which the repacking stages as int8 while loading. */
+        val largestRequantizedValues: Long = 0L,
+        /** Recurrent or hybrid model (Mamba, Gated DeltaNet, short convolutions): its state cannot be cut back. */
+        val recurrent: Boolean = false,
     )
 
     fun inspect(file: File): Metadata =
@@ -54,6 +68,7 @@ class GgufInspector {
         var sizeLabel: String? = null
         var contextLength: Int? = null
         var hasChatTemplate = false
+        var recurrent = false
         var alignment = DEFAULT_ALIGNMENT
 
         var i = 0L
@@ -67,6 +82,7 @@ class GgufInspector {
                 key == "general.alignment" ||
                 key.endsWith(".context_length")
             val value = readValue(input, type, wanted)
+            if (RECURRENT_KEYS.any { key.endsWith(it) }) recurrent = true
 
             when (key) {
                 "general.name" -> name = value as? String
@@ -98,40 +114,79 @@ class GgufInspector {
             hasChatTemplate = hasChatTemplate,
             onDemandBytes = tensorBytes.onDemand,
             expertBytes = tensorBytes.experts,
+            repackableBytes = tensorBytes.repackable,
+            fixedRepackableBytes = tensorBytes.fixedRepackable,
+            requantizedBytes = tensorBytes.requantized,
+            largestRequantizedValues = tensorBytes.largestRequantizedValues,
+            recurrent = recurrent,
         )
     }
 
-    private data class TensorBytes(val onDemand: Long = 0L, val experts: Long = 0L)
+    private data class TensorBytes(
+        val onDemand: Long = 0L,
+        val experts: Long = 0L,
+        val repackable: Long = 0L,
+        val fixedRepackable: Long = 0L,
+        val requantized: Long = 0L,
+        val largestRequantizedValues: Long = 0L,
+    )
 
     /**
      * Reads the tensor table that follows the metadata. A tensor's size is the distance to the next
-     * tensor's data (the last one ends at the file end), which needs no table of quantization types.
+     * tensor's data (the last one ends at the file end), which needs no table of block sizes.
      */
     private fun readTensorBytes(input: CountingInputStream, tensorCount: Long, alignment: Long, totalBytes: Long?): TensorBytes {
         if (tensorCount < 0 || tensorCount > MAX_TENSORS) throw IOException("Cabeçalho GGUF inválido.")
-        val offsets = LongArray(tensorCount.toInt())
-        val onDemand = ArrayList<Int>()
-        val experts = ArrayList<Int>()
-        for (index in 0 until tensorCount.toInt()) {
+        val count = tensorCount.toInt()
+        val offsets = LongArray(count)
+        val types = IntArray(count)
+        val values = LongArray(count)
+        val onDemand = BooleanArray(count)
+        val expert = BooleanArray(count)
+        for (index in 0 until count) {
             val name = readString(input, 64 * 1024)
             val dimensions = readU32(input)
             if (dimensions > MAX_DIMENSIONS) throw IOException("Tensor GGUF inválido.")
-            skipFully(input, dimensions * 8)
-            readU32(input) // quantization type
+            var elements = 1L
+            repeat(dimensions.toInt()) { elements *= readU64(input).coerceAtLeast(1L) }
+            types[index] = readU32(input).toInt()
+            values[index] = elements
             offsets[index] = readU64(input)
-            if (name in ON_DEMAND_TENSORS) onDemand += index
-            if (EXPERT_TENSOR.containsMatchIn(name)) experts += index
+            onDemand[index] = name in ON_DEMAND_TENSORS
+            expert[index] = EXPERT_TENSOR.containsMatchIn(name)
         }
-        if (onDemand.isEmpty() && experts.isEmpty()) return TensorBytes()
         val dataStart = (input.count + alignment - 1) / alignment * alignment
         val dataEnd = totalBytes?.minus(dataStart)
         val sorted = offsets.sortedArray()
         fun sizeOf(index: Int): Long {
             val start = offsets[index]
-            val next = sorted.firstOrNull { it > start } ?: dataEnd ?: start
-            return (next - start).coerceAtLeast(0L)
+            var next = sorted.binarySearch(start) + 1
+            while (next < sorted.size && sorted[next] <= start) next++
+            val end = if (next < sorted.size) sorted[next] else dataEnd ?: start
+            return (end - start).coerceAtLeast(0L)
         }
-        return TensorBytes(onDemand = onDemand.sumOf { sizeOf(it) }, experts = experts.sumOf { sizeOf(it) })
+        var onDemandBytes = 0L
+        var expertBytes = 0L
+        var repackable = 0L
+        var fixedRepackable = 0L
+        var requantized = 0L
+        var largestRequantized = 0L
+        for (index in 0 until count) {
+            val size = sizeOf(index)
+            if (onDemand[index]) {
+                onDemandBytes += size
+                continue
+            }
+            if (expert[index]) expertBytes += size
+            if (types[index] !in REPACKABLE_TYPES) continue
+            repackable += size
+            if (!expert[index]) fixedRepackable += size
+            if (types[index] in REQUANTIZED_TYPES) {
+                requantized += size
+                largestRequantized = maxOf(largestRequantized, values[index])
+            }
+        }
+        return TensorBytes(onDemandBytes, expertBytes, repackable, fixedRepackable, requantized, largestRequantized)
     }
 
     private fun readValue(input: InputStream, type: Int, materialize: Boolean): Any? = when (type) {
@@ -239,6 +294,15 @@ class GgufInspector {
         val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
         /** Expert weights, named as llama.cpp's --cpu-moe matches them ("blk.3.ffn_down_exps.weight"). */
         val EXPERT_TENSOR = Regex("\\.ffn_(up|down|gate|gate_up)_(ch|)exps")
+        /**
+         * ggml types with repacked ARM kernels in the pinned llama.cpp (ggml-cpu repack and KleidiAI):
+         * Q4_0, Q8_0, Q4_K, Q5_K, Q6_K, IQ4_NL, MXFP4 and Q1_0.
+         */
+        val REPACKABLE_TYPES = setOf(2, 8, 12, 13, 14, 20, 39, 41)
+        /** Q8_0 and Q6_K, which KleidiAI stores as int8 per channel. */
+        val REQUANTIZED_TYPES = setOf(8, 14)
+        /** Metadata of recurrent layers: Mamba, Gated DeltaNet (Qwen3.5/3.6) and short convolutions (LFM2). */
+        val RECURRENT_KEYS = listOf(".ssm.conv_kernel", ".ssm.state_size", ".shortconv.l_cache", ".full_attention_interval")
     }
 
     private fun skipFully(input: InputStream, count: Long) {

@@ -30,4 +30,16 @@ interface IInferenceService {
     void unload();
 
     boolean releaseIfIdle();
+
+    /** The performance settings (a RuntimeTuning as JSON) for the next loads and answers. */
+    void setTuning(String tuningJson);
+
+    /** Writes the conversation in the context to storage now, if reading it again would be slow. */
+    void saveSessionNow();
+
+    /**
+     * Ends a prompt the model is reading (not a load) without stopping the AI process; true if one
+     * was being read. The request it belongs to ends as cancelled.
+     */
+    boolean abortNativeWork();
 }

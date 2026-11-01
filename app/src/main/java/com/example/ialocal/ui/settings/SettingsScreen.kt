@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.Card
@@ -56,6 +57,7 @@ fun SettingsScreen(
     onOpenStorageScan: () -> Unit,
     onOpenCompilers: () -> Unit,
     onOpenWikipedia: () -> Unit,
+    onOpenPerformance: () -> Unit,
     adsEnabled: Boolean,
     onBack: () -> Unit,
 ) {
@@ -109,6 +111,14 @@ fun SettingsScreen(
                         else -> "$customProfileCount perfis criados"
                     },
                     onClick = onOpenAiProfiles,
+                )
+            }
+            item {
+                SettingsEntry(
+                    icon = Icons.Default.Speed,
+                    title = "Desempenho da IA",
+                    summary = "Usar mais RAM para responder mais rápido",
+                    onClick = onOpenPerformance,
                 )
             }
             item {

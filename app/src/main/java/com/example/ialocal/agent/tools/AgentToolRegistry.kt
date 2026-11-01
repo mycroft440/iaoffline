@@ -71,8 +71,21 @@ class AgentToolRegistry(
         append("Para chamar uma ferramenta, responda SOMENTE com um JSON válido neste formato: ")
         append("{\"tool\":\"nome\",\"arguments\":{...}}. Não use markdown nessa resposta.\n")
         append("Depois de receber um resultado de ferramenta, continue e responda normalmente ao usuário.\nFerramentas disponíveis:\n")
-        availableDefinitions().forEach {
+        // Scoped tools exist only while the interface authorizes them, so they are told with each
+        // message instead ([turnInstructions]): the system prompt, which the AI keeps processed with
+        // the conversation, stays the same when a Canvas edit starts or ends.
+        availableDefinitions().filter { it.permission != ToolPermission.SCOPED_WRITE }.forEach {
             append("- ${it.name} [${it.permission}]: ${it.description} Argumentos: ${it.arguments}\n")
+        }
+    }
+
+    /** The scoped tools the interface authorizes now, sent with the user's message; "" when there are none. */
+    fun turnInstructions(): String {
+        val scoped = availableDefinitions().filter { it.permission == ToolPermission.SCOPED_WRITE }
+        if (scoped.isEmpty()) return ""
+        return buildString {
+            append("\n\n[Ferramenta autorizada para esta mensagem]\n")
+            scoped.forEach { append("- ${it.name} [${it.permission}]: ${it.description} Argumentos: ${it.arguments}\n") }
         }
     }
 

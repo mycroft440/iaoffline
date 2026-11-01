@@ -16,16 +16,28 @@ import java.util.UUID
 class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = null) {
     enum class Phase { LOAD, GENERATION }
 
-    /** A run of [modelName] that the previous process did not survive. */
-    data class Recovery(val modelId: String, val modelName: String, val phase: Phase, val level: Int)
+    /**
+     * A run of [modelName] that the previous process did not survive. With [performanceBlocked], the
+     * model only lost the optimized copy of its weights ([PerformanceLevel.MAX]) and kept its [level].
+     */
+    data class Recovery(
+        val modelId: String,
+        val modelName: String,
+        val phase: Phase,
+        val level: Int,
+        val performanceBlocked: Boolean = false,
+    )
 
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var checked = false
     private var recovery: Recovery? = null
 
-    /** Written with commit(): the mark must already be on disk if the process dies right after. */
-    fun begin(modelId: String, modelName: String, phase: Phase) {
+    /**
+     * Written with commit(): the mark must already be on disk if the process dies right after.
+     * [performanceInUse] tells that the run may keep an optimized copy of the weights in RAM.
+     */
+    fun begin(modelId: String, modelName: String, phase: Phase, performanceInUse: Boolean = false) {
         // A mark left by a dead process must be read before this one replaces it.
         recoverInterruptedRun()
         preferences.edit()
@@ -35,6 +47,7 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
             .putString(KEY_PROCESS, PROCESS_TOKEN)
             .putInt(KEY_PID, Process.myPid())
             .putLong(KEY_STARTED_AT, System.currentTimeMillis())
+            .putBoolean(KEY_PERFORMANCE, performanceInUse)
             .commit()
     }
 
@@ -45,10 +58,32 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
     /** 0 normally; raised by each crash, up to [MAX_LEVEL]. */
     fun safeLevel(modelId: String): Int = preferences.getInt(levelKey(modelId), 0)
 
+    /** Models that load without the optimized copy of their weights, which made the AI process close. */
+    fun performanceBlocked(): Set<String> =
+        preferences.all.keys.filter { it.startsWith(BLOCKED_PREFIX) }.map { it.removePrefix(BLOCKED_PREFIX) }.toSet()
+
     /** A deleted model starts over if it is installed again. */
     fun forget(modelId: String) {
-        preferences.edit().remove(levelKey(modelId)).apply()
+        preferences.edit().remove(levelKey(modelId)).remove(blockedKey(modelId)).apply()
     }
+
+    /**
+     * The first death of a run that may have kept an optimized copy of the weights only turns that
+     * copy off for the model, which keeps its whole context; later ones raise the level as before.
+     */
+    private fun recordDeath(modelId: String, modelName: String, phase: Phase, performanceInUse: Boolean): Recovery {
+        if (performanceInUse && !preferences.contains(blockedKey(modelId))) {
+            preferences.edit().putBoolean(blockedKey(modelId), true).apply()
+            return Recovery(modelId, modelName, phase, safeLevel(modelId), performanceBlocked = true)
+        }
+        val level = nextLevel(safeLevel(modelId))
+        preferences.edit().putInt(levelKey(modelId), level).apply()
+        return Recovery(modelId, modelName, phase, level)
+    }
+
+    private fun consequence(recovery: Recovery): String =
+        if (recovery.performanceBlocked) "próximos carregamentos não mantêm a cópia otimizada dos pesos"
+        else "próximos carregamentos usam o nível de economia ${recovery.level}"
 
     /**
      * Checks, once per process, whether the previous process died during a load or an answer, using
@@ -65,6 +100,7 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
             .getOrDefault(Phase.LOAD)
         val pid = preferences.getInt(KEY_PID, 0)
         val startedAt = preferences.getLong(KEY_STARTED_AT, 0L)
+        val performanceInUse = preferences.getBoolean(KEY_PERFORMANCE, false)
         end()
 
         val exit = runCatching {
@@ -76,14 +112,13 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
             logger?.info("MODEL_SAFETY", "Execução anterior de $modelName interrompida sem falta de memória (motivo ${exit?.reason})")
             return null
         }
-        val level = nextLevel(safeLevel(modelId))
-        preferences.edit().putInt(levelKey(modelId), level).apply()
+        val result = recordDeath(modelId, modelName, phase, performanceInUse)
         logger?.error(
             "MODEL_SAFETY",
             "O app foi fechado durante ${if (phase == Phase.LOAD) "o carregamento" else "uma resposta"} de " +
-                "$modelName (motivo ${exit?.reason}); próximos carregamentos usam o nível de economia $level",
+                "$modelName (motivo ${exit?.reason}); " + consequence(result),
         )
-        return Recovery(modelId, modelName, phase, level).also { recovery = it }
+        return result.also { recovery = it }
     }
 
     /**
@@ -91,18 +126,24 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
      * pressure or a native fault stop it while the app stays open. Returns the new level.
      */
     @Synchronized
-    fun recordAiProcessDeath(modelId: String, modelName: String, phase: Phase): Recovery {
-        val level = nextLevel(safeLevel(modelId))
-        preferences.edit().putInt(levelKey(modelId), level).apply()
+    fun recordAiProcessDeath(
+        modelId: String,
+        modelName: String,
+        phase: Phase,
+        performanceInUse: Boolean = false,
+    ): Recovery {
+        val result = recordDeath(modelId, modelName, phase, performanceInUse)
         logger?.error(
             "MODEL_SAFETY",
             "O processo da IA foi encerrado durante ${if (phase == Phase.LOAD) "o carregamento" else "uma resposta"} " +
-                "de $modelName; próximos carregamentos usam o nível de economia $level",
+                "de $modelName; " + consequence(result),
         )
-        return Recovery(modelId, modelName, phase, level)
+        return result
     }
 
     private fun levelKey(modelId: String) = "level_$modelId"
+
+    private fun blockedKey(modelId: String) = "$BLOCKED_PREFIX$modelId"
 
     companion object {
         const val MAX_LEVEL = 2
@@ -131,5 +172,7 @@ class ModelCrashGuard(context: Context, private val logger: AiEventLogger? = nul
         private const val KEY_PROCESS = "running_process"
         private const val KEY_PID = "running_pid"
         private const val KEY_STARTED_AT = "running_started_at"
+        private const val KEY_PERFORMANCE = "running_with_optimized_copy"
+        private const val BLOCKED_PREFIX = "no_optimized_copy_"
     }
 }

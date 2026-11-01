@@ -42,6 +42,53 @@ import kotlinx.coroutines.withContext
 internal fun shouldInterruptNativeWork(isActive: Boolean, stage: GenerationStage.Kind?): Boolean =
     isActive && stage != GenerationStage.Kind.WRITING && stage != GenerationStage.Kind.REASONING
 
+/**
+ * One answer per turn, as the model sees the conversation: "Refazer" keeps the old answer in the chat
+ * and adds the new one after it, so of answers in a row ([isAnswer]) only the last one with text
+ * ([isEmpty] false) is kept. Otherwise the model read both answers as one, and the next message could
+ * not continue the context of the answer it last wrote.
+ */
+internal fun <T> oneAnswerPerTurn(items: List<T>, isAnswer: (T) -> Boolean, isEmpty: (T) -> Boolean): List<T> {
+    val result = ArrayList<T>(items.size)
+    var answers = mutableListOf<T>()
+    fun keepLastAnswer() {
+        if (answers.isEmpty()) return
+        result += answers.lastOrNull { !isEmpty(it) } ?: answers.last()
+        answers = mutableListOf()
+    }
+    for (item in items) {
+        if (isAnswer(item)) {
+            answers += item
+        } else {
+            keepLastAnswer()
+            result += item
+        }
+    }
+    keepLastAnswer()
+    return result
+}
+
+/** The answer being written, ahead of the database ([ChatGenerationManager.Session.streaming]). */
+data class StreamingReply(val messageId: String, val content: String)
+
+/**
+ * [stored] with the answer being written as it is now: the database has it only every few seconds.
+ * Only while the stored message is still being sent, and never shorter than what is stored.
+ */
+internal fun withStreamingReply(stored: List<MessageWithAttachments>, streaming: StreamingReply?): List<MessageWithAttachments> {
+    if (streaming == null) return stored
+    return stored.map { item ->
+        val message = item.message
+        if (message.id == streaming.messageId && message.status == MessageStatus.SENDING.name &&
+            streaming.content.length >= message.content.length
+        ) {
+            item.copy(message = message.copy(content = streaming.content))
+        } else {
+            item
+        }
+    }
+}
+
 data class QueuedChatMessage(
     val content: String,
     val attachments: List<PendingAttachment> = emptyList(),
@@ -101,6 +148,12 @@ class ChatGenerationManager(
         internal val _progress = MutableStateFlow<GenerationProgress?>(null)
         /** What the answer being prepared is doing, step by step; null when nothing is generating. */
         val progress: StateFlow<GenerationProgress?> = _progress.asStateFlow()
+        internal val _streaming = MutableStateFlow<StreamingReply?>(null)
+        /**
+         * The answer being written, updated several times per second; the database gets it every
+         * few seconds, since each write re-reads the conversation and redraws the chat.
+         */
+        val streaming: StateFlow<StreamingReply?> = _streaming.asStateFlow()
         internal var job: Job? = null
         internal var queuedTarget: GenerationTarget? = null
 
@@ -126,7 +179,7 @@ class ChatGenerationManager(
             if (_activeGenerations.value > 0) return@launch
             try {
                 val agent = resolveAgent(conversationId, target, verify = false) ?: return@launch
-                val history = repository.getMessages(conversationId).map(::toAiMessage)
+                val history = modelHistory(repository.getMessages(conversationId))
                 // A message sent meanwhile already loads the model and reads the conversation.
                 if (_activeGenerations.value > 0) return@launch
                 orchestrator.warmUpAgent(agent.id, history)
@@ -134,6 +187,26 @@ class ChatGenerationManager(
                 throw cancel
             } catch (_: Throwable) {
                 // Only time is lost; sending the message loads the model again and reports the error.
+            }
+        }
+    }
+
+    /**
+     * "Carregar a IA ao abrir o app": loads the default profile's model and processes its instructions
+     * while the user is still on the home screen, so the first answer starts without the load.
+     */
+    fun preload() {
+        if (_activeGenerations.value > 0) return
+        val previous = warmUp
+        warmUp = scope.launch {
+            previous?.join()
+            if (_activeGenerations.value > 0) return@launch
+            try {
+                orchestrator.warmUpAgent(null, emptyList())
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Throwable) {
+                // Only time is lost; the first message loads the model and reports the error.
             }
         }
     }
@@ -156,7 +229,7 @@ class ChatGenerationManager(
         } else {
             launchGeneration(conversationId, session, target, "Falha ao gerar a resposta.") {
                 // The message shows up in the chat right away, even if it has to wait for a slot.
-                val historyBeforeSend = repository.getMessages(conversationId).map(::toAiMessage)
+                val historyBeforeSend = modelHistory(repository.getMessages(conversationId))
                 repository.addMessage(conversationId, MessageRole.USER, outgoing.content, outgoing.attachments)
                 awaitAnswerSlot(session) {
                     generateAssistant(
@@ -183,7 +256,7 @@ class ChatGenerationManager(
             val userIndex = (assistantIndex - 1 downTo 0).firstOrNull {
                 snapshot[it].message.role == MessageRole.USER.name
             } ?: return@launchGeneration
-            val history = snapshot.take(userIndex + 1).map(::toAiMessage)
+            val history = modelHistory(snapshot.take(userIndex + 1))
             awaitAnswerSlot(session) { generateAssistant(conversationId, session, target, history, emptyList()) }
         }
     }
@@ -241,6 +314,7 @@ class ChatGenerationManager(
     ) {
         session._isGenerating.value = true
         session._progress.value = null
+        session._streaming.value = null
         // The latest responding conversation is what the notification opens. Track all active
         // sessions so stopping one cannot redirect the notification to an unrelated chat.
         generatingConversationIds.add(conversationId)
@@ -366,17 +440,23 @@ class ChatGenerationManager(
             return AssistantContent.withTimings(accumulated.toString(), now - startedAt, reasoningMs, provider, tokensPerSecond, answeringModelName)
         }
         try {
-            // Each saved update re-reads the conversation and redraws the chat, so the text is
-            // saved a few times per second instead of on every token: on the main thread, a long
-            // answer saved per token kept the screen from responding.
+            // The chat shows the text from memory a few times per second; each database write
+            // re-reads the whole conversation and redraws it, taking CPU from the AI's threads, which
+            // all wait for the slowest one, so the text is saved only every few seconds.
             coroutineScope {
                 var unsaved = false
                 val saver = launch {
+                    var savedAt = System.currentTimeMillis()
                     while (true) {
                         delay(UI_UPDATE_INTERVAL_MS)
-                        if (unsaved) {
-                            unsaved = false
-                            repository.updateMessageContent(replyId, accumulated.toString())
+                        if (!unsaved) continue
+                        unsaved = false
+                        val text = accumulated.toString()
+                        session._streaming.value = StreamingReply(replyId, text)
+                        val now = System.currentTimeMillis()
+                        if (now - savedAt >= DATABASE_SAVE_INTERVAL_MS) {
+                            savedAt = now
+                            repository.updateMessageContent(replyId, text)
                         }
                     }
                 }
@@ -422,10 +502,19 @@ class ChatGenerationManager(
             }
             throw cancel
         } catch (t: Throwable) {
+            // What was written stays, as the chat showed it.
+            if (accumulated.isNotEmpty()) repository.updateMessageContent(replyId, accumulated.toString())
             repository.updateMessageStatus(replyId, MessageStatus.ERROR)
             throw t
         }
     }
+
+    private fun modelHistory(items: List<MessageWithAttachments>): List<AiChatMessage> =
+        oneAnswerPerTurn(
+            items,
+            isAnswer = { it.message.role == MessageRole.ASSISTANT.name },
+            isEmpty = { AssistantContent.answerForHistory(it.message.content).isBlank() },
+        ).map(::toAiMessage)
 
     private fun toAiMessage(item: MessageWithAttachments): AiChatMessage {
         var remaining = MAX_HISTORY_ATTACHMENT_CHARS
@@ -450,7 +539,10 @@ class ChatGenerationManager(
 
     companion object {
         const val MAX_CONCURRENT_ANSWERS = 2
-        private const val UI_UPDATE_INTERVAL_MS = 200L
+        /** How often the chat shows the answer being written. */
+        private const val UI_UPDATE_INTERVAL_MS = 120L
+        /** How often the answer being written is saved to the database. */
+        private const val DATABASE_SAVE_INTERVAL_MS = 2_000L
         /** Longer than any reasoning tag ("<|channel>thought", "</reasoning>"). */
         private const val TAG_WINDOW = 32
         private const val MAX_HISTORY_ATTACHMENT_PER_FILE = 4_000

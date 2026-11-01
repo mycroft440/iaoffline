@@ -15,7 +15,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +28,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -46,39 +49,107 @@ class LlamaCppRuntime(
     private val appContext = context.applicationContext
     private val mutex = Mutex()
     private val nativeDispatcher = Dispatchers.IO.limitedParallelism(1)
-    private val engine by lazy { AiChat.getInferenceEngine(appContext) }
+    private val engineDelegate = lazy { AiChat.getInferenceEngine(appContext) }
+    private val engine by engineDelegate
     private val _state = MutableStateFlow(RuntimeState())
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
+    /** The performance settings the app sent ([RuntimeTuning]). */
+    @Volatile private var tuning = RuntimeTuning()
     private var loadedModelId: String? = null
     /** Context the native side allocated for the loaded model. */
     private var loadedContextTokens = RuntimeLimits.MIN_CONTEXT_TOKENS
+    /** The settings the model was loaded with: when they change, the next request loads it again. */
+    private var loadedKey: LoadKey? = null
+    /** How the loaded model's weights are held, for freeing it and warming it up again. */
+    private var loadedLayout: LoadedLayout? = null
+    /** The context was freed on memory trim while the model, read from its file, stayed loaded. */
+    private var contextReleased = false
     /** The conversation the native context holds, if the last answer ended normally. */
     private var session: ChatSession? = null
+    /** Whether [session] is worth writing to storage ([SessionStore.worthSaving]) and already is. */
+    private var sessionWorthSaving = false
+    private var sessionSaved = false
     /** The system prompt and earlier turns the native context holds, prepared before a message. */
     private var primed: Primed? = null
+    /** The user turn "Refazer" or an edit of it goes back to, recorded when its answer started. */
+    private var turnMark: TurnMark? = null
     /** Counts requests, so a prefill still running stops at the next turn when one arrives. */
     private val requests = AtomicInteger()
     /** What holds [mutex], told to an answer that has to wait for it ([GenerationStage.BUSY_ANSWER]…). */
     @Volatile private var busyWith: String? = null
+    /** Set while the model loads or its context is created: that native work cannot be interrupted. */
+    @Volatile private var loading = false
+    /** The coroutine holding [mutex], so a cancelled request only interrupts its own native work. */
+    @Volatile private var activeJob: Job? = null
     /** Cores the native threads fill in with only up to 4, read once from /proc/cpuinfo. */
     private val efficiencyCpus by lazy { CpuCores.efficiencyCpus() }
-    /** The last conversation answered, kept on storage with its native context. */
-    private val savedSessions = SessionStore.of(appContext)
+    /** RAM the phone is sold with, which decides the automatic settings. */
+    private val deviceGigabytes by lazy { DeviceMemory.read(appContext).advertisedGigabytes }
+    /** The last conversations answered, kept on storage with their native context. */
+    private val savedSessions = SessionStore.of(appContext) {
+        tuning.readyConversations.coerceIn(1, MAX_READY_CONVERSATIONS)
+    }
     /** Writes [savedSessions] after an answer, once the model is free. */
     private val background = CoroutineScope(SupervisorJob() + nativeDispatcher)
+    /** Each model file's GGUF layout, read once instead of before every load. */
+    private val layouts = HashMap<String, GgufInspector.Metadata?>()
+
+    init {
+        // KleidiAI packs each weight twice on CPUs with SME (Dimensity 9500, Snapdragon 8 Elite
+        // Gen 5) when more threads than SME units run it: about twice the RAM for the weights. The
+        // NEON/i8mm kernels every other phone uses are kept instead. Read when the backend starts.
+        runCatching { Os.setenv(KLEIDIAI_SME_ENV, "0", true) }
+    }
 
     private data class Primed(val modelId: String, val key: String, val history: List<AiChatMessage>)
+
+    /** The turns before the marked user turn ([conversation]), of which the first [skipped] are not in the context. */
+    private data class TurnMark(
+        val modelId: String,
+        val key: String,
+        val conversation: List<AiChatMessage>,
+        val skipped: Int,
+    ) {
+        fun matches(modelId: String, key: String, request: List<AiChatMessage>): Boolean =
+            modelId == this.modelId && key == this.key && ChatSession.sameTurns(conversation, request)
+    }
+
+    /** The settings a load depends on; the rest apply to each request. */
+    private data class LoadKey(
+        val performance: PerformanceLevel,
+        val longContext: TuningSwitch,
+        val longPromptMoe: TuningSwitch,
+        val performanceBlocked: Boolean,
+        val safeLevel: Int,
+    )
+
+    private data class LoadedLayout(
+        val filePath: String,
+        val fileBytes: Long,
+        val onDemandBytes: Long,
+        /** Weights read from the file (low-memory mode): the kernel may drop them when memory is short. */
+        val fileBacked: Boolean,
+        val streamsExperts: Boolean,
+    )
+
+    override fun setTuning(tuning: RuntimeTuning) {
+        this.tuning = tuning
+    }
 
     override suspend fun warmUp(model: AiModelEntity, prefill: PromptPrefill?) = withContext(nativeDispatcher) {
         val ticket = requests.incrementAndGet()
         mutex.withLock {
             busyWith = if (prefill != null) GenerationStage.BUSY_PREFILL else GenerationStage.BUSY_LOAD
+            activeJob = currentCoroutineContext()[Job]
             try {
+                val alreadyLoaded = isLoaded(model)
                 ensureLoaded(model)
+                if (alreadyLoaded) warmWeights()
                 if (prefill != null) prime(model, prefill, ticket)
             } finally {
                 busyWith = null
+                activeJob = null
             }
         }
     }
@@ -91,14 +162,17 @@ class LlamaCppRuntime(
             var passed = false
             try {
                 logger?.info("MODEL_LOAD", "Iniciando teste real de inferência para ${model.name}")
+                saveSessionLocked()
                 ensureLoaded(model)
                 session = null
                 primed = null
+                turnMark = null
                 runCatching {
                     Os.unsetenv(ASSISTANT_PREFIX_ENV)
                     // The test prompt must not replace the model's saved system prompt.
                     Os.unsetenv(PROMPT_CACHE_ENV)
                     Os.unsetenv(SYSTEM_PROMPT_TAIL_ENV)
+                    Os.unsetenv(TURN_MARK_ENV)
                 }
                 engine.setSystemPrompt("Você está em um teste técnico. Siga exatamente a instrução curta do usuário.")
                 _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
@@ -141,12 +215,14 @@ class LlamaCppRuntime(
         // A prefill still running for another message stops at its next turn.
         requests.incrementAndGet()
         if (!mutex.tryLock()) {
-            // Another answer, a test or the preparation started while the user wrote holds the
-            // model; a native call in progress (reading a long prompt) only ends on its own.
+            // The preparation started while the user wrote stops in the middle of what it reads;
+            // another answer, a test or a load holds the model until it ends.
+            if (busyWith == GenerationStage.BUSY_PREFILL) requestNativeAbort()
             onStage(GenerationStage(GenerationStage.Kind.WAITING_FOR_AI, busyWith ?: GenerationStage.BUSY_ANSWER))
             mutex.lock()
         }
         busyWith = GenerationStage.BUSY_ANSWER
+        activeJob = currentCoroutineContext()[Job]
         try {
             ensureLoaded(model, onStage)
             val outputTokens = maxTokens.coerceIn(RuntimeLimits.MIN_OUTPUT_TOKENS, RuntimeLimits.MAX_OUTPUT_TOKENS)
@@ -160,6 +236,11 @@ class LlamaCppRuntime(
             val sessionKey = sessionKey(prepared.systemPrompt, turn.templateThinking)
             val previous = session
             val ready = primed
+            val mark = turnMark
+            val continues = previous != null && previous.continuesWith(model.id, sessionKey, prepared.conversation)
+            val rewinds = !continues && mark != null && mark.matches(model.id, sessionKey, prepared.conversation)
+            // Another conversation replaces the one in the context: it is kept on storage first.
+            if (previous != null && !continues && !rewinds) saveSessionLocked()
             // Invalid until this answer ends normally.
             session = null
             primed = null
@@ -167,31 +248,50 @@ class LlamaCppRuntime(
                 Os.setenv(THINKING_ENV, if (turn.templateThinking) "1" else "0", true)
                 if (turn.assistantPrefix.isEmpty()) Os.unsetenv(ASSISTANT_PREFIX_ENV)
                 else Os.setenv(ASSISTANT_PREFIX_ENV, turn.assistantPrefix, true)
+                Os.setenv(TURN_MARK_ENV, if (turn.markTurn) "1" else "0", true)
+                Os.setenv(CHECKPOINT_ENV, checkpointCapMb(model).toString(), true)
             }
-            val continuing = previous != null &&
-                previous.continuesWith(model.id, sessionKey, prepared.conversation) &&
-                previous.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)
-            if (continuing) {
-                onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_SESSION))
-                logger?.info("PROMPT_TEMPLATE", "Continuando a conversa no contexto carregado (${previous?.tokens} tokens)")
-            } else if (ready == Primed(model.id, sessionKey, prepared.history)) {
+            // How many of the conversation's first turns the context leaves out, once it holds the
+            // rest; null while it does not hold the conversation.
+            var skipped: Int? = null
+            if (continues) {
+                val held = if (previous!!.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)) {
+                    onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_SESSION))
+                    logger?.info("PROMPT_TEMPLATE", "Continuando a conversa no contexto carregado (${previous.tokens} tokens)")
+                    previous
+                } else {
+                    dropOldestTurns(previous, latestUser.length, outputTokens)?.also {
+                        onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_TRIMMED))
+                    }
+                }
+                skipped = held?.skipped
+            }
+            if (skipped == null && ready == Primed(model.id, sessionKey, prepared.history)) {
                 onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_PREFILL))
                 logger?.info("PROMPT_TEMPLATE", "Instruções e ${prepared.history.size} turnos já processados antes do envio")
-            } else if (
-                restoreSaved(model, sessionKey, prepared.conversation, onStage) { saved ->
+                skipped = prepared.conversation.size - prepared.history.size
+            }
+            if (skipped == null && rewinds && rewindToMark(latestUser.length, outputTokens)) {
+                onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_REWIND))
+                skipped = mark!!.skipped
+            }
+            if (skipped == null) {
+                skipped = restoreSaved(model, sessionKey, prepared.conversation, onStage) { saved ->
                     saved.hasRoomFor(latestUser.length, outputTokens, loadedContextTokens)
-                } != null
-            ) {
-                // The context holds the conversation again, as right after its last answer.
-            } else {
+                }?.skipped
+            }
+            val contextSkipped: Int = skipped ?: run {
                 if (prepared.truncated) logger?.info("PROMPT_TEMPLATE", "Histórico antigo truncado para caber no contexto")
+                turnMark = null
                 setSystemPrompt(model, prepared.systemPrompt, turn, onStage)
-                prepared.history.forEachIndexed { index, message ->
-                    onStage(GenerationStage(GenerationStage.Kind.READING_HISTORY, done = index + 1, total = prepared.history.size))
-                    engine.addHistoryMessage(message.role, message.content)
+                addHistory(prepared.history) { done ->
+                    onStage(GenerationStage(GenerationStage.Kind.READING_HISTORY, done = done, total = prepared.history.size))
+                    true
                 }
                 logger?.info("PROMPT_TEMPLATE", "Conversa montada com ${prepared.history.size} turnos anteriores")
+                prepared.conversation.size - prepared.history.size
             }
+            if (turn.markTurn) turnMark = TurnMark(model.id, sessionKey, prepared.conversation, contextSkipped)
 
             _state.value = RuntimeState(RuntimeStatus.GENERATING, model.id, model.name)
             logger?.info("INFERENCE", "Gerando com ${model.apiModelId}; maxTokens=$outputTokens; streaming=true")
@@ -221,12 +321,18 @@ class LlamaCppRuntime(
                 val finished = ChatSession(
                     modelId = model.id,
                     key = sessionKey,
-                    conversation = prepared.conversation + AiChatMessage(PromptContextBuilder.USER, prepared.latestUser),
+                    conversation = prepared.conversation.drop(contextSkipped) +
+                        AiChatMessage(PromptContextBuilder.USER, prepared.latestUser),
                     reply = reply.toString(),
                     tokens = tokens,
+                    skipped = contextSkipped,
+                    opening = (prepared.conversation.firstOrNull()?.content ?: prepared.latestUser)
+                        .take(ChatSession.OPENING_CHARS),
                 )
                 session = finished
-                if (SessionStore.worthSaving(tokens, answerSpeed)) saveWhenFree(finished)
+                sessionSaved = false
+                sessionWorthSaving = SessionStore.worthSaving(tokens, answerSpeed)
+                if (sessionWorthSaving) saveWhenFree(finished)
             }
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("INFERENCE", "Resposta concluída (${reply.length} caracteres)")
@@ -250,6 +356,7 @@ class LlamaCppRuntime(
             throw t
         } finally {
             busyWith = null
+            activeJob = null
             mutex.unlock()
         }
     }.flowOn(nativeDispatcher)
@@ -272,6 +379,38 @@ class LlamaCppRuntime(
         mutex.withLock { unloadLocked() }
     }
 
+    override suspend fun saveSessionNow() = withContext(nativeDispatcher) {
+        // An answer in progress saves its own conversation when it ends.
+        if (!mutex.tryLock()) return@withContext
+        try {
+            saveSessionLocked()
+        } finally {
+            mutex.unlock()
+        }
+        Unit
+    }
+
+    /**
+     * Ends the prompt the native side is reading, from any thread: the request it belongs to ends as
+     * cancelled and the model stays loaded. With [owner], only when that request (a job of the AI
+     * process) is the one holding the model. False while a model loads or is tested, which cannot be
+     * interrupted: the app then stops the whole AI process.
+     */
+    fun abortPromptReading(owner: Job? = null): Boolean {
+        val busy = busyWith
+        if (loading || busy == GenerationStage.BUSY_VERIFY || busy == GenerationStage.BUSY_LOAD) return false
+        val active = activeJob
+        if (owner != null && (active == null || !owner.isAncestorOf(active))) return true
+        requestNativeAbort()
+        return true
+    }
+
+    private fun requestNativeAbort() {
+        if (engineDelegate.isInitialized()) runCatching { engine.requestAbort() }
+    }
+
+    private fun Job.isAncestorOf(job: Job): Boolean = this == job || children.any { it.isAncestorOf(job) }
+
     /**
      * Processes the system prompt and the conversation so far while the user writes, so the next
      * message only has its own text left to read. Stops between turns if a request arrives.
@@ -289,27 +428,33 @@ class LlamaCppRuntime(
         // The context already holds this conversation, after its last answer or a previous prefill.
         if (primed == target || session?.holds(model.id, key, prepared.conversation) == true) return
 
+        // Another conversation replaces the one in the context: it is kept on storage first.
+        saveSessionLocked()
         session = null
         primed = null
+        turnMark = null
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         try {
             restoreSaved(model, key, prepared.conversation)?.let { saved ->
                 session = saved
+                sessionWorthSaving = true
+                sessionSaved = true
                 return
             }
             runCatching { Os.setenv(THINKING_ENV, if (prefill.turn.templateThinking) "1" else "0", true) }
             setSystemPrompt(model, prepared.systemPrompt, prefill.turn)
-            for (message in prepared.history) {
-                if (requests.get() != ticket) {
-                    logger?.info("PROMPT_TEMPLATE", "Preparação interrompida por uma nova solicitação")
-                    return
-                }
-                engine.addHistoryMessage(message.role, message.content)
+            val complete = addHistory(prepared.history) { requests.get() == ticket }
+            if (!complete) {
+                logger?.info("PROMPT_TEMPLATE", "Preparação interrompida por uma nova solicitação")
+                return
             }
             primed = target
             logger?.info("PROMPT_TEMPLATE", "Instruções e ${prepared.history.size} turnos processados antes da próxima mensagem")
         } catch (cancel: CancellationException) {
-            throw cancel
+            // A message sent meanwhile ended the native decode (requestAbort); only a cancelled
+            // preparation itself goes on as cancelled.
+            if (!currentCoroutineContext().isActive) throw cancel
+            logger?.info("PROMPT_TEMPLATE", "Preparação interrompida por uma nova solicitação")
         } catch (t: Throwable) {
             // Only time is lost: the next message processes the conversation (or reloads) as before.
             logger?.error("PROMPT_TEMPLATE", "Falha ao preparar a conversa antes do envio", t)
@@ -322,9 +467,41 @@ class LlamaCppRuntime(
     }
 
     /**
+     * Decodes [history] after the system prompt, several turns per native call; [onGroup] hears how
+     * many turns are done before each call and returns false to stop there. Returns whether all were.
+     */
+    private suspend fun addHistory(history: List<AiChatMessage>, onGroup: (done: Int) -> Boolean): Boolean {
+        var done = 0
+        for (group in historyGroups(history)) {
+            if (!onGroup(done + group.size)) return false
+            engine.addHistoryMessages(group.map { it.role }, group.map { it.content })
+            done += group.size
+        }
+        return true
+    }
+
+    /** The turns of [history] in groups of about [HISTORY_GROUP_CHARS]; a longer turn is a group of its own. */
+    private fun historyGroups(history: List<AiChatMessage>): List<List<AiChatMessage>> {
+        val groups = mutableListOf<List<AiChatMessage>>()
+        var current = mutableListOf<AiChatMessage>()
+        var chars = 0
+        for (message in history) {
+            if (current.isNotEmpty() && chars + message.content.length > HISTORY_GROUP_CHARS) {
+                groups += current
+                current = mutableListOf()
+                chars = 0
+            }
+            current += message
+            chars += message.content.length
+        }
+        if (current.isNotEmpty()) groups += current
+        return groups
+    }
+
+    /**
      * Processes [systemPrompt]. The native side restores what it saved of this model's system
      * prompt, up to the part that changes daily ([TurnOptions.systemPromptTail]), and saves it
-     * again when it had to process it.
+     * again when it had to process it. Each profile's prompt has a file of its own.
      */
     private suspend fun setSystemPrompt(
         model: AiModelEntity,
@@ -333,7 +510,8 @@ class LlamaCppRuntime(
         onStage: (GenerationStage) -> Unit = {},
     ) {
         val tail = turn.systemPromptTail.trimEnd()
-        val file = PromptCache.file(appContext, model.id, turn.templateThinking)
+        val stable = if (tail.isNotEmpty() && systemPrompt.endsWith(tail)) systemPrompt.dropLast(tail.length) else systemPrompt
+        val file = PromptCache.file(appContext, model.id, turn.templateThinking, stable)
         runCatching {
             file.parentFile?.mkdirs()
             Os.setenv(PROMPT_CACHE_ENV, file.path, true)
@@ -350,7 +528,39 @@ class LlamaCppRuntime(
     }
 
     /**
-     * Restores the conversation saved on storage when [conversation] (the turns before the next
+     * Drops the oldest turns of [previous] from the context when the next message would not fit,
+     * instead of reading the conversation again; null when the context cannot drop them (recurrent
+     * models, a session from an older version) and the conversation is read again.
+     */
+    private suspend fun dropOldestTurns(previous: ChatSession, latestUserChars: Int, outputTokens: Int): ChatSession? {
+        val turns = previous.turnsToDrop(latestUserChars, outputTokens, loadedContextTokens)
+        if (turns == 0) return null
+        val tokens = engine.dropOldestTurns(turns)
+        if (tokens < 0) return null
+        turnMark = null
+        val trimmed = previous.dropped(turns, tokens)
+        logger?.info("PROMPT_TEMPLATE", "As $turns mensagens mais antigas saíram do contexto para a conversa continuar ($tokens tokens)")
+        return trimmed.takeIf { it.hasRoomFor(latestUserChars, outputTokens, loadedContextTokens) }
+    }
+
+    /**
+     * Takes the context back to the start of the marked user turn ("Refazer" or an edit of it), so
+     * only the new message is read; false when it cannot (the native side then emptied the context).
+     */
+    private suspend fun rewindToMark(latestUserChars: Int, outputTokens: Int): Boolean {
+        val position = engine.rewindLastTurn()
+        if (position < 0) {
+            turnMark = null
+            return false
+        }
+        val reserve = ChatSession.continuationReserve(outputTokens, loadedContextTokens)
+        if (position + latestUserChars / 3 + reserve + REWIND_HEADROOM_TOKENS > loadedContextTokens) return false
+        logger?.info("PROMPT_TEMPLATE", "Voltando ao início da última mensagem ($position tokens), sem ler a conversa de novo")
+        return true
+    }
+
+    /**
+     * Restores a conversation saved on storage when [conversation] (the turns before the next
      * message) continues it and [fits] it, instead of reading it again. Returns it when the native
      * context holds it again, as right after its last answer.
      */
@@ -361,68 +571,140 @@ class LlamaCppRuntime(
         onStage: (GenerationStage) -> Unit = {},
         fits: (ChatSession) -> Boolean = { true },
     ): ChatSession? {
-        val saved = savedSessions.load()
-            ?.takeIf { it.continuesWith(model.id, key, conversation) && fits(it) }
-            ?: return null
+        val saved = savedSessions.find { it.continuesWith(model.id, key, conversation) && fits(it) } ?: return null
+        turnMark = null
         val tokens = try {
-            engine.restoreSession(savedSessions.stateFile.path)
+            engine.restoreSession(saved.stateFile.path)
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (t: Throwable) {
             logger?.error("PROMPT_TEMPLATE", "Falha ao restaurar a conversa salva", t)
             -1
         }
-        if (tokens != saved.tokens) {
+        if (tokens != saved.session.tokens) {
             logger?.info("PROMPT_TEMPLATE", "A conversa salva não coube no contexto carregado; lendo a conversa")
             return null
         }
+        savedSessions.touch(saved)
         onStage(GenerationStage(GenerationStage.Kind.CONTEXT_REUSED, GenerationStage.REUSED_STORAGE))
         logger?.info("PROMPT_TEMPLATE", "Conversa restaurada do armazenamento ($tokens tokens), sem lê-la de novo")
-        return saved
+        return saved.session
     }
 
     /**
-     * Writes [finished] to storage shortly after the answer, unless something else used the context
-     * first: a tool's result or the next message continues it live, and saves its own answer.
+     * Writes [finished] to storage when the model has been idle for a while, unless something else
+     * used the context first: a tool's result or the next message continues it live, and saves its
+     * own answer. Leaving the app ([saveSessionNow]) or another conversation saves it sooner.
      */
     private fun saveWhenFree(finished: ChatSession) {
         background.launch {
             delay(SAVE_DELAY_MS)
             mutex.withLock {
-                if (session !== finished || loadedModelId != finished.modelId) return@withLock
-                busyWith = GenerationStage.BUSY_SAVE
-                try {
-                    val file = savedSessions.beginSave()
-                    if (engine.saveSession(file.path)) {
-                        savedSessions.finishSave(finished)
-                        logger?.info("PROMPT_TEMPLATE", "Conversa salva no armazenamento (${finished.tokens} tokens)")
-                    } else {
-                        logger?.info("PROMPT_TEMPLATE", "Não foi possível salvar a conversa no armazenamento")
-                    }
-                } catch (cancel: CancellationException) {
-                    throw cancel
-                } catch (t: Throwable) {
-                    logger?.error("PROMPT_TEMPLATE", "Falha ao salvar a conversa no armazenamento", t)
-                } finally {
-                    busyWith = null
-                }
+                if (session === finished) saveSessionLocked()
             }
+        }
+    }
+
+    /** Writes [session] to storage if reading it again would be slow and it is not saved yet; holds [mutex]. */
+    private suspend fun saveSessionLocked() {
+        val current = session ?: return
+        if (sessionSaved || !sessionWorthSaving || contextReleased || loadedModelId != current.modelId) return
+        val before = busyWith
+        busyWith = GenerationStage.BUSY_SAVE
+        try {
+            val file = savedSessions.beginSave(current)
+            if (engine.saveSession(file.path)) {
+                savedSessions.finishSave(current)
+                sessionSaved = true
+                logger?.info("PROMPT_TEMPLATE", "Conversa salva no armazenamento (${current.tokens} tokens)")
+            } else {
+                logger?.info("PROMPT_TEMPLATE", "Não foi possível salvar a conversa no armazenamento")
+            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            logger?.error("PROMPT_TEMPLATE", "Falha ao salvar a conversa no armazenamento", t)
+        } finally {
+            busyWith = before
         }
     }
 
     private fun sessionKey(systemPrompt: String, templateThinking: Boolean) =
         systemPrompt + "\u0000thinking=" + templateThinking
 
+    /**
+     * Copy of the recurrent state kept at the start of each user turn, so "Refazer" works for
+     * recurrent and hybrid models too ([RuntimeTuning.rewind]); 0 turns it off.
+     */
+    private fun checkpointCapMb(model: AiModelEntity): Int = when {
+        safeLevelOf(model.id) > 0 -> 0
+        tuning.rewind == TuningSwitch.OFF -> 0
+        tuning.rewind == TuningSwitch.ON -> LARGE_CHECKPOINT_MB
+        deviceGigabytes >= LARGE_CHECKPOINT_MIN_GB -> LARGE_CHECKPOINT_MB
+        else -> SMALL_CHECKPOINT_MB
+    }
+
     override suspend fun releaseIfIdle(): Boolean = withContext(nativeDispatcher) {
         // Busy means loading or answering, possibly for the background service: leave it alone.
         if (loadedModelId == null || !mutex.tryLock()) return@withContext false
         try {
-            logger?.info("MODEL_UNLOAD", "Pouca memória no aparelho: liberando o modelo ocioso")
+            saveSessionLocked()
+            val layout = loadedLayout
+            if (layout?.fileBacked == true && !contextReleased) {
+                // The weights are mapped from the file and the kernel drops them as it needs: only
+                // the context is memory Android cannot take back. Coming back creates it again
+                // instead of loading the model.
+                logger?.info("MODEL_UNLOAD", "Pouca memória no aparelho: liberando o contexto da IA ociosa")
+                engine.releaseContext()
+                contextReleased = true
+                session = null
+                primed = null
+                turnMark = null
+            } else {
+                logger?.info("MODEL_UNLOAD", "Pouca memória no aparelho: liberando o modelo ocioso")
+                unloadLocked()
+            }
+            true
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            logger?.error("MODEL_UNLOAD", "Falha ao liberar a memória da IA ociosa", t)
             unloadLocked()
             true
         } finally {
             mutex.unlock()
         }
+    }
+
+    private fun isLoaded(model: AiModelEntity): Boolean =
+        engineDelegate.isInitialized() && loadedModelId == model.id && !contextReleased &&
+            engine.state.value is InferenceEngine.State.ModelReady && loadedKey == loadKeyFor(model.id)
+
+    private fun loadKeyFor(modelId: String) = LoadKey(
+        performance = tuning.performance,
+        longContext = tuning.longContext,
+        longPromptMoe = tuning.longPromptMoe,
+        performanceBlocked = modelId in tuning.performanceBlocked,
+        safeLevel = safeLevelOf(modelId),
+    )
+
+    /**
+     * Asks the kernel to read again, in the background, the weights it dropped from the page cache
+     * while the app was away, before the next answer needs them one page fault at a time. Only for
+     * weights read from the file that fit in the free RAM; per-layer embeddings are read on demand.
+     */
+    private fun warmWeights() {
+        val layout = loadedLayout ?: return
+        if (!layout.fileBacked || layout.streamsExperts || layout.onDemandBytes > 0) return
+        val free = DeviceMemory.read(appContext).availableBytes
+        if (free < layout.fileBytes + WARM_HEADROOM_BYTES) return
+        runCatching { engine.adviseWillNeed(layout.filePath) }
+    }
+
+    private fun layoutOf(model: AiModelEntity): GgufInspector.Metadata? {
+        val file = File(model.filePath)
+        val key = "${file.path}:${file.length()}:${file.lastModified()}"
+        return layouts.getOrPut(key) { runCatching { GgufInspector().inspect(file) }.getOrNull() }
     }
 
     /**
@@ -431,16 +713,21 @@ class LlamaCppRuntime(
      */
     private suspend fun ensureLoaded(model: AiModelEntity, onStage: (GenerationStage) -> Unit = {}) {
         awaitEngineInitialized(onStage)
-        if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady) {
-            _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
-            return
+        val loadKey = loadKeyFor(model.id)
+        if (loadedModelId == model.id && engine.state.value is InferenceEngine.State.ModelReady && loadedKey == loadKey) {
+            if (!contextReleased || restoreContext(model, onStage)) {
+                _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
+                return
+            }
         }
+        // Another model, or other settings: the conversation in the context is kept on storage.
+        if (loadedModelId != null && !contextReleased) saveSessionLocked()
         if (loadedModelId != null || engine.state.value is InferenceEngine.State.Error) unloadLocked()
 
         _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
         val catalogEntry = ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
         val fileBytes = File(model.filePath).length()
-        val layout = runCatching { GgufInspector().inspect(File(model.filePath)) }.getOrNull()
+        val layout = layoutOf(model)
         // Per-layer embeddings stay in the file (the native loader reads them on demand), so only
         // the rest of the weights takes RAM: about half of a Gemma 4 E2B/E4B file.
         val onDemandBytes = layout?.onDemandBytes ?: 0L
@@ -448,8 +735,26 @@ class LlamaCppRuntime(
         // Read after the previous model was freed, so its memory counts as free.
         val memory = DeviceMemory.read(appContext)
         // A model that already made the app close for lack of memory loads with less of it.
-        val safeLevel = safeLevelOf(model.id)
-        val plan = RuntimeLimits.planMemory(modelBytes, memory, layout?.expertBytes ?: 0L, safeLevel)
+        val safeLevel = loadKey.safeLevel
+        val weights = layout?.let {
+            RuntimeLimits.WeightProfile(
+                known = true,
+                repackableBytes = it.repackableBytes,
+                fixedRepackableBytes = it.fixedRepackableBytes,
+                requantizedBytes = it.requantizedBytes,
+                largestRequantizedValues = it.largestRequantizedValues,
+                recurrent = it.recurrent,
+            )
+        } ?: RuntimeLimits.WeightProfile()
+        val plan = RuntimeLimits.planMemory(
+            residentWeightsBytes = modelBytes,
+            memory = memory,
+            expertBytes = layout?.expertBytes ?: 0L,
+            safeLevel = safeLevel,
+            weights = weights,
+            tuning = tuning,
+            performanceBlocked = loadKey.performanceBlocked,
+        )
         if (!plan.fits) {
             val message = "${model.name} precisa de cerca de ${gigabytes(plan.minimumBytes)} de RAM, mas a IA pode usar " +
                 "${gigabytes(plan.budgetBytes)} agora (a RAM livre menos 0,5 GB para o Android e o app). Carregar " +
@@ -459,12 +764,14 @@ class LlamaCppRuntime(
             throw IllegalStateException(message)
         }
         val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
+        val repackRelease = plan.repackRelease && !lowMemory
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // Read by the patched native loader: file-backed weights for models that do not fit
         // comfortably in RAM, experts read from storage for a mixture of experts that does not fit
         // at all, the memory that sizes the (Q4_0) context, the presence penalty the model card
-        // recommends (the other sampling settings come from the GGUF itself) and the efficiency
-        // cores, which the CPU threads only fill in with.
+        // recommends (the other sampling settings come from the GGUF itself), the efficiency
+        // cores, which the CPU threads only fill in with, the micro-batch for reading prompts and
+        // whether each repacked tensor's pages are dropped from the file as soon as it is copied.
         val efficiency = efficiencyCpus
         runCatching {
             if (efficiency == null) Os.unsetenv(EFFICIENCY_CPUS_ENV)
@@ -474,6 +781,8 @@ class LlamaCppRuntime(
             Os.setenv(CONTEXT_TOKENS_ENV, RuntimeLimits.MAX_CONTEXT_TOKENS.toString(), true)
             Os.setenv(KV_BUDGET_ENV, kvBudgetMb.toString(), true)
             Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
+            Os.setenv(UBATCH_ENV, plan.ubatch.toString(), true)
+            Os.setenv(REPACK_RELEASE_ENV, if (repackRelease) "1" else "0", true)
             Os.unsetenv(ACTIVE_CONTEXT_ENV)
             Os.unsetenv(ACTIVE_THREADS_ENV)
         }
@@ -483,44 +792,87 @@ class LlamaCppRuntime(
                 (if (onDemandBytes > 0) " (+${onDemandBytes / MB} MB lidos do arquivo sob demanda)" else "") +
                 "; RAM livre ${memory.availableBytes / MB} MB de ${memory.totalBytes / MB} MB; " +
                 "limite da IA ${plan.budgetBytes / MB} MB; memória para contexto: $kvBudgetMb MB" +
+                (if (plan.longContextBytes > 0) " (+${plan.longContextBytes / MB} MB do contexto longo)" else "") +
                 (if (plan.streamsExperts) {
                     "; especialistas MoE (${(layout?.expertBytes ?: 0L) / MB} MB) lidos do armazenamento conforme o uso" +
                         if (lowMemory) "" else ", o restante dos pesos mantido na RAM"
                 } else {
                     ""
                 }) +
-                (if (lowMemory) " em modo de pouca memória" else "") +
+                (if (lowMemory) " em modo de pouca memória" else "; cópia otimizada dos pesos na RAM") +
+                (if (repackRelease) " (páginas do arquivo liberadas ao copiar)" else "") +
+                (if (plan.ubatch != RuntimeLimits.DEFAULT_UBATCH) "; micro-lote de ${plan.ubatch} tokens" else "") +
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
         onStage(GenerationStage(GenerationStage.Kind.LOADING_MODEL, model.name, total = (fileBytes / MB).toInt()))
+        loading = true
         try {
             engine.loadModel(model.filePath)
-            loadedContextTokens = runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
-                ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
+            loadedContextTokens = activeContextTokens()
             val threads = runCatching { Os.getenv(ACTIVE_THREADS_ENV) }.getOrNull()
+            val writingThreads = runCatching { Os.getenv(ACTIVE_GENERATION_THREADS_ENV) }.getOrNull()
             logger?.info(
                 "MODEL_LOAD",
                 buildString {
                     append("Contexto alocado: $loadedContextTokens tokens")
                     if (threads != null) append("; $threads threads da CPU")
+                    if (writingThreads != null && writingThreads != threads) append(" ($writingThreads ao escrever)")
                     if (!efficiency.isNullOrEmpty()) append("; núcleos de eficiência: ${CpuCores.encode(efficiency)}")
                 },
             )
             loadedModelId = model.id
+            loadedKey = loadKey
+            loadedLayout = LoadedLayout(model.filePath, fileBytes, onDemandBytes, lowMemory, plan.streamsExperts)
+            contextReleased = false
             session = null
             primed = null
+            turnMark = null
             _state.value = RuntimeState(RuntimeStatus.READY, model.id, model.name)
             logger?.info("MODEL_LOAD", "Modelo READY: ${model.apiModelId}")
         } catch (t: Throwable) {
             loadedModelId = null
+            loadedKey = null
+            loadedLayout = null
             session = null
             primed = null
+            turnMark = null
             val message = humanize(t)
             _state.value = RuntimeState(RuntimeStatus.ERROR, model.id, model.name, message)
             logger?.error("MODEL_LOAD", "Falha ao carregar ${model.name}: $message", t)
             throw IllegalStateException(message, t)
+        } finally {
+            loading = false
         }
     }
+
+    /**
+     * Creates the context of the loaded model again after [releaseIfIdle] freed it; false (and the
+     * model freed) when it cannot, so the model is loaded again.
+     */
+    private suspend fun restoreContext(model: AiModelEntity, onStage: (GenerationStage) -> Unit): Boolean {
+        onStage(GenerationStage(GenerationStage.Kind.LOADING_MODEL, model.name))
+        _state.value = RuntimeState(RuntimeStatus.LOADING, model.id, model.name)
+        loading = true
+        return try {
+            engine.restoreContext()
+            contextReleased = false
+            loadedContextTokens = activeContextTokens()
+            logger?.info("MODEL_LOAD", "Contexto da IA criado de novo ($loadedContextTokens tokens), sem carregar o modelo")
+            true
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (t: Throwable) {
+            logger?.error("MODEL_LOAD", "Falha ao criar de novo o contexto; carregando o modelo", t)
+            unloadLocked()
+            false
+        } finally {
+            loading = false
+        }
+    }
+
+    private fun activeContextTokens(): Int =
+        runCatching { Os.getenv(ACTIVE_CONTEXT_ENV)?.toIntOrNull() }.getOrNull()
+            ?.takeIf { it > 0 } ?: RuntimeLimits.MIN_CONTEXT_TOKENS
 
     private fun gigabytes(bytes: Long): String =
         String.format(java.util.Locale.forLanguageTag("pt-BR"), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
@@ -540,10 +892,14 @@ class LlamaCppRuntime(
 
     private fun unloadLocked(finalState: RuntimeState = RuntimeState()) {
         val current = engine.state.value
+        session = null
+        primed = null
+        turnMark = null
         if (current is InferenceEngine.State.Uninitialized || current is InferenceEngine.State.Initializing) {
             loadedModelId = null
-            session = null
-            primed = null
+            loadedKey = null
+            loadedLayout = null
+            contextReleased = false
             _state.value = finalState
             return
         }
@@ -557,8 +913,9 @@ class LlamaCppRuntime(
         runCatching { engine.cleanUp() }
             .onFailure { logger?.error("MODEL_UNLOAD", "Falha ao liberar contexto", it) }
         loadedModelId = null
-        session = null
-        primed = null
+        loadedKey = null
+        loadedLayout = null
+        contextReleased = false
         _state.value = finalState
     }
 
@@ -608,12 +965,31 @@ class LlamaCppRuntime(
         private const val SESSION_TOKENS_ENV = "IAOFFLINE_SESSION_TOKENS"
         private const val ACTIVE_CONTEXT_ENV = "IAOFFLINE_ACTIVE_CONTEXT_TOKENS"
         private const val ACTIVE_THREADS_ENV = "IAOFFLINE_ACTIVE_THREADS"
+        private const val ACTIVE_GENERATION_THREADS_ENV = "IAOFFLINE_ACTIVE_GENERATION_THREADS"
         private const val PROMPT_CACHE_ENV = "IAOFFLINE_PROMPT_CACHE"
         private const val SYSTEM_PROMPT_TAIL_ENV = "IAOFFLINE_SYSTEM_PROMPT_TAIL"
         private const val EFFICIENCY_CPUS_ENV = "IAOFFLINE_EFFICIENCY_CPUS"
+        private const val UBATCH_ENV = "IAOFFLINE_UBATCH"
+        private const val REPACK_RELEASE_ENV = "IAOFFLINE_REPACK_RELEASE"
+        private const val TURN_MARK_ENV = "IAOFFLINE_TURN_MARK"
+        private const val CHECKPOINT_ENV = "IAOFFLINE_CHECKPOINT_MAX_MB"
+        private const val KLEIDIAI_SME_ENV = "GGML_KLEIDIAI_SME"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
-        /** A tool round starts right after the answer that asked for it; then there is nothing to save. */
-        private const val SAVE_DELAY_MS = 1_500L
+        /**
+         * Writing the context (tens to hundreds of MB) holds the model, so it waits until the user
+         * is not about to send the next message; leaving the app saves it at once.
+         */
+        private const val SAVE_DELAY_MS = 20_000L
+        /** About 4,000 tokens: several turns per native call, which still stops between groups. */
+        private const val HISTORY_GROUP_CHARS = 12_000
+        private const val REWIND_HEADROOM_TOKENS = 256
+        /** Free RAM left after reading the weights again into the page cache. */
+        private const val WARM_HEADROOM_BYTES = 1024L * 1024 * 1024
+        /** Recurrent state copies kept for "Refazer": up to 64 MB below 10 GB of RAM, 160 MB above. */
+        private const val SMALL_CHECKPOINT_MB = 64
+        private const val LARGE_CHECKPOINT_MB = 160
+        private const val LARGE_CHECKPOINT_MIN_GB = 10.0
+        private const val MAX_READY_CONVERSATIONS = 10
         private const val MB = 1024L * 1024
     }
 }

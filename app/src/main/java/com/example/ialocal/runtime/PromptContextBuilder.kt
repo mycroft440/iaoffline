@@ -57,7 +57,11 @@ class PromptContextBuilder {
         val usableInputTokens = (contextTokens - reservedOutput - TOKEN_HEADROOM).coerceAtLeast(1024)
         val charBudget = usableInputTokens * APPROX_CHARS_PER_TOKEN
         val system = baseSystemPrompt.trim().ifBlank { DEFAULT_FALLBACK_SYSTEM }
-        val historyBudget = (charBudget - system.length - latestUser.length - TURN_OVERHEAD_CHARS).coerceAtLeast(0)
+        val fullBudget = (charBudget - system.length - latestUser.length - TURN_OVERHEAD_CHARS).coerceAtLeast(0)
+        // When the conversation no longer fits, only part of the room is filled, so the next
+        // messages continue this context instead of reading the conversation again each time.
+        val wholeCost = conversation.sumOf { it.content.length + TURN_OVERHEAD_CHARS }
+        val historyBudget = if (wholeCost <= fullBudget) fullBudget else (fullBudget * REBUILD_FILL_FRACTION).toInt()
 
         val selected = ArrayDeque<AiChatMessage>()
         var used = 0
@@ -86,6 +90,8 @@ class PromptContextBuilder {
         private const val TOKEN_HEADROOM = 512
         /** Role markers and separators that the template adds around each turn. */
         private const val TURN_OVERHEAD_CHARS = 32
+        /** Share of the room for history filled when the whole conversation does not fit. */
+        private const val REBUILD_FILL_FRACTION = 0.65
         private const val DEFAULT_FALLBACK_SYSTEM = "Você é um assistente útil."
 
         /**

@@ -45,6 +45,30 @@ class AgentStreamTest {
     }
 
     @Test
+    fun codeAndInlineCodeShowWhileTheyAreWritten() = runBlocking {
+        val emitted = run(false, listOf(listOf("```", "python\n", "print(1)\n", "```")))
+        assertEquals(listOf("```python\n", "print(1)\n", "```"), emitted)
+        assertEquals(listOf("`ls`", " lista arquivos."), run(false, listOf(listOf("`ls`", " lista arquivos."))))
+    }
+
+    @Test
+    fun onlyAnswersThatCanStillBeAToolCallAreHeld() {
+        assertEquals(null, mayBeToolCall("  "))
+        assertEquals(null, mayBeToolCall("{ \"to"))
+        assertEquals(true, mayBeToolCall("{ \"tool\" :"))
+        assertEquals(true, mayBeToolCall("{\"arguments\": {}, "))
+        assertEquals(false, mayBeToolCall("{\"a\": 1}"))
+        assertEquals(null, mayBeToolCall("``"))
+        assertEquals(false, mayBeToolCall("`ls`"))
+        assertEquals(null, mayBeToolCall("```js"))
+        assertEquals(false, mayBeToolCall("```jsx"))
+        assertEquals(null, mayBeToolCall("```json\n"))
+        assertEquals(true, mayBeToolCall("```json\n{\"tool\""))
+        assertEquals(false, mayBeToolCall("```\nprint(1)"))
+        assertEquals(false, mayBeToolCall("Claro! Aqui está"))
+    }
+
+    @Test
     fun blankReasoningFromNoThinkIsDropped() = runBlocking {
         assertEquals("Direto.", run(false, listOf(listOf("<think>\n\n</think>\n\nDireto."))).joinToString(""))
     }
@@ -58,9 +82,14 @@ class AgentStreamTest {
     @Test
     fun hiddenTokensAreCountedOnlyWhileNothingIsVisible() = runBlocking {
         val hidden = mutableListOf<Int>()
-        // A code fence is held back as a possible tool call: every token of it is hidden.
+        // A json fence is held back as a possible tool call: every token of it is hidden.
+        run(false, listOf(listOf("```", "json\n", "{\"tool\": ", "\"x\"}\n", "```")), onHiddenTokens = { hidden += it })
+        assertEquals(listOf(1, 2, 3, 4, 5), hidden)
+
+        hidden.clear()
+        // A fence of another language shows as soon as its language is known.
         run(false, listOf(listOf("```", "kotlin\n", "val a = 1\n", "```")), onHiddenTokens = { hidden += it })
-        assertEquals(listOf(1, 2, 3, 4), hidden)
+        assertEquals(listOf(1), hidden)
 
         hidden.clear()
         // Plain text shows from its first word, so only the token that showed it is counted.
