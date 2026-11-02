@@ -371,4 +371,13 @@ internal fun providerUiMeta(provider: ModelProvider): ProviderUiMeta = when (pro
         tagline = "Modelos da Sber, fortes em russo e inglês",
         accent = Color(0xFF22C55E),
     )
+
+    ModelProvider.DEEPGROVE -> ProviderUiMeta(
+        selectorName = "Maple",
+        selectorSubtitle = "DeepGrove",
+        sectionName = "DeepGrove (Maple)",
+        badge = "Ternário",
+        tagline = "MoE com pesos ternários: muitos parâmetros num arquivo pequeno",
+        accent = Color(0xFF4ADE80),
+    )
 }

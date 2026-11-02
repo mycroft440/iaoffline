@@ -23,6 +23,7 @@ enum class ModelProvider(val sectionLabel: String) {
     POOLSIDE("Modelos da Poolside / Laguna"),
     SBER("Modelos da Sber / GigaChat"),
     ARCEE("Modelos da Arcee AI / Trinity"),
+    DEEPGROVE("Modelos da DeepGrove / Maple"),
 }
 
 /** A curated GGUF that can be downloaded directly by the app. */
@@ -1276,6 +1277,24 @@ object ModelCatalog {
             totalParametersBillions = 10.2,
             activeParametersBillions = 3.6,
             description = "gpt-oss modificado por terceiros, com 14 especialistas remanescentes e foco experimental em ciências. Não é uma versão oficial da OpenAI e pode ter menor precisão.",
+        ),
+        // Maple (DeepGrove): ternary experts (TQ2_0) and a Q4_K output head, so its 20B weights take
+        // the file size of an 8B model in 4 bits. The pinned llama.cpp has the "maple" architecture
+        // and CPU kernels for TQ2_0 on ARM.
+        CatalogModel(
+            id = "maple-preview-20b-a1b-tq2-0",
+            displayName = "Maple Preview 20B-A1B",
+            provider = ModelProvider.DEEPGROVE,
+            repository = "deepgrove/maple-preview-GGUF",
+            fileName = "maple-preview-TQ2_0-head-Q4_K.gguf",
+            quantization = "TQ2_0",
+            approximateSizeBytes = 5_901_782_560L,
+            sha256 = "221f792cc9760d27a34f449b4229e258fa968a63bd4213993e45d9c0bb477a9e",
+            recommendedRamBytes = 10_000_000_000L,
+            totalParametersBillions = 20.2,
+            activeParametersBillions = 1.0,
+            description = "MoE da DeepGrove com 20B no total e cerca de 1B ativo por palavra (8 de 256 especialistas), com pesos ternários (-1, 0, +1): o arquivo tem 5,9 GB, o tamanho de um modelo de 8B em 4 bits, e cabe na RAM de celulares de 12 GB. Prévia focada em raciocínio, treinada principalmente em inglês.",
+            strengths = "Segundo a DeepGrove, num processador M5 Pro (só a CPU) escreve 253 tokens por segundo e lê 610 por segundo; num celular os números são bem menores, mas a conta por palavra é a de um modelo de 1B.",
         ),
     )
 

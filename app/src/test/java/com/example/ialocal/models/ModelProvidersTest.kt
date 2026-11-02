@@ -25,6 +25,8 @@ class ModelProvidersTest {
         assertEquals(ModelProvider.COHERE, providerFromName("North-Mini-Code-1.0 cohere2moe"))
         assertEquals(ModelProvider.POOLSIDE, providerFromName("Laguna-XS-2.1 laguna"))
         assertEquals(ModelProvider.ARCEE, providerFromName("Trinity-Nano-Preview afmoe"))
+        assertEquals(ModelProvider.DEEPGROVE, providerFromName("maple-preview-TQ2_0-head-Q4_K maple"))
+        assertNull(providerFromName("MapleTree-1.0-8B"))
         // Words that merely contain these names stay unknown.
         assertNull(providerFromName("darling-7b"))
     }

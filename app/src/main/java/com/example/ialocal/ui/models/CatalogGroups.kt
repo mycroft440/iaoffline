@@ -45,6 +45,7 @@ internal val CATALOG_PROVIDER_ORDER = listOf(
     ModelProvider.POOLSIDE,
     ModelProvider.SBER,
     ModelProvider.ARCEE,
+    ModelProvider.DEEPGROVE,
 )
 
 /** Minimum native overhead: 256 MiB of KV cache + 512 MiB for compute and runtime. */

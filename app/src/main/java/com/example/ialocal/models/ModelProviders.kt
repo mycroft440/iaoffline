@@ -25,6 +25,8 @@ fun providerFromName(name: String): ModelProvider? {
         "laguna" in text || "poolside" in text -> ModelProvider.POOLSIDE
         "gigachat" in text -> ModelProvider.SBER
         "trinity" in text || "arcee" in text || "afmoe" in text -> ModelProvider.ARCEE
+        // Its GGUF architecture is "maple"; names such as "MapleTree" are other models.
+        Regex("(^|[^a-z])maple([^a-z]|$)").containsMatchIn(text) || "deepgrove" in text -> ModelProvider.DEEPGROVE
         "deepseek" in text -> ModelProvider.DEEPSEEK
         // Bonsai is built on Qwen, so it must be recognized before the Qwen check.
         "bonsai" in text || "prism" in text -> ModelProvider.PRISMML

@@ -51,6 +51,7 @@ fun ModelProvider.brandName(): String = when (this) {
     ModelProvider.POOLSIDE -> "Poolside"
     ModelProvider.SBER -> "Sber / GigaChat"
     ModelProvider.ARCEE -> "Arcee AI / Trinity"
+    ModelProvider.DEEPGROVE -> "DeepGrove / Maple"
 }
 
 /** Every company has its own logo, shown in the catalog and next to its model's replies in the chat. */
@@ -77,6 +78,7 @@ fun ModelProvider.logoRes(): Int = when (this) {
     ModelProvider.POOLSIDE -> R.drawable.provider_poolside
     ModelProvider.SBER -> R.drawable.provider_sber
     ModelProvider.ARCEE -> R.drawable.provider_arcee
+    ModelProvider.DEEPGROVE -> R.drawable.provider_deepgrove
 }
 
 /** The logos drawn as pictures (WebP), decoded once; null for the vector logos. */

@@ -136,6 +136,18 @@ class ModelCatalogTest {
     }
 
     @Test
+    fun mapleIsALargeMoeInAnEightBillionSizedFile() {
+        val maple = ModelCatalog.requireById("maple-preview-20b-a1b-tq2-0")
+        assertEquals(ModelProvider.DEEPGROVE, maple.provider)
+        assertTrue(maple.isMoe)
+        // 20B in total: listed with the large MoE models, which load whatever the phone's RAM.
+        assertTrue(maple.isExperimental)
+        // Ternary weights: about the file of an 8B model in 4 bits.
+        assertTrue(maple.approximateSizeBytes < 6_000_000_000L)
+        assertTrue(maple.sha256.matches(Regex("^[0-9a-f]{64}$")))
+    }
+
+    @Test
     fun dolphinTrinityNanoIsAPinnedSmallMoe() {
         val model = ModelCatalog.requireById("dolphin-x1-trinity-nano-q4-k-m")
         assertTrue(model.isMoe)
