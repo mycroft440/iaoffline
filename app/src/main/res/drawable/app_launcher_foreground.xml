@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- App logo: a chat bubble with the AI spark, and a green dot for the AI running on the phone. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M45,29 H63 A15,15 0 0 1 78,44 V57 A15,15 0 0 1 63,72 H52 L41.5,80.2 C40.2,81.2 38.4,80.1 38.7,78.5 L39.9,71.3 A15,15 0 0 1 30,57 V44 A15,15 0 0 1 45,29 Z" />
+    <path android:pathData="M54,38 C55.1,46.2 56.8,48.4 65,50.5 C56.8,52.6 55.1,54.8 54,63 C52.9,54.8 51.2,52.6 43,50.5 C51.2,48.4 52.9,46.2 54,38 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="43"
+                android:startY="38"
+                android:endX="65"
+                android:endY="63">
+                <item android:offset="0" android:color="#FF4F46E5" />
+                <item android:offset="1" android:color="#FFA855F7" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#FFA855F7"
+        android:pathData="M66.5,35.5 C66.9,38.4 67.6,39.1 70.5,39.5 C67.6,39.9 66.9,40.6 66.5,43.5 C66.1,40.6 65.4,39.9 62.5,39.5 C65.4,39.1 66.1,38.4 66.5,35.5 Z" />
+    <path
+        android:fillColor="#FF10B981"
+        android:pathData="M38.9,40.5 A2.6,2.6 0 1 0 44.1,40.5 A2.6,2.6 0 1 0 38.9,40.5 Z" />
+</vector>

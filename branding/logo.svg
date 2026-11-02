@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#4338CA"/><stop offset="0.55" stop-color="#6D28D9"/><stop offset="1" stop-color="#A855F7"/></linearGradient>
+<linearGradient id="sp" x1="43" y1="38" x2="65" y2="63" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#4F46E5"/><stop offset="1" stop-color="#A855F7"/></linearGradient>
+</defs>
+<g >
+<rect width="108" height="108" fill="url(#bg)"/>
+<path d="M45,29 H63 A15,15 0 0 1 78,44 V57 A15,15 0 0 1 63,72 H52 L41.5,80.2 C40.2,81.2 38.4,80.1 38.7,78.5 L39.9,71.3 A15,15 0 0 1 30,57 V44 A15,15 0 0 1 45,29 Z" fill="#FFFFFF"/>
+<path d="M54,38 C55.1,46.2 56.8,48.4 65,50.5 C56.8,52.6 55.1,54.8 54,63 C52.9,54.8 51.2,52.6 43,50.5 C51.2,48.4 52.9,46.2 54,38 Z" fill="url(#sp)"/>
+<path d="M66.5,35.5 C66.9,38.4 67.6,39.1 70.5,39.5 C67.6,39.9 66.9,40.6 66.5,43.5 C66.1,40.6 65.4,39.9 62.5,39.5 C65.4,39.1 66.1,38.4 66.5,35.5 Z" fill="#A855F7"/>
+<circle cx="41.5" cy="40.5" r="2.6" fill="#10B981"/>
+</g></svg>
