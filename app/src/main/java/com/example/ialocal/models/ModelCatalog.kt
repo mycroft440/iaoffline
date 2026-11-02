@@ -1091,6 +1091,22 @@ object ModelCatalog {
             description = "MoE experimental da Arcee AI com 6B totais e 1B ativo. Prévia ainda sujeita a instabilidade; requer suporte à arquitetura AFMoE no llama.cpp do app.",
         ),
         CatalogModel(
+            // AFMoE (Trinity Nano), which the pinned llama.cpp runs since b7061. The author's own GGUF
+            // repository has no Q4_K_M or Q4_0; mradermacher's static Q4_K_M is the closest in size.
+            id = "dolphin-x1-trinity-nano-q4-k-m",
+            displayName = "Dolphin X1 Trinity Nano 6B-A1B (comunidade)",
+            provider = ModelProvider.ARCEE,
+            repository = "mradermacher/Dolphin-X1-Trinity-Nano-GGUF",
+            fileName = "Dolphin-X1-Trinity-Nano.Q4_K_M.gguf",
+            quantization = "Q4_K_M",
+            approximateSizeBytes = 3_758_134_176L,
+            sha256 = "3f7437cd201d8134345bca849e9c7e9209b36bfd91729045c07f1bccc848064a",
+            recommendedRamBytes = 7_000_000_000L,
+            totalParametersBillions = 6.0,
+            activeParametersBillions = 1.0,
+            description = "Ajuste da comunidade (Dolphin, da dphn) sobre o Trinity Nano da Arcee AI: 6B no total e cerca de 1B ativo por palavra, muito rápido no celular. Treinado para seguir o prompt de sistema sem as recusas do modelo original (sem censura). Herda os 11 idiomas da família Trinity Nano, entre eles o português, e também a instabilidade da prévia.",
+        ),
+        CatalogModel(
             id = "phi-mini-moe-7.6b-q4-k-m",
             displayName = "Phi-mini MoE 7.6B-A2.4B",
             provider = ModelProvider.MICROSOFT,
