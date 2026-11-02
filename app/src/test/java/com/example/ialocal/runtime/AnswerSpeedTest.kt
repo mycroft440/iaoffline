@@ -11,6 +11,11 @@ class AnswerSpeedTest {
         assertEquals(AnswerSpeed(25, 3907, 40, 15541), AnswerSpeed.parse("25 3907 40 15541"))
         assertEquals(AnswerSpeed(25, 3907, 40, 15541), AnswerSpeed.parse("25 3907 40 15541 0 0"))
         assertEquals(AnswerSpeed(25, 3907, 40, 15541, 1920, 1402), AnswerSpeed.parse("25 3907 40 15541 1920 1402"))
+        assertEquals(
+            AnswerSpeed(25, 3907, 40, 15541, 1920, 1402, expertResidentKb = 307200, expertReadKb = 102400),
+            AnswerSpeed.parse("25 3907 40 15541 1920 1402 307200 102400"),
+        )
+        assertNull(AnswerSpeed.parse("25 3907 40 15541 1920 1402 307200"))
         assertNull(AnswerSpeed.parse(null))
         assertNull(AnswerSpeed.parse("25 3907 40"))
         assertNull(AnswerSpeed.parse("25 3907 40 15541 1920"))
@@ -42,6 +47,19 @@ class AnswerSpeedTest {
         assertEquals(
             "mensagem: 25 tokens em 3,9 s (6,40 tokens/s); resposta: 40 tokens em 15,5 s (2,57 tokens/s); " +
                 "lidos do armazenamento: 4792 MB (119,8 MB por token); 1748 esperas por leitura do armazenamento",
+            line,
+        )
+    }
+
+    @Test
+    fun describesHowMuchOfTheExpertsWasAlreadyInMemory() {
+        val speed = AnswerSpeed(10, 1000, 40, 20000, expertResidentKb = 307200, expertReadKb = 102400)
+
+        val line = speed.describe(ProcessIo(null, null), ProcessIo(null, null))
+
+        assertEquals(
+            "mensagem: 10 tokens em 1,0 s (10,00 tokens/s); resposta: 40 tokens em 20,0 s (2,00 tokens/s); " +
+                "especialistas já na memória: 75% (100 MB lidos)",
             line,
         )
     }

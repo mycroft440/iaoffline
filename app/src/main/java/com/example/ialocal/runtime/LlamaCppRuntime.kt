@@ -801,6 +801,17 @@ class LlamaCppRuntime(
             Os.setenv(REPACK_RELEASE_ENV, if (repackRelease) "1" else "0", true)
             if (fastExperts != null) Os.setenv(MOE_EXPERTS_ENV, "$expertsKey=$fastExperts", true)
             else Os.unsetenv(MOE_EXPERTS_ENV)
+            // Experts read from storage: where they are counted and how much of the most used to read
+            // into memory after the load (step 23 b of the native patch).
+            if (plan.streamsExperts) {
+                val stats = ExpertStats.file(appContext, model.id)
+                stats.parentFile?.mkdirs()
+                Os.setenv(EXPERT_STATS_ENV, stats.path, true)
+                Os.setenv(EXPERT_PRELOAD_ENV, (plan.expertPreloadBytes / MB).toString(), true)
+            } else {
+                Os.unsetenv(EXPERT_STATS_ENV)
+                Os.unsetenv(EXPERT_PRELOAD_ENV)
+            }
             Os.unsetenv(ACTIVE_CONTEXT_ENV)
             Os.unsetenv(ACTIVE_THREADS_ENV)
         }
@@ -821,6 +832,7 @@ class LlamaCppRuntime(
                 (if (repackRelease) " (páginas do arquivo liberadas ao copiar)" else "") +
                 (if (plan.ubatch != RuntimeLimits.DEFAULT_UBATCH) "; micro-lote de ${plan.ubatch} tokens" else "") +
                 (if (fastExperts != null) "; modo rápido de MoE: $fastExperts especialistas por token em vez de ${layout?.expertUsedCount}" else "") +
+                (if (plan.expertPreloadBytes > 0) "; até ${plan.expertPreloadBytes / MB} MB dos especialistas mais usados lidos após carregar" else "") +
                 if (safeLevel > 0) " (nível de economia $safeLevel após fechamento por falta de memória)" else "",
         )
         onStage(GenerationStage(GenerationStage.Kind.LOADING_MODEL, model.name, total = (fileBytes / MB).toInt()))
@@ -1001,6 +1013,8 @@ class LlamaCppRuntime(
         private const val CHECKPOINT_ENV = "IAOFFLINE_CHECKPOINT_MAX_MB"
         private const val MOE_EXPERTS_ENV = "IAOFFLINE_MOE_EXPERTS"
         private const val CPU_FEATURES_ENV = "IAOFFLINE_CPU_FEATURES"
+        private const val EXPERT_STATS_ENV = "IAOFFLINE_EXPERT_STATS"
+        private const val EXPERT_PRELOAD_ENV = "IAOFFLINE_EXPERT_PRELOAD_MB"
         private const val KLEIDIAI_SME_ENV = "GGML_KLEIDIAI_SME"
         private const val MAX_NATIVE_DETAIL_CHARS = 900
         /**

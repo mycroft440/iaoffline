@@ -39,6 +39,12 @@ data class AnswerSpeed(
      */
     val guessedExperts: Int = 0,
     val guessedRight: Int = 0,
+    /**
+     * KB of the experts the answer needed that were already in memory, and KB read from storage for
+     * them (step 23 of scripts/prepare_llama_android.sh). Zero for models whose experts are in RAM.
+     */
+    val expertResidentKb: Long = 0,
+    val expertReadKb: Long = 0,
 ) {
     /** One line for the log; [before] and [after] are the process counters around the answer. */
     fun describe(before: ProcessIo, after: ProcessIo): String = buildString {
@@ -55,16 +61,21 @@ data class AnswerSpeed(
         if (guessedExperts > 0) {
             append("; especialistas previstos uma camada antes: ${guessedRight * 100 / guessedExperts}% certos")
         }
+        val expertKb = expertResidentKb + expertReadKb
+        if (expertKb > 0) {
+            append("; especialistas já na memória: ${expertResidentKb * 100 / expertKb}% (${expertReadKb / 1024} MB lidos)")
+        }
     }
 
     companion object {
         /**
-         * "prompt_tokens prompt_ms answer_tokens answer_ms guessed_experts guessed_right", as the
-         * native side publishes it; the last two are missing in builds from before them.
+         * "prompt_tokens prompt_ms answer_tokens answer_ms guessed_experts guessed_right
+         * expert_resident_kb expert_read_kb", as the native side publishes it; builds from before
+         * them miss the last two or four.
          */
         fun parse(raw: String?): AnswerSpeed? {
             val fields = raw?.trim()?.split(' ')?.map { it.toLongOrNull() ?: return null } ?: return null
-            if (fields.size != 4 && fields.size != 6) return null
+            if (fields.size != 4 && fields.size != 6 && fields.size != 8) return null
             return AnswerSpeed(
                 promptTokens = fields[0].toInt(),
                 promptMillis = fields[1],
@@ -72,6 +83,8 @@ data class AnswerSpeed(
                 answerMillis = fields[3],
                 guessedExperts = fields.getOrNull(4)?.toInt() ?: 0,
                 guessedRight = fields.getOrNull(5)?.toInt() ?: 0,
+                expertResidentKb = fields.getOrNull(6) ?: 0L,
+                expertReadKb = fields.getOrNull(7) ?: 0L,
             )
         }
 

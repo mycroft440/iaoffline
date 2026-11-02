@@ -95,6 +95,11 @@ object RuntimeLimits {
     const val REQUANTIZED_EXPANSION = 1.22
     /** A mixture of experts read from storage needs page cache for the experts it uses. */
     const val EXPERT_CACHE_RESERVE_BYTES = 1024L * 1024 * 1024
+    /**
+     * Most of a mixture of experts read from storage that is read into the page cache when it loads:
+     * the experts it used most before (step 23 b of the native patch).
+     */
+    const val MAX_EXPERT_PRELOAD_BYTES = 1024L * 1024 * 1024
 
     /**
      * RAM the AI may use: what is free, or what Android frees by closing background apps,
@@ -146,6 +151,13 @@ object RuntimeLimits {
         val repackRelease: Boolean = false,
         /** Part of [kvBudgetBytes] that "Contexto longo" added. */
         val longContextBytes: Long = 0L,
+        /**
+         * Experts used most in earlier loads read into the page cache after the load
+         * (IAOFFLINE_EXPERT_PRELOAD_MB): half of the RAM left to the experts, at most
+         * [MAX_EXPERT_PRELOAD_BYTES]. Only when the experts are read from storage. The kernel can drop
+         * those pages again, so they do not make the AI process a target for Android.
+         */
+        val expertPreloadBytes: Long = 0L,
     )
 
     /**
@@ -196,18 +208,20 @@ object RuntimeLimits {
                 PerformanceLevel.BALANCED -> repackFitsTwice
                 PerformanceLevel.AUTO, PerformanceLevel.MAX -> repackFitsTwice || repackFitsOnce
             }
+            val kvBudget = safeKvBudgetBytes(kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true), safeLevel)
+            // What is left of the budget once the weights read for every token, the context and the
+            // working memory are in RAM: the page cache that keeps experts.
+            val expertCache = (budget - fixedBytes - kvBudget - working).coerceAtLeast(0L)
             return MemoryPlan(
                 budgetBytes = budget,
                 lowMemory = safeLevel > 0 || !repack,
-                kvBudgetBytes = safeKvBudgetBytes(
-                    kvCacheBudgetBytes(fixedBytes, memory.totalBytes, experimental = true),
-                    safeLevel,
-                ),
+                kvBudgetBytes = kvBudget,
                 fits = fixedMinimum <= budget,
                 minimumBytes = fixedMinimum,
                 streamsExperts = true,
                 ubatch = ubatch,
                 repackRelease = safeLevel == 0 && repack && !repackFitsTwice,
+                expertPreloadBytes = if (safeLevel > 0) 0L else (expertCache / 2).coerceAtMost(MAX_EXPERT_PRELOAD_BYTES),
             )
         }
         // While the weights are repacked, the copy and the mapped file are in RAM together.

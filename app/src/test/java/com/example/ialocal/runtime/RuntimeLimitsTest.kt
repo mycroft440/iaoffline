@@ -324,6 +324,23 @@ class RuntimeLimitsTest {
     }
 
     @Test
+    fun expertsUsedMostAreReadAheadOnlyWhenTheyComeFromStorage() {
+        // Gemma 4 26B-A4B (12.7 GB, 10.3 GB of experts) with 5 GB free on an 11 GB phone.
+        val streamed = RuntimeLimits.planMemory(12_710_000_000L, memory(11.0, 5.0), expertBytes = 10_310_000_000L, safeLevel = 0)
+        assertTrue(streamed.streamsExperts)
+        val left = streamed.budgetBytes - (12_710_000_000L - 10_310_000_000L) - streamed.kvBudgetBytes -
+            RuntimeLimits.WORKING_MEMORY_BYTES
+        assertEquals((left / 2).coerceAtMost(RuntimeLimits.MAX_EXPERT_PRELOAD_BYTES), streamed.expertPreloadBytes)
+        assertTrue(streamed.expertPreloadBytes in 1..RuntimeLimits.MAX_EXPERT_PRELOAD_BYTES)
+        // Not after the model made the AI process close, nor for a model in RAM.
+        val crashed = RuntimeLimits.planMemory(12_710_000_000L, memory(11.0, 5.0), expertBytes = 10_310_000_000L, safeLevel = 1)
+        assertEquals(0L, crashed.expertPreloadBytes)
+        val inRam = RuntimeLimits.planMemory(4_000_000_000L, memory(11.0, 8.0), expertBytes = 3_000_000_000L, safeLevel = 0)
+        assertFalse(inRam.streamsExperts)
+        assertEquals(0L, inRam.expertPreloadBytes)
+    }
+
+    @Test
     fun fastMoeTrimsAQuarterOfTheExperts() {
         // Gemma 4 26B-A4B and the Qwen 30B-A3B: 8 of 128 → 6; gpt-oss and LFM2: 4 of 32 → 3.
         assertEquals(6, RuntimeLimits.fastMoeExperts(8, 128, TuningSwitch.ON, streamsExperts = false))

@@ -5,6 +5,7 @@ import android.net.Uri
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.diagnostics.AiEventLogger
+import com.example.ialocal.runtime.ExpertStats
 import com.example.ialocal.runtime.ModelCrashGuard
 import com.example.ialocal.runtime.ModelRuntime
 import com.example.ialocal.runtime.PromptCache
@@ -486,6 +487,7 @@ class ModelManager(
         repository.deleteModel(modelId)
         crashGuard?.forget(modelId)
         PromptCache.forget(appContext, modelId)
+        ExpertStats.forget(appContext, modelId)
         SessionStore.of(appContext).forget(modelId)
     }
 

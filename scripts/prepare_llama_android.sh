@@ -2845,6 +2845,616 @@ path.write_text(text)
 print("Applied IA Offline MoE expert-count and CPU-features patch")
 PY
 
+# 23. Mixtures of experts read from storage, faster and without touching their quality:
+#     a) The experts the router picks are read with pread() from a file descriptor of the model, by
+#        4 I/O threads, instead of MADV_WILLNEED in 128 KB pieces. MADV_WILLNEED (like readahead and
+#        posix_fadvise) stops at the readahead window, so a 2 MB expert took 16 small requests, and a
+#        phone's storage serves a limited number of requests per second; one pread of the whole slice
+#        becomes a few large requests issued together. mincore() says which pages are in memory
+#        already, so only the missing ones are read, and slices that follow each other in the file
+#        (neighbouring experts, most of a layer while a long message is read) are read together, up
+#        to 2 MB per call. io_uring would be faster but Android blocks it for apps; mlock is limited to
+#        a few KB; readahead_kb is not writable without root.
+#     b) The experts each layer picks while writing are counted per model and saved to a small file
+#        (IAOFFLINE_EXPERT_STATS, halved at each load so recent use counts most). When the model loads,
+#        the most used experts are read into the page cache in the background, up to the budget the
+#        app gives (IAOFFLINE_EXPERT_PRELOAD_MB), after any read the answer is waiting for.
+#     c) IAOFFLINE_PERF also reports how much of the experts' data was already in memory and how much
+#        was read from storage, for the SPEED log.
+python3 - "${AI_CHAT_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp Android binding native source shape (step 23): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+def replace_between(start: str, end: str, new: str) -> None:
+    global text
+    if text.count(start) != 1 or text.count(end) != 1:
+        raise SystemExit("Unexpected llama.cpp Android binding native source shape (step 23): markers not unique")
+    first = text.index(start)
+    last = text.index(end)
+    if last <= first:
+        raise SystemExit("Unexpected llama.cpp Android binding native source shape (step 23): markers out of order")
+    text = text[:first] + new + text[last:]
+
+replace_once(
+    '#include "llama.h"\n',
+    '#include "llama.h"\n#include "gguf.h"\n#include <cerrno>\n#include <unordered_map>\n',
+)
+
+# c) Bytes of the experts found in memory and read from storage during the answer.
+replace_once(
+    "static int g_perf_guessed_right = 0;\n",
+    "static int g_perf_guessed_right = 0;\n"
+    "static std::atomic<int64_t> g_perf_expert_resident_kb{0};\n"
+    "static std::atomic<int64_t> g_perf_expert_read_kb{0};\n",
+)
+replace_once(
+    "    char value[128];\n"
+    "    snprintf(value, sizeof(value), \"%d %lld %d %lld %d %d\", g_perf_prompt_tokens, (long long) (g_perf_prompt_us / 1000),\n"
+    "             g_perf_answer_tokens, (long long) (g_perf_answer_us / 1000), g_perf_guessed_experts, g_perf_guessed_right);\n",
+    "    char value[192];\n"
+    "    snprintf(value, sizeof(value), \"%d %lld %d %lld %d %d %lld %lld\", g_perf_prompt_tokens, (long long) (g_perf_prompt_us / 1000),\n"
+    "             g_perf_answer_tokens, (long long) (g_perf_answer_us / 1000), g_perf_guessed_experts, g_perf_guessed_right,\n"
+    "             (long long) g_perf_expert_resident_kb.load(), (long long) g_perf_expert_read_kb.load());\n",
+)
+replace_once(
+    "    g_perf_guessed_experts = 0;\n"
+    "    g_perf_guessed_right = 0;\n",
+    "    g_perf_guessed_experts = 0;\n"
+    "    g_perf_guessed_right = 0;\n"
+    "    g_perf_expert_resident_kb = 0;\n"
+    "    g_perf_expert_read_kb = 0;\n",
+)
+
+# Each queued slice carries its place in the model file (-1 when unknown: MADV_WILLNEED as before).
+replace_once(
+    "struct iaoffline_prefetch_range {\n"
+    "    const char *addr;\n"
+    "    size_t size;\n"
+    "};\n",
+    "struct iaoffline_prefetch_range {\n"
+    "    const char *addr;      // the slice in the mapped file; null for a hot expert read at load (b)\n"
+    "    size_t size;\n"
+    "    int64_t file_offset;   // where it starts in the model file, or -1\n"
+    "};\n",
+)
+replace_once(
+    "    std::vector<const ggml_tensor *> experts;  // its mapped expert weights\n",
+    "    std::vector<const ggml_tensor *> experts;  // its mapped expert weights\n"
+    "    std::vector<int64_t> expert_offsets;       // where each of them starts in the model file, or -1\n",
+)
+replace_once(
+    "    bool guessing = false;\n"
+    "    bool started = false;\n",
+    "    bool guessing = false;\n"
+    "    bool started = false;\n"
+    "    // Hot experts read in the background after a load (b), after any slice in the queue.\n"
+    "    std::deque<iaoffline_prefetch_range> preload;\n"
+    "    // Reads (and saves of the expert counts) in progress; closing the model file waits for them.\n"
+    "    int reading = 0;\n"
+    "    // Set when the expert counts have changed enough to be saved again.\n"
+    "    bool stats_due = false;\n",
+)
+replace_once(
+    "    // Mapped expert weights, in the order the graph uses them (gate/up, then down).\n"
+    "    std::vector<const ggml_tensor *> experts;\n",
+    "    // Mapped expert weights, in the order the graph uses them (gate/up, then down).\n"
+    "    std::vector<const ggml_tensor *> experts;\n"
+    "    // Where each of them starts in the model file, or -1.\n"
+    "    std::vector<int64_t> expert_offsets;\n",
+)
+
+replace_between(
+    "// Requests the queued slices from the kernel and makes the guesses, the slices first: the CPU is\n",
+    "// Forgets the weights of the model being unloaded; queued requests and guesses for it are dropped.\n",
+    r"""// Step 23: experts read with pread (a) and the experts each model uses most (b).
+constexpr int                             IAOFFLINE_IO_THREADS = 4;
+// Largest single pread; each I/O thread keeps a buffer of this size for what it reads.
+constexpr size_t                          IAOFFLINE_READ_MAX = 2 * 1024 * 1024;
+// Router outputs while writing between two saves of the expert counts.
+constexpr long                            IAOFFLINE_STATS_SAVE_EVERY = 4096;
+constexpr uint32_t                        IAOFFLINE_STATS_MAGIC = 0x53584149;  // "IAXS"
+constexpr uint32_t                        IAOFFLINE_STATS_VERSION = 1;
+
+// An expert tensor of the model file: where it starts and the bytes of each expert's slice.
+struct iaoffline_expert_tensor {
+    int layer = -1;
+    int64_t offset = 0;
+    int64_t expert_bytes = 0;
+    int64_t n_expert = 0;
+};
+
+// The model file of a mixture of experts read from storage. Set when the model loads and cleared when
+// it is unloaded, under the prefetch mutex and with no read in progress.
+static int g_iaoffline_fd = -1;
+static std::unordered_map<std::string, iaoffline_expert_tensor> g_iaoffline_expert_tensors;
+// Times each expert was picked while writing, [layer][expert], and where they are saved.
+static int g_iaoffline_stats_layers = 0;
+static int g_iaoffline_stats_experts = 0;
+static std::vector<uint32_t> g_iaoffline_stats;
+static std::string g_iaoffline_stats_path;
+static long g_iaoffline_stats_unsaved = 0;
+// Bytes of hot experts to read after a load, and whether they were queued for this load.
+static int64_t g_iaoffline_preload_bytes = 0;
+static bool g_iaoffline_preloaded = false;
+
+static bool iaoffline_is_expert_tensor(const char *name) {
+    static const char suffix[] = "exps.weight";
+    const size_t n = strlen(name);
+    const size_t m = sizeof(suffix) - 1;
+    return strncmp(name, "blk.", 4) == 0 && strstr(name, ".ffn_") != nullptr && n >= m && strcmp(name + n - m, suffix) == 0;
+}
+
+static void iaoffline_save_expert_stats(const std::string &file, int layers, int experts, const std::vector<uint32_t> &stats) {
+    if (file.empty() || stats.empty()) return;
+    const std::string partial = file + ".partial";
+    FILE *out = fopen(partial.c_str(), "wb");
+    if (out == nullptr) return;
+    const uint32_t header[4] = {IAOFFLINE_STATS_MAGIC, IAOFFLINE_STATS_VERSION, (uint32_t) layers, (uint32_t) experts};
+    const bool written = fwrite(header, sizeof(uint32_t), 4, out) == 4 &&
+                         fwrite(stats.data(), sizeof(uint32_t), stats.size(), out) == stats.size();
+    const bool closed = fclose(out) == 0;
+    if (written && closed) {
+        rename(partial.c_str(), file.c_str());
+    } else {
+        remove(partial.c_str());
+    }
+}
+
+// Saves the expert counts and closes the model file once no read is in progress.
+static void iaoffline_close_model_file() {
+    auto &prefetch = iaoffline_prefetch();
+    int fd = -1;
+    std::string file;
+    std::vector<uint32_t> stats;
+    int layers = 0;
+    int experts = 0;
+    long unsaved = 0;
+    {
+        std::unique_lock<std::mutex> lock(prefetch.mutex);
+        prefetch.cv.wait(lock, [&prefetch] { return prefetch.reading == 0; });
+        prefetch.preload.clear();
+        prefetch.stats_due = false;
+        fd = g_iaoffline_fd;
+        g_iaoffline_fd = -1;
+        g_iaoffline_expert_tensors.clear();
+        file.swap(g_iaoffline_stats_path);
+        stats.swap(g_iaoffline_stats);
+        layers = g_iaoffline_stats_layers;
+        experts = g_iaoffline_stats_experts;
+        unsaved = g_iaoffline_stats_unsaved;
+        g_iaoffline_stats_layers = 0;
+        g_iaoffline_stats_experts = 0;
+        g_iaoffline_stats_unsaved = 0;
+        g_iaoffline_preload_bytes = 0;
+        g_iaoffline_preloaded = false;
+    }
+    if (unsaved > 0) iaoffline_save_expert_stats(file, layers, experts, stats);
+    if (fd >= 0) close(fd);
+}
+
+// Opens the model file of a mixture of experts read from storage, finds its expert tensors in the GGUF
+// and reads the counts saved by earlier loads (IAOFFLINE_EXPERT_STATS), halved so recent use counts more.
+static void iaoffline_open_model_file(const char *file) {
+    iaoffline_close_model_file();
+    const int fd = open(file, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        LOGw("%s: cannot open the model file for reading experts (errno %d)", __func__, errno);
+        return;
+    }
+    std::unordered_map<std::string, iaoffline_expert_tensor> tensors;
+    int layers = 0;
+    int64_t experts = 0;
+    ggml_context *meta = nullptr;
+    gguf_init_params params = {/*no_alloc =*/ true, /*ctx =*/ &meta};
+    gguf_context *gguf = gguf_init_from_file(file, params);
+    if (gguf != nullptr) {
+        const int64_t data = (int64_t) gguf_get_data_offset(gguf);
+        for (int64_t id = 0; id < gguf_get_n_tensors(gguf); id++) {
+            const char *name = gguf_get_tensor_name(gguf, id);
+            if (!iaoffline_is_expert_tensor(name)) continue;
+            const ggml_tensor *tensor = meta != nullptr ? ggml_get_tensor(meta, name) : nullptr;
+            int layer = -1;
+            if (tensor == nullptr || tensor->ne[2] < 2 || sscanf(name, "blk.%d.", &layer) != 1 || layer < 0) continue;
+            iaoffline_expert_tensor info;
+            info.layer = layer;
+            info.offset = data + (int64_t) gguf_get_tensor_offset(gguf, id);
+            info.expert_bytes = (int64_t) tensor->nb[2];
+            info.n_expert = tensor->ne[2];
+            tensors[name] = info;
+            layers = std::max(layers, layer + 1);
+            experts = std::max(experts, tensor->ne[2]);
+        }
+        gguf_free(gguf);
+    }
+    if (meta != nullptr) ggml_free(meta);
+
+    const char *stats_env = getenv("IAOFFLINE_EXPERT_STATS");
+    const std::string stats_file = stats_env != nullptr ? stats_env : "";
+    std::vector<uint32_t> stats;
+    bool restored = false;
+    if (layers > 0 && experts > 0 && experts <= 4096) {
+        stats.assign((size_t) layers * (size_t) experts, 0);
+        FILE *in = stats_file.empty() ? nullptr : fopen(stats_file.c_str(), "rb");
+        if (in != nullptr) {
+            uint32_t header[4] = {0, 0, 0, 0};
+            if (fread(header, sizeof(uint32_t), 4, in) == 4 && header[0] == IAOFFLINE_STATS_MAGIC &&
+                header[1] == IAOFFLINE_STATS_VERSION && header[2] == (uint32_t) layers && header[3] == (uint32_t) experts) {
+                restored = fread(stats.data(), sizeof(uint32_t), stats.size(), in) == stats.size();
+            }
+            fclose(in);
+            if (restored) {
+                for (uint32_t &count : stats) count /= 2;
+            } else {
+                std::fill(stats.begin(), stats.end(), 0);
+            }
+        }
+    }
+    const long preload_mb = std::max(0L, atol(getenv("IAOFFLINE_EXPERT_PRELOAD_MB") != nullptr ? getenv("IAOFFLINE_EXPERT_PRELOAD_MB") : "0"));
+    const size_t n_tensors = tensors.size();
+    {
+        auto &prefetch = iaoffline_prefetch();
+        std::lock_guard<std::mutex> lock(prefetch.mutex);
+        g_iaoffline_fd = fd;
+        g_iaoffline_expert_tensors = std::move(tensors);
+        g_iaoffline_stats_layers = stats.empty() ? 0 : layers;
+        g_iaoffline_stats_experts = stats.empty() ? 0 : (int) experts;
+        g_iaoffline_stats = std::move(stats);
+        g_iaoffline_stats_path = stats_file;
+        g_iaoffline_stats_unsaved = 0;
+        g_iaoffline_preload_bytes = (int64_t) preload_mb * 1024 * 1024;
+        g_iaoffline_preloaded = false;
+    }
+    LOGi("%s: %zu expert tensors read with pread from the model file; expert counts %s", __func__, n_tensors,
+         restored ? "restored" : "new");
+}
+
+// The model file offset of a mapped expert tensor, or -1. Only the inference thread calls it.
+static int64_t iaoffline_file_offset_of(const ggml_tensor *tensor) {
+    const auto found = g_iaoffline_expert_tensors.find(tensor->name);
+    if (found == g_iaoffline_expert_tensors.end() || found->second.n_expert != tensor->ne[2] ||
+        found->second.expert_bytes != (int64_t) tensor->nb[2]) {
+        return -1;
+    }
+    return found->second.offset;
+}
+
+// Counts the experts a layer picked for a token being written. Holds the prefetch mutex.
+static void iaoffline_count_experts_locked(int layer, const std::vector<bool> &used) {
+    if (g_iaoffline_stats.empty() || layer < 0 || layer >= g_iaoffline_stats_layers) return;
+    uint32_t *row = g_iaoffline_stats.data() + (size_t) layer * (size_t) g_iaoffline_stats_experts;
+    const size_t n = std::min(used.size(), (size_t) g_iaoffline_stats_experts);
+    bool counted = false;
+    for (size_t expert = 0; expert < n; expert++) {
+        if (!used[expert]) continue;
+        if (row[expert] < UINT32_MAX) row[expert]++;
+        counted = true;
+    }
+    if (counted && ++g_iaoffline_stats_unsaved >= IAOFFLINE_STATS_SAVE_EVERY) iaoffline_prefetch().stats_due = true;
+}
+
+// Queues the most used experts of earlier loads for reading into the page cache (b), once per load and
+// within IAOFFLINE_EXPERT_PRELOAD_MB, in file order so neighbours are read together.
+static void iaoffline_queue_hot_experts() {
+    auto &prefetch = iaoffline_prefetch();
+    size_t queued = 0;
+    int64_t bytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(prefetch.mutex);
+        if (g_iaoffline_preloaded || g_iaoffline_fd < 0 || g_iaoffline_stats.empty() || g_iaoffline_preload_bytes <= 0) return;
+        g_iaoffline_preloaded = true;
+        std::vector<std::vector<const iaoffline_expert_tensor *>> by_layer((size_t) g_iaoffline_stats_layers);
+        for (const auto &entry : g_iaoffline_expert_tensors) {
+            if (entry.second.layer < g_iaoffline_stats_layers) by_layer[(size_t) entry.second.layer].push_back(&entry.second);
+        }
+        std::vector<std::pair<uint32_t, size_t>> hot;
+        for (size_t i = 0; i < g_iaoffline_stats.size(); i++) {
+            if (g_iaoffline_stats[i] > 0) hot.emplace_back(g_iaoffline_stats[i], i);
+        }
+        std::sort(hot.begin(), hot.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+        std::vector<iaoffline_prefetch_range> ranges;
+        int64_t budget = g_iaoffline_preload_bytes;
+        for (const auto &entry : hot) {
+            const size_t layer = entry.second / (size_t) g_iaoffline_stats_experts;
+            const int64_t expert = (int64_t) (entry.second % (size_t) g_iaoffline_stats_experts);
+            int64_t size = 0;
+            for (const auto *tensor : by_layer[layer]) {
+                if (expert < tensor->n_expert) size += tensor->expert_bytes;
+            }
+            if (size == 0) continue;
+            if (size > budget) break;
+            budget -= size;
+            bytes += size;
+            for (const auto *tensor : by_layer[layer]) {
+                if (expert >= tensor->n_expert) continue;
+                ranges.push_back({nullptr, (size_t) tensor->expert_bytes, tensor->offset + expert * tensor->expert_bytes});
+            }
+        }
+        std::sort(ranges.begin(), ranges.end(), [](const auto &a, const auto &b) { return a.file_offset < b.file_offset; });
+        prefetch.preload.assign(ranges.begin(), ranges.end());
+        queued = ranges.size();
+    }
+    prefetch.cv.notify_all();
+    if (queued > 0) LOGi("%s: reading %lld MB of the most used experts in the background", __func__, (long long) (bytes >> 20));
+}
+
+// Reads [offset, offset + size) of the model file into the page cache, IAOFFLINE_READ_MAX at a time: the
+// kernel turns each pread into a few large requests issued together. Returns the bytes read.
+static int64_t iaoffline_pread(int fd, int64_t offset, size_t size, std::vector<char> &scratch) {
+    if (scratch.size() < IAOFFLINE_READ_MAX) scratch.resize(IAOFFLINE_READ_MAX);
+    size_t done = 0;
+    while (done < size) {
+        const size_t part = std::min(size - done, IAOFFLINE_READ_MAX);
+        const ssize_t n = pread(fd, scratch.data(), part, (off_t) (offset + (int64_t) done));
+        if (n > 0) {
+            done += (size_t) n;
+        } else if (n < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+    return (int64_t) done;
+}
+
+// Reads the pages of a run of mapped slices that are not in memory yet, one pread per run of missing
+// pages (a). Without a mapped address (a hot expert at load), the whole range.
+static void iaoffline_read_slices(int fd, const iaoffline_prefetch_range &range, uintptr_t page_mask,
+                                  std::vector<unsigned char> &resident, std::vector<char> &scratch) {
+    if (range.addr == nullptr) {
+        g_perf_expert_read_kb += iaoffline_pread(fd, range.file_offset, range.size, scratch) / 1024;
+        return;
+    }
+    const uintptr_t page = page_mask + 1;
+    const uintptr_t start = (uintptr_t) range.addr;
+    const uintptr_t begin = start & ~page_mask;
+    const uintptr_t end = start + range.size;
+    const size_t pages = (size_t) ((end - begin + page_mask) / page);
+    resident.resize(pages);
+    if (mincore((void *) begin, end - begin, resident.data()) != 0) {
+        g_perf_expert_read_kb += iaoffline_pread(fd, range.file_offset, range.size, scratch) / 1024;
+        return;
+    }
+    int64_t missing = 0;
+    size_t first = 0;
+    while (first < pages) {
+        if (resident[first] & 1) {
+            first++;
+            continue;
+        }
+        size_t last = first;
+        while (last < pages && !(resident[last] & 1)) last++;
+        const uintptr_t run_begin = std::max<uintptr_t>(begin + first * page, start);
+        const uintptr_t run_end = std::min<uintptr_t>(begin + last * page, end);
+        if (run_end > run_begin) {
+            const size_t size = (size_t) (run_end - run_begin);
+            iaoffline_pread(fd, range.file_offset + (int64_t) (run_begin - start), size, scratch);
+            missing += (int64_t) size;
+        }
+        first = last;
+    }
+    g_perf_expert_read_kb += missing / 1024;
+    g_perf_expert_resident_kb += ((int64_t) range.size - missing) / 1024;
+}
+
+// The I/O threads: each reads the queued slices, the oldest first, then the hot experts of a load.
+// Thread 0 also makes the guesses of the next layer's experts (before any read: the other threads read)
+// and saves the expert counts.
+static void iaoffline_prefetch_worker(int index) {
+    // The CPU threads fill the fast cores and spin while they wait for each other; the requests
+    // must still go out as soon as a router has picked. Android lets apps raise a thread's
+    // priority this far (THREAD_PRIORITY_URGENT_DISPLAY); if it refuses, the thread keeps its own.
+    setpriority(PRIO_PROCESS, 0, -8);
+    const uintptr_t page_mask = (uintptr_t) sysconf(_SC_PAGESIZE) - 1;
+    const bool guesser = index == 0;
+    auto &prefetch = iaoffline_prefetch();
+    std::vector<float> row;
+    std::vector<float> logits;
+    std::vector<int32_t> picked;
+    std::vector<int32_t> ascending;
+    std::vector<unsigned char> resident;
+    std::vector<char> scratch;
+    while (true) {
+        iaoffline_prefetch_range range{nullptr, 0, -1};
+        iaoffline_moe_guess guess;
+        bool counted = false;
+        bool save = false;
+        int fd = -1;
+        std::string stats_file;
+        std::vector<uint32_t> stats;
+        int stats_layers = 0;
+        int stats_experts = 0;
+        {
+            std::unique_lock<std::mutex> lock(prefetch.mutex);
+            prefetch.cv.wait(lock, [&prefetch, guesser] {
+                return !prefetch.queue.empty() || !prefetch.preload.empty() ||
+                       (guesser && (!prefetch.guesses.empty() || prefetch.stats_due));
+            });
+            if (guesser && !prefetch.guesses.empty()) {
+                guess = std::move(prefetch.guesses.front());
+                prefetch.guesses.pop_front();
+                prefetch.guessing = true;
+            } else if (!prefetch.queue.empty() || !prefetch.preload.empty()) {
+                auto &source = !prefetch.queue.empty() ? prefetch.queue : prefetch.preload;
+                range = source.front();
+                source.pop_front();
+                // The slices that follow it in the file are read with it.
+                while (range.file_offset >= 0 && !source.empty()) {
+                    const auto &next = source.front();
+                    const bool follows = next.file_offset == range.file_offset + (int64_t) range.size &&
+                                         (range.addr == nullptr) == (next.addr == nullptr) &&
+                                         (range.addr == nullptr || next.addr == range.addr + range.size);
+                    if (!follows || range.size + next.size > IAOFFLINE_READ_MAX) break;
+                    range.size += next.size;
+                    source.pop_front();
+                }
+                fd = g_iaoffline_fd;
+                prefetch.reading++;
+                counted = true;
+            } else if (guesser && prefetch.stats_due) {
+                prefetch.stats_due = false;
+                g_iaoffline_stats_unsaved = 0;
+                stats = g_iaoffline_stats;
+                stats_file = g_iaoffline_stats_path;
+                stats_layers = g_iaoffline_stats_layers;
+                stats_experts = g_iaoffline_stats_experts;
+                save = true;
+                prefetch.reading++;
+                counted = true;
+            }
+        }
+        if (guess.router != nullptr) {
+            iaoffline_guess_experts(guess, row, logits, picked);
+            {
+                std::lock_guard<std::mutex> lock(prefetch.mutex);
+                prefetch.guessing = false;
+                // Once the next router has run, its layer's own experts are being read already.
+                if (prefetch.serial == guess.serial) {
+                    prefetch.guessed_layer = guess.layer;
+                    prefetch.guessed_serial = guess.serial;
+                    prefetch.guessed = picked;
+                    if (guess.read_ahead) {
+                        // In file order, so neighbouring experts are read together.
+                        ascending = picked;
+                        std::sort(ascending.begin(), ascending.end());
+                        for (size_t i = 0; i < guess.experts.size(); i++) {
+                            const ggml_tensor *w = guess.experts[i];
+                            const int64_t base = i < guess.expert_offsets.size() ? guess.expert_offsets[i] : -1;
+                            for (const int32_t expert : ascending) {
+                                if (expert >= w->ne[2]) continue;
+                                if (prefetch.queue.size() >= IAOFFLINE_MAX_PREFETCH_QUEUE) prefetch.queue.pop_front();
+                                prefetch.queue.push_back({(const char *) w->data + expert * w->nb[2], (size_t) w->nb[2],
+                                                          base >= 0 ? base + expert * (int64_t) w->nb[2] : -1});
+                            }
+                        }
+                    }
+                }
+            }
+            // Wakes an unload waiting for the guess to end, and the threads that read the experts.
+            prefetch.cv.notify_all();
+            continue;
+        }
+        if (save) {
+            iaoffline_save_expert_stats(stats_file, stats_layers, stats_experts, stats);
+        } else if (range.size > 0) {
+            if (fd >= 0 && range.file_offset >= 0) {
+                iaoffline_read_slices(fd, range, page_mask, resident, scratch);
+            } else if (range.addr != nullptr) {
+                iaoffline_willneed(range.addr, range.size, page_mask);
+            }
+        }
+        if (counted) {
+            std::lock_guard<std::mutex> lock(prefetch.mutex);
+            prefetch.reading--;
+        }
+        prefetch.cv.notify_all();
+    }
+}
+
+""",
+)
+
+replace_once(
+    "    std::thread(iaoffline_prefetch_worker).detach();\n",
+    "    for (int index = 0; index < IAOFFLINE_IO_THREADS; index++) std::thread(iaoffline_prefetch_worker, index).detach();\n",
+)
+replace_once(
+    "        prefetch.cv.wait(lock, [&prefetch] { return !prefetch.guessing; });\n"
+    "        prefetch.queue.clear();\n",
+    "        prefetch.cv.wait(lock, [&prefetch] { return !prefetch.guessing; });\n"
+    "        prefetch.queue.clear();\n"
+    "        prefetch.preload.clear();\n"
+    "        // A read in progress may still touch the weights being freed (mincore).\n"
+    "        prefetch.cv.wait(lock, [&prefetch] { return prefetch.reading == 0; });\n",
+)
+replace_once(
+    "                auto &known = iaoffline_moe_layer_at(layer).experts;\n"
+    "                if (std::find(known.begin(), known.end(), weights) == known.end()) known.push_back(weights);\n",
+    "                auto &learned = iaoffline_moe_layer_at(layer);\n"
+    "                auto &known = learned.experts;\n"
+    "                if (std::find(known.begin(), known.end(), weights) == known.end()) {\n"
+    "                    known.push_back(weights);\n"
+    "                    learned.expert_offsets.push_back(iaoffline_file_offset_of(weights));\n"
+    "                }\n",
+)
+replace_once(
+    "        for (const ggml_tensor *w : info.experts) {\n"
+    "            for (int64_t expert = 0; expert < std::min<int64_t>(w->ne[2], (int64_t) used.size()); expert++) {\n"
+    "                if (!used[expert]) continue;\n"
+    "                if (prefetch.queue.size() >= IAOFFLINE_MAX_PREFETCH_QUEUE) prefetch.queue.pop_front();\n"
+    "                prefetch.queue.push_back({(const char *) w->data + expert * w->nb[2], (size_t) w->nb[2]});\n"
+    "            }\n"
+    "        }\n",
+    "        for (size_t i = 0; i < info.experts.size(); i++) {\n"
+    "            const ggml_tensor *w = info.experts[i];\n"
+    "            const int64_t base = i < info.expert_offsets.size() ? info.expert_offsets[i] : -1;\n"
+    "            for (int64_t expert = 0; expert < std::min<int64_t>(w->ne[2], (int64_t) used.size()); expert++) {\n"
+    "                if (!used[expert]) continue;\n"
+    "                if (prefetch.queue.size() >= IAOFFLINE_MAX_PREFETCH_QUEUE) prefetch.queue.pop_front();\n"
+    "                prefetch.queue.push_back({(const char *) w->data + expert * w->nb[2], (size_t) w->nb[2],\n"
+    "                                          base >= 0 ? base + expert * (int64_t) w->nb[2] : -1});\n"
+    "            }\n"
+    "        }\n"
+    "        // The experts picked for a token being written, for the hot experts of the next load (b).\n"
+    "        if (one_token) iaoffline_count_experts_locked(layer, used);\n",
+)
+replace_once(
+    "                guess.experts = following.experts;\n",
+    "                guess.experts = following.experts;\n"
+    "                guess.expert_offsets = following.expert_offsets;\n",
+)
+
+# Opened when a mixture of experts read from storage loads, closed when it is unloaded.
+replace_once(
+    "    env->ReleaseStringUTFChars(jmodel_path, model_path);\n"
+    "    if (!model) {\n"
+    "        append_native_error(\"[IA Offline] o carregamento falhou nos três modos de compatibilidade.\");\n",
+    "    const std::string iaoffline_model_file = model_path;\n"
+    "    env->ReleaseStringUTFChars(jmodel_path, model_path);\n"
+    "    if (!model) {\n"
+    "        append_native_error(\"[IA Offline] o carregamento falhou nos três modos de compatibilidade.\");\n",
+)
+replace_once(
+    "    g_model = model;\n"
+    "    return 0;\n"
+    "}\n",
+    "    g_model = model;\n"
+    "    if (iaoffline_moe_stream_mode()) iaoffline_open_model_file(iaoffline_model_file.c_str());\n"
+    "    return 0;\n"
+    "}\n",
+)
+replace_once(
+    "    iaoffline_reset_prefetch();\n"
+    "    if (iaoffline_moe_stream_mode()) iaoffline_start_prefetch();\n"
+    "    int n_ctx = iaoffline_context_for_memory(g_model);\n",
+    "    iaoffline_reset_prefetch();\n"
+    "    if (iaoffline_moe_stream_mode()) {\n"
+    "        iaoffline_start_prefetch();\n"
+    "        iaoffline_queue_hot_experts();\n"
+    "    }\n"
+    "    int n_ctx = iaoffline_context_for_memory(g_model);\n",
+)
+replace_once(
+    "    // Free up resources\n"
+    "    iaoffline_reset_prefetch();\n",
+    "    // Free up resources\n"
+    "    iaoffline_reset_prefetch();\n"
+    "    iaoffline_close_model_file();\n",
+)
+
+path.write_text(text)
+print("Applied IA Offline expert reading (pread) and hot-experts patch")
+PY
+
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
 chmod +x ./gradlew
 ./gradlew :lib:assembleRelease --no-daemon
