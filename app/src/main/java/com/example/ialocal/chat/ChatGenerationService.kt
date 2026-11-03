@@ -1,5 +1,6 @@
 package com.example.ialocal.chat
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.os.PowerManager
@@ -35,16 +37,12 @@ class ChatGenerationService : Service() {
     private var renewalJob: Job? = null
     private var lastStartId = 0
     private var observing = false
+    /** How many of the "loading" dots after "Pensando"/"Escrevendo" are shown: 1 to 3. */
+    private var dots = 3
 
     override fun onCreate() {
         super.onCreate()
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Respostas da I.A", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Mantém a I.A respondendo quando o app está em segundo plano."
-                setShowBadge(false)
-            }
-        )
+        ensureChannel(this)
         // Android gives a started foreground service only a short window to publish its notification.
         startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
 
@@ -64,11 +62,15 @@ class ChatGenerationService : Service() {
         if (!observing) {
             observing = true
             serviceScope.launch {
-                combine(manager.activeGenerations, manager.notificationConversationId) { active, id ->
+                combine(manager.activeGenerations, manager.notificationConversationId, manager.notices) { active, id, _ ->
                     active to id
                 }.collectLatest { (active, _) ->
-                    // Rebuild contentIntent whenever the answering conversation changes.
-                    startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    // Rebuild contentIntent whenever the answering conversation changes. Once nothing
+                    // is answering, the "Respondido" notification takes over; the ongoing one keeps
+                    // its last text until it is removed below.
+                    if (active > 0) {
+                        startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    }
                     if (ChatGenerationKeepAlive.needsCpuWakeLock(active)) {
                         keepCpuAwake()
                     } else {
@@ -81,6 +83,16 @@ class ChatGenerationService : Service() {
                             stopForeground(STOP_FOREGROUND_REMOVE)
                         }
                     }
+                }
+            }
+            // The dots after "Pensando"/"Escrevendo" fill up one by one, like a loading indicator.
+            serviceScope.launch {
+                val notificationManager = getSystemService(NotificationManager::class.java)
+                while (isActive) {
+                    delay(DOTS_INTERVAL_MS)
+                    if (manager.activeGenerations.value == 0) continue
+                    dots = dots % 3 + 1
+                    notificationManager.notify(NOTIFICATION_ID, buildNotification())
                 }
             }
         }
@@ -124,15 +136,13 @@ class ChatGenerationService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val manager = (application as LocalAiApplication).container.chatGenerationManager
+        val conversationId = manager.notificationConversationId.value
+        val notice = conversationId?.let { manager.notices.value[it] }
         val openApp = PendingIntent.getActivity(
             this,
             REQUEST_OPEN_APP,
-            ResponseNotificationRoute.openConversation(
-                this,
-                ResponseNotificationRoute.OFFLINE,
-                (application as LocalAiApplication).container.chatGenerationManager
-                    .notificationConversationId.value.orEmpty(),
-            ),
+            ResponseNotificationRoute.openConversation(this, ResponseNotificationRoute.OFFLINE, conversationId.orEmpty()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stop = PendingIntent.getService(
@@ -143,7 +153,7 @@ class ChatGenerationService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_download_notification)
-            .setContentTitle("I.A offline respondendo")
+            .setContentTitle(answeringTitle(notice, dots))
             .setContentText("Toque para voltar à conversa e acompanhar a resposta.")
             .setContentIntent(openApp)
             .setOngoing(true)
@@ -159,7 +169,52 @@ class ChatGenerationService : Service() {
         private const val NOTIFICATION_ID = 4401
         private const val REQUEST_OPEN_APP = 4402
         private const val REQUEST_STOP = 4403
+        private const val REQUEST_OPEN_ANSWER_BASE = 0x10000
         private const val ACTION_STOP = "com.example.ialocal.action.STOP_CHAT_GENERATION"
+        /** "Respondido" notifications: one per conversation, tagged with its id. */
+        private const val ANSWERED_NOTIFICATION_ID = 4404
+        private const val DOTS_INTERVAL_MS = 500L
+
+        private fun ensureChannel(context: Context) {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Respostas da I.A", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Mantém a I.A respondendo quando o app está em segundo plano e avisa quando ela terminar."
+                    setShowBadge(false)
+                }
+            )
+        }
+
+        /** Replaces the ongoing notification's last step: "<modelo> - Respondido", tap to see the answer. */
+        fun notifyAnswered(context: Context, conversationId: String, modelName: String?) {
+            if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+            runCatching {
+                ensureChannel(context)
+                val open = PendingIntent.getActivity(
+                    context,
+                    REQUEST_OPEN_ANSWER_BASE + (conversationId.hashCode() and 0xFFFF),
+                    ResponseNotificationRoute.openConversation(context, ResponseNotificationRoute.OFFLINE, conversationId),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                val notification = Notification.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_download_notification)
+                    .setContentTitle(answeredTitle(modelName))
+                    .setContentText("Toque para visualizar a resposta.")
+                    .setContentIntent(open)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(true)
+                    .setCategory(Notification.CATEGORY_STATUS)
+                    .addAction(Notification.Action.Builder(R.drawable.ic_download_notification, "Visualizar", open).build())
+                    .build()
+                context.getSystemService(NotificationManager::class.java)
+                    .notify(conversationId, ANSWERED_NOTIFICATION_ID, notification)
+            }
+        }
+
+        fun cancelAnswered(context: Context, conversationId: String) {
+            runCatching {
+                context.getSystemService(NotificationManager::class.java).cancel(conversationId, ANSWERED_NOTIFICATION_ID)
+            }
+        }
 
         /** Called while the user is interacting with the chat, so the foreground start is allowed. */
         fun start(context: Context) {

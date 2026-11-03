@@ -94,6 +94,26 @@ data class QueuedChatMessage(
     val attachments: List<PendingAttachment> = emptyList(),
 )
 
+/** What the notification says the AI is doing: thinking before the answer, then writing it. */
+enum class AnswerPhase { THINKING, WRITING }
+
+/** The notification's line for one answer: "<modelo> - Pensando . . ." / "Escrevendo . . .". */
+data class AnswerNotice(val modelName: String?, val phase: AnswerPhase)
+
+private fun noticeModelName(modelName: String?): String = modelName?.takeIf { it.isNotBlank() } ?: "I.A offline"
+
+/**
+ * The answering notification's title: "Lfm2.5 8B - Pensando . . ." while the AI reads and reasons,
+ * then "Lfm2.5 8B - Escrevendo . . .", with [dots] (1 to 3) filling up like a loading indicator.
+ */
+internal fun answeringTitle(notice: AnswerNotice?, dots: Int): String {
+    val action = if (notice?.phase == AnswerPhase.WRITING) "Escrevendo" else "Pensando"
+    return "${noticeModelName(notice?.modelName)} - $action " + List(dots.coerceIn(1, 3)) { "." }.joinToString(" ")
+}
+
+/** The last step, once the answer is ready: "Lfm2.5 8B - Respondido". */
+internal fun answeredTitle(modelName: String?): String = "${noticeModelName(modelName)} - Respondido"
+
 /** The model/profile the user had selected when a message was sent. */
 data class GenerationTarget(
     val preferredAgentId: String?,
@@ -125,6 +145,13 @@ class ChatGenerationManager(
     private val _notificationConversationId = MutableStateFlow<String?>(null)
     /** The conversation opened by tapping the foreground notification. */
     val notificationConversationId: StateFlow<String?> = _notificationConversationId.asStateFlow()
+    private val _notices = MutableStateFlow<Map<String, AnswerNotice>>(emptyMap())
+    /** What each conversation being answered is doing, for the foreground notification. */
+    val notices: StateFlow<Map<String, AnswerNotice>> = _notices.asStateFlow()
+
+    private fun setNotice(conversationId: String, notice: AnswerNotice?) {
+        _notices.update { if (notice == null) it - conversationId else it + (conversationId to notice) }
+    }
 
     /**
      * At most [MAX_CONCURRENT_ANSWERS] conversations are answered at once. The semaphore is fair, so
@@ -318,6 +345,9 @@ class ChatGenerationManager(
         // The latest responding conversation is what the notification opens. Track all active
         // sessions so stopping one cannot redirect the notification to an unrelated chat.
         generatingConversationIds.add(conversationId)
+        // A new answer replaces this conversation's "Respondido" notification.
+        ChatGenerationService.cancelAnswered(appContext, conversationId)
+        setNotice(conversationId, AnswerNotice(modelName = null, phase = AnswerPhase.THINKING))
         _notificationConversationId.value = conversationId
         if (_activeGenerations.value == 0) ChatGenerationService.start(appContext)
         _activeGenerations.value += 1
@@ -332,6 +362,8 @@ class ChatGenerationManager(
                 session.job = null
                 session._isGenerating.value = false
                 session._progress.value = null
+                // Before the next queued turn, which sets its own notice.
+                setNotice(conversationId, null)
                 // Start the next queued turn before releasing this one so the count never drops to
                 // zero in between and the foreground service is not stopped mid-queue.
                 startNextQueued(conversationId, session, target)
@@ -423,6 +455,8 @@ class ChatGenerationManager(
             ModelCatalog.entries.firstOrNull { model.apiModelId.startsWith(it.apiIdPrefix) }
                 ?.displayName ?: model.name
         }
+        var phase = AnswerPhase.THINKING
+        setNotice(conversationId, AnswerNotice(answeringModelName, phase))
         val replyId = repository.addMessage(conversationId, MessageRole.ASSISTANT, "", status = MessageStatus.SENDING)
         val startedAt = System.currentTimeMillis()
         var reasoningStartedAt: Long? = null
@@ -487,6 +521,19 @@ class ChatGenerationManager(
                         if (reasoningStartedAt != null && reasoningEndedAt == null && AssistantContent.hasReasoningEnded(tail)) {
                             reasoningEndedAt = System.currentTimeMillis()
                         }
+                        // Writing once answer text arrives: after the reasoning, or from the start
+                        // when the model does not reason. Checked only until it happens.
+                        if (phase == AnswerPhase.THINKING) {
+                            val writing = when {
+                                reasoningStartedAt == null -> accumulated.isNotBlank()
+                                reasoningEndedAt == null -> false
+                                else -> AssistantContent.answerForHistory(accumulated.toString()).isNotBlank()
+                            }
+                            if (writing) {
+                                phase = AnswerPhase.WRITING
+                                setNotice(conversationId, AnswerNotice(answeringModelName, phase))
+                            }
+                        }
                         unsaved = true
                     }
                 } finally {
@@ -495,6 +542,7 @@ class ChatGenerationManager(
             }
             repository.updateMessageContent(replyId, finalContent())
             repository.updateMessageStatus(replyId, MessageStatus.COMPLETE)
+            ChatGenerationService.notifyAnswered(appContext, conversationId, answeringModelName)
         } catch (cancel: CancellationException) {
             withContext(NonCancellable) {
                 repository.updateMessageContent(replyId, finalContent())
