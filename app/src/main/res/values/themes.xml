@@ -7,6 +7,6 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/app_launcher</item>
-        <item name="android:windowSplashScreenBackground">@android:color/white</item>
+        <item name="android:windowSplashScreenBackground">@color/app_icon_background</item>
     </style>
 </resources>

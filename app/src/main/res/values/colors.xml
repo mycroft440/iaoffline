@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Deep navy behind the "IA OFFLINE" logo, shared by the launcher icon and the splash screen. -->
+    <color name="app_icon_background">#FF051625</color>
+</resources>
