@@ -202,4 +202,21 @@ class ModelCatalogTest {
         assertFalse("qwen3.8-27b-q4-k-m" in experimental)
         assertFalse("deepseek-r1-distill-qwen-32b-q4-k-m" in experimental)
     }
+
+    @Test
+    fun fastArmFormatWhereItDoesNotNeedMoreRam() {
+        // Large MoE run from storage, so only the download grows.
+        listOf("gemma4-26b-a4b-it-q4-0", "qwen3-coder-30b-a3b-instruct-q4-k-m", "qwen3.6-35b-a3b-q3-k-m", "glm4.7-flash-ud-q3-k-xl")
+            .map(ModelCatalog::requireById)
+            .forEach { model ->
+                assertTrue(model.id, model.isExperimental)
+                assertTrue(model.id, model.quantization.startsWith("Q4_0"))
+            }
+        // Small models whose Q4_0 file is smaller than the Q4_K_M they had.
+        listOf("phi-mini-moe-7.6b-q4-k-m", "olmoe-1b-7b-0125-instruct-q4-k-m", "llama3.2-3b-instruct-q4-k-m", "qwen3.5-4b-q4-k-m")
+            .forEach { assertTrue(it, ModelCatalog.requireById(it).quantization.startsWith("Q4_0")) }
+        // In RAM, a bigger Q4_0 would need more memory: these keep their smaller format.
+        assertEquals("Q3_K_M", ModelCatalog.requireById("qwen3.5-9b-q4-k-m").quantization)
+        assertEquals("Q3_K_M", ModelCatalog.requireById("mellum2.1-12b-a2.5b-thinking-q3-k-m").quantization)
+    }
 }
