@@ -413,9 +413,12 @@ private fun LocalAiApp(
                 ),
             )
             val scope = rememberCoroutineScope()
+            val importProgress by container.automaticModelImporter.progress.collectAsStateWithLifecycle()
             HtmlAiHomeScreen(
                 viewModel = vm,
                 adsEnabled = adsManager.adsReady,
+                onScanStorage = onScanStorage,
+                importProgress = importProgress,
                 onStartChat = {
                     val previousConversationId = lastOpenedConversationId
                     if (previousConversationId != null) {

@@ -398,7 +398,7 @@ class ModelRepository(
                         BuiltInProfile.PROGRAMMER -> agent.name.equals(LEGACY_ENGINEER_NAME, true) ||
                             (agent.name.endsWith(" · Agente") && agent.systemPrompt == DEFAULT_SYSTEM_PROMPT)
                         BuiltInProfile.UNCENSORED -> agent.name.equals(LEGACY_UNCENSORED_NAME, true)
-                        null -> false
+                        BuiltInProfile.NONE, null -> false
                     }
                 }
             if (existing != null && (

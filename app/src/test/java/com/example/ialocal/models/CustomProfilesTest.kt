@@ -12,7 +12,7 @@ class CustomProfilesTest {
 
     @Test
     fun builtInProfilesKeepTheIdsTheSelectionWasSavedWith() {
-        assertEquals(listOf("PROGRAMMER", "UNCENSORED"), AiProfile.BUILT_IN.map { it.id })
+        assertEquals(listOf("NONE", "PROGRAMMER", "UNCENSORED"), AiProfile.BUILT_IN.map { it.id })
         assertEquals(BuiltInProfile.PROGRAMMER, AiProfile.DEFAULT.builtIn)
     }
 
@@ -42,6 +42,7 @@ class CustomProfilesTest {
     fun rejectsTheNamesOfTheBuiltInProfilesAndTheirOldNames() {
         assertNotNull(CustomProfiles.validate("programador", "", "Algo", existing))
         assertNotNull(CustomProfiles.validate("Sem Censura", "", "Algo", existing))
+        assertNotNull(CustomProfiles.validate("sem perfil", "", "Algo", existing))
         assertNotNull(CustomProfiles.validate("Engenheiro de Software", "", "Algo", existing))
     }
 

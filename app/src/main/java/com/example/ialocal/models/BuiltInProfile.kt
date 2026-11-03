@@ -10,6 +10,13 @@ enum class BuiltInProfile(
     /** Answer budget: the largest the runtime allows; the model stops earlier when it is done. */
     val maxTokens: Int,
 ) {
+    /** No instructions of its own: the AI answers with its default behavior. */
+    NONE(
+        "Sem perfil",
+        "",
+        "Sem instruções extras: a IA responde do jeito padrão dela.",
+        RuntimeLimits.MAX_OUTPUT_TOKENS,
+    ),
     PROGRAMMER(
         "Programador",
         "Você é um engenheiro de software sênior. Priorize soluções corretas, simples, testáveis e seguras. " +

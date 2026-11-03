@@ -129,7 +129,8 @@ class AiOrchestrator(
         // keep everything before it processed between loads. Thinking switches such as Nemotron's
         // /no_think must stay at the very end.
         val tail = guidance.dateNote() + plan.systemSuffix
-        val systemPrompt = agent.systemPrompt + guidance.systemRules() + tools.promptInstructions() + tail
+        // "Sem perfil" has no instructions of its own, so the rules would start with blank lines.
+        val systemPrompt = (agent.systemPrompt + guidance.systemRules() + tools.promptInstructions()).trimStart() + tail
         val turn = TurnOptions(
             userSuffix = plan.userSuffix,
             assistantPrefix = plan.assistantPrefix,

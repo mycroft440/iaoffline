@@ -253,7 +253,7 @@ private fun ProfileCard(
                 }
             }
         }
-        if (showPrompt) {
+        if (showPrompt && profile.systemPrompt.isNotBlank()) {
             Text(
                 profile.systemPrompt,
                 modifier = Modifier
@@ -269,8 +269,11 @@ private fun ProfileCard(
             modifier = Modifier.padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = { showPrompt = !showPrompt }) {
-                Text(if (showPrompt) "Ocultar instruções" else "Ver instruções")
+            // "Sem perfil" has no instructions to show.
+            if (profile.systemPrompt.isNotBlank()) {
+                TextButton(onClick = { showPrompt = !showPrompt }) {
+                    Text(if (showPrompt) "Ocultar instruções" else "Ver instruções")
+                }
             }
             Spacer(Modifier.weight(1f))
             if (onEdit != null) {

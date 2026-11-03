@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -86,6 +87,8 @@ import com.example.ialocal.ads.InlineAdBanner
 import com.example.ialocal.api.ExternalApiSettings
 import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
+import com.example.ialocal.models.AutomaticModelImportPhase
+import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.ModelCatalog
 import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.models.provider
@@ -135,6 +138,9 @@ fun HtmlAiHomeScreen(
     onOpenSettings: () -> Unit,
     onOpenCodeEditor: () -> Unit,
     onExitApp: () -> Unit,
+    /** Looks for GGUF files already on the phone; offered while no AI is installed. */
+    onScanStorage: () -> Unit = {},
+    importProgress: AutomaticModelImportProgress = AutomaticModelImportProgress(),
 ) {
     val context = LocalContext.current
     val remoteApiConnected = remember(context) { ExternalApiSettings(context).read().hasKey }
@@ -246,6 +252,8 @@ fun HtmlAiHomeScreen(
                         else onStartChatWith(model.id)
                     },
                     onOpenOfflineModels = onOpenOfflineModels,
+                    onScanStorage = onScanStorage,
+                    importProgress = importProgress,
                 )
                 HomeDeviceSection(hardware)
             }
@@ -583,6 +591,8 @@ private fun HomeMyAisSection(
     onOpenMyAis: () -> Unit,
     onOpenModel: (AiModelEntity) -> Unit,
     onOpenOfflineModels: () -> Unit,
+    onScanStorage: () -> Unit,
+    importProgress: AutomaticModelImportProgress,
 ) {
     val preview = remember(models) { homeAiPreview(models) }
 
@@ -637,13 +647,7 @@ private fun HomeMyAisSection(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (preview.models.isEmpty()) {
-                Text(
-                    text = "Nenhuma IA baixada ainda. Baixe uma para começar a conversar sem internet.",
-                    color = CatalogMuted,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    modifier = Modifier.padding(8.dp),
-                )
+                HomeStorageSearch(progress = importProgress, onScanStorage = onScanStorage)
             } else {
                 // All featured models use the same compact two-column tile, including test/error
                 // states. For many installed models, the full library remains one tap away.
@@ -686,6 +690,68 @@ private fun HomeMyAisSection(
             border = Color(0xFF60A5FA).copy(alpha = 0.45f),
             onClick = onOpenOfflineModels,
         )
+    }
+}
+
+/**
+ * Shown where the installed AIs would be while there are none: AIs downloaded before (or by
+ * another app) may already be on the phone, so the search is offered every time the app opens.
+ */
+@Composable
+private fun HomeStorageSearch(
+    progress: AutomaticModelImportProgress,
+    onScanStorage: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = if (progress.isRunning) "Buscando I.As no armazenamento do aparelho..."
+            else "Nenhuma IA baixada ainda. Você pode ter IAs baixadas anteriormente no seu telefone: " +
+                "busque no armazenamento ou baixe uma para começar a conversar sem internet.",
+            color = CatalogMuted,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
+        CatalogActionButton(
+            text = if (progress.isRunning) "Buscando..." else "Buscar IAs no armazenamento",
+            modifier = Modifier.fillMaxWidth(),
+            background = Brush.horizontalGradient(listOf(Color(0xFF34D399), Color(0xFF10B981))),
+            foreground = Color(0xFF041014),
+            border = CatalogEmerald.copy(alpha = 0.45f),
+            enabled = !progress.isRunning,
+            onClick = onScanStorage,
+        )
+        if (progress.isRunning) {
+            val fraction = progress.fraction
+            if (fraction == null) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = CatalogEmerald,
+                    trackColor = CatalogBorder,
+                )
+            } else {
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = CatalogEmerald,
+                    trackColor = CatalogBorder,
+                )
+            }
+        }
+        val status = when (progress.phase) {
+            AutomaticModelImportPhase.COMPLETED -> progress.summary?.let {
+                if (it.imported == 0 && it.alreadyInstalled == 0) "Nenhuma IA encontrada no armazenamento."
+                else "Busca concluída: ${it.imported} importada(s)."
+            }
+            AutomaticModelImportPhase.PERMISSION_REQUIRED ->
+                "Permita o acesso aos arquivos do aparelho e toque em Buscar novamente."
+            AutomaticModelImportPhase.FAILED -> "A busca falhou. Tente novamente."
+            AutomaticModelImportPhase.CANCELLED -> "A busca foi cancelada."
+            else -> null
+        }
+        status?.let { Text(it, color = CatalogMuted, fontSize = 10.sp) }
     }
 }
 

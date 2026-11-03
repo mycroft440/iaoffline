@@ -127,6 +127,7 @@ import com.example.ialocal.data.MessageWithAttachments
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.data.PendingAttachment
 import com.example.ialocal.models.AiProfile
+import com.example.ialocal.models.BuiltInProfile
 import com.example.ialocal.models.DeepThinkControlMode
 import com.example.ialocal.models.DeepThinkLevel
 import com.example.ialocal.models.DeepThinkStore
@@ -910,8 +911,12 @@ private fun ExactWelcome(modifier: Modifier, profile: String, modelAvailable: Bo
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                if (modelAvailable) {
+                if (modelAvailable && profile == BuiltInProfile.NONE.displayName) {
+                    "Você está conversando sem perfil: a IA responde do jeito padrão dela. Tudo é processado localmente no aparelho."
+                } else if (modelAvailable) {
                     "Você está conversando com o perfil $profile. Tudo é processado localmente no aparelho."
+                } else if (profile == BuiltInProfile.NONE.displayName) {
+                    "Nenhum perfil selecionado. Baixe uma IA offline para começar a conversar."
                 } else {
                     "Perfil $profile selecionado. Baixe uma IA offline para começar a conversar."
                 },
