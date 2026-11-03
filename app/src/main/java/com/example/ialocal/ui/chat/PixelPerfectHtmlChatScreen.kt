@@ -172,6 +172,8 @@ fun PixelPerfectHtmlChatScreen(
     installedLanguageIds: Set<String>,
     onOpenSettings: () -> Unit,
     adsEnabled: Boolean,
+    /** Configurações → Perfis de I.A, where profiles are created, edited and deleted. */
+    onOpenAiProfiles: () -> Unit = onOpenSettings,
 ) {
     val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
@@ -367,7 +369,7 @@ fun PixelPerfectHtmlChatScreen(
                 },
                 onManage = {
                     profileOpen = false
-                    onOpenSettings()
+                    onOpenAiProfiles()
                 },
             )
         }
@@ -1793,7 +1795,7 @@ private fun ExactProfilesSheet(
             }
         }
         TextButton(onClick = onManage, modifier = Modifier.fillMaxWidth()) {
-            Text("Gerenciar perfis em Configurações", fontSize = 12.sp)
+            Text("Gerenciar perfis de I.A", fontSize = 12.sp)
         }
         Spacer(Modifier.height(8.dp))
     }

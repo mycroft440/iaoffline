@@ -54,3 +54,17 @@ internal fun List<FoundStorageModel>.update(
 internal fun List<FoundStorageModel>.cancelPending(): List<FoundStorageModel> = map { model ->
     if (model.status.isPending) model.copy(status = FoundModelStatus.CANCELLED, copiedBytes = 0L) else model
 }
+
+/** Short status shown next to a file found in storage. */
+val FoundStorageModel.statusLabel: String
+    get() = when (status) {
+        FoundModelStatus.WAITING -> "Na fila"
+        FoundModelStatus.CHECKING -> "Verificando"
+        FoundModelStatus.IMPORTING -> copyFraction?.let { "Carregando ${(it * 100).toInt()}%" } ?: "Carregando"
+        FoundModelStatus.IMPORTED -> "Carregada"
+        FoundModelStatus.ALREADY_INSTALLED -> "Já instalada"
+        FoundModelStatus.SEEN_BEFORE -> "Já verificada"
+        FoundModelStatus.INVALID -> "Arquivo inválido"
+        FoundModelStatus.FAILED -> "Falhou"
+        FoundModelStatus.CANCELLED -> "Cancelada"
+    }

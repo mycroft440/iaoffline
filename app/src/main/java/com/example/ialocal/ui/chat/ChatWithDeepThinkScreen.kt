@@ -12,6 +12,7 @@ fun ChatWithDeepThinkScreen(
     installedLanguageIds: Set<String>,
     onOpenSettings: () -> Unit,
     adsEnabled: Boolean,
+    onOpenAiProfiles: () -> Unit,
 ) {
     PixelPerfectHtmlChatScreen(
         viewModel = viewModel,
@@ -22,5 +23,6 @@ fun ChatWithDeepThinkScreen(
         installedLanguageIds = installedLanguageIds,
         onOpenSettings = onOpenSettings,
         adsEnabled = adsEnabled,
+        onOpenAiProfiles = onOpenAiProfiles,
     )
 }

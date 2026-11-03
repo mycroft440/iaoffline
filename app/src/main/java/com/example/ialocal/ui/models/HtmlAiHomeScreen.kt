@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
@@ -89,9 +90,12 @@ import com.example.ialocal.data.AiModelEntity
 import com.example.ialocal.data.ModelVerificationStatus
 import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.AutomaticModelImportProgress
+import com.example.ialocal.models.FoundModelStatus
+import com.example.ialocal.models.FoundStorageModel
 import com.example.ialocal.models.ModelCatalog
 import com.example.ialocal.models.ModelProvider
 import com.example.ialocal.models.provider
+import com.example.ialocal.models.statusLabel
 import com.example.ialocal.runtime.DeviceMemory
 import com.example.ialocal.ui.branding.brandName
 import com.example.ialocal.ui.branding.providerLogoPainter
@@ -666,6 +670,9 @@ private fun HomeMyAisSection(
                         if (row.size == 1) Box(Modifier.weight(1f))
                     }
                 }
+                if (importProgress.isRunning) {
+                    HomeStorageFoundList(importProgress)
+                }
                 if (preview.remainingCount > 0) {
                     Text(
                         text = "+${preview.remainingCount} outra${if (preview.remainingCount == 1) "" else "s"} IA${if (preview.remainingCount == 1) "" else "s"} instalada${if (preview.remainingCount == 1) "" else "s"} · Ver todas",
@@ -752,7 +759,95 @@ private fun HomeStorageSearch(
             else -> null
         }
         status?.let { Text(it, color = CatalogMuted, fontSize = 10.sp) }
+        HomeStorageFoundList(progress)
     }
+}
+
+/** The AIs the storage search found, each with where it is: queued, being checked, loading... */
+@Composable
+private fun HomeStorageFoundList(progress: AutomaticModelImportProgress) {
+    val found = progress.found
+    if (found.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = if (progress.isRunning) "Carregando I.As encontradas no armazenamento (${found.size})"
+            else "I.As encontradas no armazenamento (${found.size})",
+            color = CatalogText,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+        found.forEach { model -> HomeFoundModelRow(model) }
+    }
+}
+
+@Composable
+private fun HomeFoundModelRow(model: FoundStorageModel) {
+    val shape = RoundedCornerShape(10.dp)
+    val statusColor = when (model.status) {
+        FoundModelStatus.IMPORTING, FoundModelStatus.IMPORTED, FoundModelStatus.ALREADY_INSTALLED -> CatalogEmerald
+        FoundModelStatus.INVALID, FoundModelStatus.FAILED -> Color(0xFFF87171)
+        else -> CatalogMuted
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0x661E293B), shape)
+            .border(1.dp, CatalogBorder.copy(alpha = 0.8f), shape)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = model.name,
+                    color = CatalogText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = formatFoundSize(model.sizeBytes),
+                    color = CatalogMuted,
+                    fontSize = 9.sp,
+                    maxLines = 1,
+                )
+            }
+            if (model.status.isPending) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = statusColor,
+                )
+            }
+            Text(
+                text = model.statusLabel,
+                color = statusColor,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        model.copyFraction?.let { fraction ->
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+                color = CatalogEmerald,
+                trackColor = CatalogBorder,
+            )
+        }
+        model.detail?.let { Text(it, color = CatalogMuted, fontSize = 9.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+    }
+}
+
+private fun formatFoundSize(bytes: Long): String {
+    val gb = bytes / (1024.0 * 1024.0 * 1024.0)
+    return if (gb >= 1.0) String.format(java.util.Locale.getDefault(), "%.2f GB", gb)
+    else String.format(java.util.Locale.getDefault(), "%.0f MB", bytes / (1024.0 * 1024.0))
 }
 
 /** Consistent, space-efficient mini-cards: provider, readable name, status and GGUF file size. */

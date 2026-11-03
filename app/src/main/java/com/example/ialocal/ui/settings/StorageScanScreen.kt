@@ -39,6 +39,7 @@ import com.example.ialocal.models.AutomaticModelImportPhase
 import com.example.ialocal.models.AutomaticModelImportProgress
 import com.example.ialocal.models.FoundModelStatus
 import com.example.ialocal.models.FoundStorageModel
+import com.example.ialocal.models.statusLabel
 import java.util.Locale
 
 /**
@@ -203,7 +204,7 @@ private fun FoundModelCard(model: FoundStorageModel) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 }
                 Text(
-                    statusLabel(model),
+                    model.statusLabel,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = statusColor(model.status),
@@ -261,18 +262,6 @@ private fun scanStatusLine(progress: AutomaticModelImportProgress): String? = wh
     }
     AutomaticModelImportPhase.PERMISSION_REQUIRED -> "Permita o acesso aos arquivos do aparelho e toque em Buscar agora novamente."
     AutomaticModelImportPhase.FAILED -> "A busca falhou. Tente novamente."
-}
-
-private fun statusLabel(model: FoundStorageModel): String = when (model.status) {
-    FoundModelStatus.WAITING -> "Na fila"
-    FoundModelStatus.CHECKING -> "Verificando"
-    FoundModelStatus.IMPORTING -> model.copyFraction?.let { "Importando ${(it * 100).toInt()}%" } ?: "Importando"
-    FoundModelStatus.IMPORTED -> "Importada"
-    FoundModelStatus.ALREADY_INSTALLED -> "Já instalada"
-    FoundModelStatus.SEEN_BEFORE -> "Já verificada"
-    FoundModelStatus.INVALID -> "Arquivo inválido"
-    FoundModelStatus.FAILED -> "Falhou"
-    FoundModelStatus.CANCELLED -> "Cancelada"
 }
 
 @Composable

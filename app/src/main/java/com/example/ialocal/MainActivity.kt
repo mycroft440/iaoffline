@@ -600,6 +600,7 @@ private fun LocalAiApp(
                     }
                 },
                 onOpenSettings = { navController.navigate("settings") },
+                onOpenAiProfiles = { navController.navigate("ai-profiles") { launchSingleTop = true } },
             )
         }
 
