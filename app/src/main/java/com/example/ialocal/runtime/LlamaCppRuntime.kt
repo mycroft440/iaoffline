@@ -135,7 +135,10 @@ class LlamaCppRuntime(
         val filePath: String,
         val fileBytes: Long,
         val onDemandBytes: Long,
-        /** Weights read from the file (low-memory mode): the kernel may drop them when memory is short. */
+        /**
+         * Weights read from the file (low-memory mode, or the experts of a mixture of experts whose
+         * other weights have the optimized copy): the kernel may drop them when memory is short.
+         */
         val fileBacked: Boolean,
         val streamsExperts: Boolean,
     )
@@ -776,6 +779,8 @@ class LlamaCppRuntime(
         }
         val lowMemory = plan.lowMemory || RuntimeLimits.needsPlainWeights(model.architecture)
         val repackRelease = plan.repackRelease && !lowMemory
+        // Experts mapped from the file and the rest of the weights repacked (step 24 of the native patch).
+        val mappedExperts = plan.mappedExperts && !lowMemory && !plan.streamsExperts
         val kvBudgetMb = plan.kvBudgetBytes / MB
         // "Modo rápido de MoE": the GGUF's own key, replaced through llama.cpp's metadata override.
         val expertsKey = layout?.expertUsedCountKey
@@ -799,6 +804,7 @@ class LlamaCppRuntime(
             Os.setenv(PRESENCE_PENALTY_ENV, (catalogEntry?.presencePenalty ?: 0f).toString(), true)
             Os.setenv(UBATCH_ENV, plan.ubatch.toString(), true)
             Os.setenv(REPACK_RELEASE_ENV, if (repackRelease) "1" else "0", true)
+            Os.setenv(MAPPED_EXPERTS_ENV, if (mappedExperts) "1" else "0", true)
             if (fastExperts != null) Os.setenv(MOE_EXPERTS_ENV, "$expertsKey=$fastExperts", true)
             else Os.unsetenv(MOE_EXPERTS_ENV)
             // Experts read from storage: where they are counted and how much of the most used to read
@@ -828,7 +834,12 @@ class LlamaCppRuntime(
                 } else {
                     ""
                 }) +
-                (if (lowMemory) " em modo de pouca memória" else "; cópia otimizada dos pesos na RAM") +
+                (when {
+                    lowMemory -> " em modo de pouca memória"
+                    mappedExperts -> "; especialistas MoE (${(layout?.expertBytes ?: 0L) / MB} MB) mapeados do arquivo, " +
+                        "cópia otimizada só dos pesos lidos a cada token"
+                    else -> "; cópia otimizada dos pesos na RAM"
+                }) +
                 (if (repackRelease) " (páginas do arquivo liberadas ao copiar)" else "") +
                 (if (plan.ubatch != RuntimeLimits.DEFAULT_UBATCH) "; micro-lote de ${plan.ubatch} tokens" else "") +
                 (if (fastExperts != null) "; modo rápido de MoE: $fastExperts especialistas por token em vez de ${layout?.expertUsedCount}" else "") +
@@ -856,7 +867,7 @@ class LlamaCppRuntime(
             )
             loadedModelId = model.id
             loadedKey = loadKey
-            loadedLayout = LoadedLayout(model.filePath, fileBytes, onDemandBytes, lowMemory, plan.streamsExperts)
+            loadedLayout = LoadedLayout(model.filePath, fileBytes, onDemandBytes, lowMemory || mappedExperts, plan.streamsExperts)
             loadedFastExperts = fastExperts
             contextReleased = false
             session = null
@@ -1009,6 +1020,7 @@ class LlamaCppRuntime(
         private const val EFFICIENCY_CPUS_ENV = "IAOFFLINE_EFFICIENCY_CPUS"
         private const val UBATCH_ENV = "IAOFFLINE_UBATCH"
         private const val REPACK_RELEASE_ENV = "IAOFFLINE_REPACK_RELEASE"
+        private const val MAPPED_EXPERTS_ENV = "IAOFFLINE_MAPPED_EXPERTS"
         private const val TURN_MARK_ENV = "IAOFFLINE_TURN_MARK"
         private const val CHECKPOINT_ENV = "IAOFFLINE_CHECKPOINT_MAX_MB"
         private const val MOE_EXPERTS_ENV = "IAOFFLINE_MOE_EXPERTS"

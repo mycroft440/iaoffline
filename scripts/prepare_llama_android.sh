@@ -3455,6 +3455,94 @@ path.write_text(text)
 print("Applied IA Offline expert reading (pread) and hot-experts patch")
 PY
 
+# 24. Mixtures of experts that fit in RAM but not with a copy of all their weights
+#     (IAOFFLINE_MAPPED_EXPERTS=1, set by the app instead of the low-memory mode): the experts stay
+#     mapped from the file, as in the low-memory mode, and only the weights read for every token
+#     (attention, short convolutions, dense layers, shared experts and the output) get the repacked
+#     copy that the fast ARM kernels (i8mm, KleidiAI) use. In LFM2.5 8B-A1B those are under 10% of the
+#     file but about half of what each token reads, the output alone (a 128K vocabulary) a quarter.
+#     Measured with this patched llama.cpp on that model (x86 AVX2, 4 threads): the answer 12.5 -> 13.5
+#     tokens/s and a message read 40.6 -> 46.8 tokens/s, with the same peak memory (4.82 GB against
+#     4.81 GB: the repacked weights' file pages are released) and the same perplexity with or without
+#     the release; the copy of every weight was 9.3 GB. On ARM the Q6_K output is repacked too
+#     (KleidiAI int8), so more of what each token reads gets the fast kernels.
+#     a) The binding overrides the experts to the plain CPU buffer, as for the experts read from storage.
+#     b) The loader keeps them mapped (no repacked copy), as with IAOFFLINE_MOE_STREAM.
+#     c) With IAOFFLINE_REPACK_RELEASE=1 the pages of each repacked tensor are dropped from the file as
+#        soon as they are copied, so the weights are in RAM once; the file is still read up front, so the
+#        experts are in memory before the first answer, as in the low-memory mode.
+python3 - "${AI_CHAT_FILE}" "${MODEL_FILE}" "${MODEL_LOADER_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = None
+text = ""
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp source shape in {path.name} (step 24): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+path = Path(sys.argv[1])
+text = path.read_text()
+replace_once(
+    "static bool iaoffline_moe_stream_mode() {\n"
+    "    const char *value = getenv(\"IAOFFLINE_MOE_STREAM\");\n"
+    "    return value != nullptr && value[0] == '1';\n"
+    "}\n",
+    "static bool iaoffline_moe_stream_mode() {\n"
+    "    const char *value = getenv(\"IAOFFLINE_MOE_STREAM\");\n"
+    "    return value != nullptr && value[0] == '1';\n"
+    "}\n\n"
+    "// Set by the app (IAOFFLINE_MAPPED_EXPERTS=1) for a mixture of experts that fits in RAM only without\n"
+    "// a copy of its experts: they stay mapped and the rest of the weights is repacked (step 24).\n"
+    "static bool iaoffline_mapped_experts_mode() {\n"
+    "    const char *value = getenv(\"IAOFFLINE_MAPPED_EXPERTS\");\n"
+    "    return value != nullptr && value[0] == '1';\n"
+    "}\n",
+)
+replace_once(
+    "    if (iaoffline_moe_stream_mode()) {\n"
+    "        // The experts stay mapped from the file, where they are read as the router picks them;\n",
+    "    if (iaoffline_moe_stream_mode() || (iaoffline_mapped_experts_mode() && !iaoffline_low_memory_mode())) {\n"
+    "        // The experts stay mapped from the file, where they are read as the router picks them;\n",
+)
+replace_once(
+    "        LOGi(\"%s: mixture of experts read from storage: experts mapped from the file\", __func__);\n",
+    "        LOGi(\"%s: mixture of experts %s: experts mapped from the file\", __func__,\n"
+    "             iaoffline_moe_stream_mode() ? \"read from storage\" : \"in RAM\");\n",
+)
+path.write_text(text)
+
+path = Path(sys.argv[2])
+text = path.read_text()
+replace_once(
+    "    const bool iaoffline_prefetch = (iaoffline_moe_stream == nullptr || iaoffline_moe_stream[0] != '1') &&\n"
+    "                                    (iaoffline_repack_release == nullptr || iaoffline_repack_release[0] != '1');\n",
+    "    // A mixture of experts in RAM with mapped experts (IAOFFLINE_MAPPED_EXPERTS) still reads its file up\n"
+    "    // front: its experts must be in memory, and only the repacked weights' pages are released.\n"
+    "    const char * iaoffline_mapped_experts = getenv(\"IAOFFLINE_MAPPED_EXPERTS\");\n"
+    "    const bool iaoffline_mapped = iaoffline_mapped_experts != nullptr && iaoffline_mapped_experts[0] == '1';\n"
+    "    const bool iaoffline_prefetch = (iaoffline_moe_stream == nullptr || iaoffline_moe_stream[0] != '1') &&\n"
+    "                                    (iaoffline_repack_release == nullptr || iaoffline_repack_release[0] != '1' ||\n"
+    "                                     iaoffline_mapped);\n",
+)
+path.write_text(text)
+
+path = Path(sys.argv[3])
+text = path.read_text()
+replace_once(
+    "                    const bool iaoffline_keep_mapped = iaoffline_moe_stream != nullptr && iaoffline_moe_stream[0] == '1';\n",
+    "                    const char * iaoffline_mapped_experts = getenv(\"IAOFFLINE_MAPPED_EXPERTS\");\n"
+    "                    const bool iaoffline_keep_mapped = (iaoffline_moe_stream != nullptr && iaoffline_moe_stream[0] == '1') ||\n"
+    "                                                       (iaoffline_mapped_experts != nullptr && iaoffline_mapped_experts[0] == '1');\n",
+)
+path.write_text(text)
+print("Applied IA Offline mapped-experts patch")
+PY
+
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
 chmod +x ./gradlew
 ./gradlew :lib:assembleRelease --no-daemon

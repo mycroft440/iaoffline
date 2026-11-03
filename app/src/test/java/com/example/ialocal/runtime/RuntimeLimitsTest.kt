@@ -250,6 +250,84 @@ class RuntimeLimitsTest {
         assertTrue(crashed.lowMemory)
     }
 
+    /** LFM2.5 8B-A1B Q4_0: 4.84 GB, 4.36 GB of experts; the rest (Q4_0 and a Q6_K output) is read every token. */
+    private val lfm25Weights = RuntimeLimits.WeightProfile(
+        known = true,
+        repackableBytes = 4_830_000_000L,
+        fixedRepackableBytes = 470_000_000L,
+        requantizedBytes = 215_000_000L,
+        largestRequantizedValues = 262_144_000L,
+        recurrent = true,
+    )
+
+    private fun planLfm25(memory: MemorySnapshot, performance: PerformanceLevel, safeLevel: Int = 0, blocked: Boolean = false) =
+        RuntimeLimits.planMemory(
+            4_844_678_368L,
+            memory,
+            expertBytes = 4_360_000_000L,
+            safeLevel = safeLevel,
+            weights = lfm25Weights,
+            tuning = RuntimeTuning(performance = performance),
+            performanceBlocked = blocked,
+        )
+
+    @Test
+    fun aMixtureOfExpertsWithoutRoomForTheFullCopyRepacksOnlyTheWeightsEveryTokenReads() {
+        // 12 GB phone: a copy of the whole model is not kept, but the experts stay mapped as in the
+        // low-memory mode and the rest gets the optimized copy, its file pages released as copied.
+        val auto = planLfm25(memory(11.2, 5.0), PerformanceLevel.AUTO)
+        assertTrue(auto.fits)
+        assertFalse(auto.streamsExperts)
+        assertTrue(auto.mappedExperts)
+        assertFalse(auto.lowMemory)
+        assertTrue(auto.repackRelease)
+        // The maximum level still keeps the copy of every weight when it fits.
+        val max = planLfm25(memory(11.2, 5.0), PerformanceLevel.MAX)
+        assertFalse(max.lowMemory)
+        assertFalse(max.mappedExperts)
+
+        // Economy and the rules from before the setting keep everything in the file, as does a model
+        // whose optimized copy, or anything else, made the AI process close.
+        for (plan in listOf(
+            planLfm25(memory(11.2, 5.0), PerformanceLevel.ECONOMY),
+            planLfm25(memory(11.2, 5.0), PerformanceLevel.BALANCED),
+            planLfm25(memory(11.2, 5.0), PerformanceLevel.AUTO, blocked = true),
+            planLfm25(memory(11.2, 5.0), PerformanceLevel.AUTO, safeLevel = 1),
+        )) {
+            assertTrue(plan.lowMemory)
+            assertFalse(plan.mappedExperts)
+            assertFalse(plan.repackRelease)
+        }
+    }
+
+    @Test
+    fun aMixtureOfExpertsWithRoomForTheFullCopyKeepsIt() {
+        // 16 GB phone: the copy of every weight, experts included.
+        val plan = planLfm25(memory(15.0, 11.0), PerformanceLevel.AUTO)
+        assertFalse(plan.lowMemory)
+        assertFalse(plan.mappedExperts)
+    }
+
+    @Test
+    fun onlyMixturesOfExpertsMapTheirExpertsInRam() {
+        // A dense 8B on the same 12 GB phone stays in the low-memory mode.
+        val dense = RuntimeLimits.planMemory(
+            4_900_000_000L,
+            memory(11.2, 5.0),
+            expertBytes = 0,
+            safeLevel = 0,
+            weights = q4Weights.copy(repackableBytes = 4_900_000_000L),
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+        )
+        assertTrue(dense.lowMemory)
+        assertFalse(dense.mappedExperts)
+        // Without room for the copy plus the headroom the automatic level keeps, nothing is copied.
+        val tight = planLfm25(memory(9.5, 4.0), PerformanceLevel.AUTO)
+        assertFalse(tight.streamsExperts)
+        assertFalse(tight.mappedExperts)
+        assertTrue(tight.lowMemory)
+    }
+
     @Test
     fun weightsWithoutRepackedKernelsGainNothingFromTheCopy() {
         // A Q3_K_M file: little of it is of a repackable type.

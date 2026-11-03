@@ -158,6 +158,13 @@ object RuntimeLimits {
          * those pages again, so they do not make the AI process a target for Android.
          */
         val expertPreloadBytes: Long = 0L,
+        /**
+         * A mixture of experts that fits in RAM only without a copy of all its weights: instead of the
+         * low-memory mode, its experts stay mapped from the file and only the weights read for every
+         * token get the optimized copy (IAOFFLINE_MAPPED_EXPERTS, step 24 of the native patch), their
+         * file pages released as they are copied ([repackRelease]), so the model is in RAM about once.
+         */
+        val mappedExperts: Boolean = false,
     )
 
     /**
@@ -257,15 +264,30 @@ object RuntimeLimits {
         } else {
             kvBudget
         }
+        val finalKv = safeKvBudgetBytes(boostedKv, safeLevel)
+        // A mixture of experts left without the optimized copy: the copy of only the weights read for
+        // every token (about half of what a token reads in LFM2.5 8B-A1B, under a tenth of the file),
+        // the experts mapped as in the low-memory mode. Their file pages are released as they are
+        // copied, so this costs the difference between the copy and those pages, plus the int8
+        // staging of the largest requantized tensor while it is repacked.
+        val mappedDemand = residentWeightsBytes - weights.fixedRepackableBytes + weights.fixedRepackedCopyBytes +
+            stagingBytes + finalKv + working
+        val mappedExperts = lowMemory && safeLevel == 0 && expertBytes > 0 && weights.known &&
+            weights.fixedRepackableBytes > 0 && when (performance) {
+                PerformanceLevel.AUTO -> mappedDemand + TUNING_HEADROOM_BYTES <= budget
+                PerformanceLevel.MAX -> mappedDemand <= budget
+                else -> false
+            }
         return MemoryPlan(
             budgetBytes = budget,
-            lowMemory = lowMemory,
-            kvBudgetBytes = safeKvBudgetBytes(boostedKv, safeLevel),
+            lowMemory = lowMemory && !mappedExperts,
+            kvBudgetBytes = finalKv,
             fits = minimum <= budget,
             minimumBytes = minimum,
             ubatch = ubatch,
-            repackRelease = !lowMemory && !repackFitsTwice,
+            repackRelease = mappedExperts || (!lowMemory && !repackFitsTwice),
             longContextBytes = if (safeLevel > 0) 0L else boostedKv - kvBudget,
+            mappedExperts = mappedExperts,
         )
     }
 
