@@ -258,6 +258,8 @@ class RuntimeLimitsTest {
         requantizedBytes = 215_000_000L,
         largestRequantizedValues = 262_144_000L,
         recurrent = true,
+        expertLayers = 22,
+        expertRepackableBytes = 4_360_000_000L,
     )
 
     private fun planLfm25(memory: MemorySnapshot, performance: PerformanceLevel, safeLevel: Int = 0, blocked: Boolean = false) =
@@ -281,6 +283,9 @@ class RuntimeLimitsTest {
         assertTrue(auto.mappedExperts)
         assertFalse(auto.lowMemory)
         assertTrue(auto.repackRelease)
+        // Within the 35% of the RAM the automatic level allows a copy Android cannot drop, 18 of the
+        // 22 expert layers get it as well (their file pages released, so the RAM in use is the same).
+        assertEquals(18, auto.repackedExpertLayers)
         // The maximum level still keeps the copy of every weight when it fits.
         val max = planLfm25(memory(11.2, 5.0), PerformanceLevel.MAX)
         assertFalse(max.lowMemory)
@@ -297,7 +302,58 @@ class RuntimeLimitsTest {
             assertTrue(plan.lowMemory)
             assertFalse(plan.mappedExperts)
             assertFalse(plan.repackRelease)
+            assertEquals(0, plan.repackedExpertLayers)
         }
+    }
+
+    @Test
+    fun expertLayersAreCopiedOnlyOnPhonesWhereTheAutomaticLevelKeepsCopies() {
+        // A 3 GB mixture of experts on a 10 GB phone: the weights read for every token get the copy,
+        // the experts do not (the automatic level keeps copies from 12 GB up).
+        val small = RuntimeLimits.WeightProfile(
+            known = true,
+            repackableBytes = 3_000_000_000L,
+            fixedRepackableBytes = 300_000_000L,
+            requantizedBytes = 100_000_000L,
+            largestRequantizedValues = 130_000_000L,
+            expertLayers = 24,
+            expertRepackableBytes = 2_700_000_000L,
+        )
+        val plan = RuntimeLimits.planMemory(
+            3_000_000_000L,
+            memory(9.5, 4.0),
+            expertBytes = 2_700_000_000L,
+            safeLevel = 0,
+            weights = small,
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+        )
+        assertTrue(plan.mappedExperts)
+        assertEquals(0, plan.repackedExpertLayers)
+
+        // Experts of a type without repacked kernels (Q3_K) gain nothing from a copy.
+        val q3Experts = RuntimeLimits.planMemory(
+            4_844_678_368L,
+            memory(11.2, 5.0),
+            expertBytes = 4_360_000_000L,
+            safeLevel = 0,
+            weights = lfm25Weights.copy(expertRepackableBytes = 0L),
+            tuning = RuntimeTuning(performance = PerformanceLevel.AUTO),
+        )
+        assertTrue(q3Experts.mappedExperts)
+        assertEquals(0, q3Experts.repackedExpertLayers)
+    }
+
+    @Test
+    fun theMappedExpertsPatternNamesOnlyTheLayersLeftInTheFile() {
+        val pattern = RuntimeLimits.mappedExpertsPattern(listOf(20, 21, 22, 23))
+        assertEquals("^blk\\.(20|21|22|23)\\.ffn_(up|down|gate|gate_up)_(ch|)exps", pattern)
+        val regex = Regex(pattern)
+        assertTrue(regex.containsMatchIn("blk.20.ffn_up_exps.weight"))
+        assertTrue(regex.containsMatchIn("blk.23.ffn_gate_up_exps.weight"))
+        assertFalse(regex.containsMatchIn("blk.2.ffn_up_exps.weight"))
+        assertFalse(regex.containsMatchIn("blk.120.ffn_up_exps.weight"))
+        assertFalse(regex.containsMatchIn("blk.20.ffn_up.weight"))
+        assertFalse(Regex(RuntimeLimits.mappedExpertsPattern(emptyList())).containsMatchIn("blk.2.ffn_up_exps.weight"))
     }
 
     @Test

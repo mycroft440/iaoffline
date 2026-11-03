@@ -154,7 +154,7 @@ class ModelCatalogTest {
         assertFalse(model.isExperimental)
         assertEquals(ModelProvider.ARCEE, model.provider)
         assertTrue(model.totalParametersBillions <= 14.0)
-        assertTrue(model.downloadUrl.startsWith("https://huggingface.co/mradermacher/Dolphin-X1-Trinity-Nano-GGUF/"))
+        assertTrue(model.downloadUrl.startsWith("https://huggingface.co/mradermacher/Dolphin-X1-Trinity-Nano-i1-GGUF/"))
         assertTrue(model.sha256.matches(Regex("^[0-9a-f]{64}$")))
     }
 

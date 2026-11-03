@@ -65,6 +65,8 @@ class DeepThinkTest {
             model("Ornith 1.5 9B", "local-catalog-ornith1.5-9b-iq4-xs-1", "qwen35"),
             model("meu-finetune", "local-meu-finetune-1", "qwen35moe"),
             model("MiniCPM5 2B", "local-catalog-minicpm5-2b-q4-k-m-1", "llama"),
+            model("LFM2.5 8B-A1B", "local-catalog-lfm2.5-8b-a1b-q4-k-m-1", "lfm2moe"),
+            model("LFM2.5-8B-A1B-Q4_0", "local-lfm2.5-8b-a1b-q4_0-1", "lfm2moe"),
         ).forEach { model ->
             val capability = DeepThinkSupport.capability(model)
             assertEquals(model.name, DeepThinkControlMode.HYBRID_THINKING, capability.mode)
@@ -87,6 +89,19 @@ class DeepThinkTest {
         val granite = model("Granite 4.2 8B", "local-catalog-granite4.2-8b-q3-k-m-1", "granite")
         assertEquals("<think></think>", DeepThinkSupport.plan(granite, 8192, false, DeepThinkLevel.HIGH).assistantPrefix)
         assertEquals("<think>\n", DeepThinkSupport.plan(granite, 8192, true, DeepThinkLevel.HIGH).assistantPrefix)
+    }
+
+    @Test
+    fun otherLiquidModelsKeepTheirBehaviour() {
+        // LFM2 8B-A1B answers directly; only the LFM2.5 8B-A1B reasoning was checked with the prefill.
+        assertEquals(
+            DeepThinkControlMode.NONE,
+            DeepThinkSupport.capability(model("LFM2 8B-A1B", "local-catalog-lfm2-8b-a1b-q4-k-m-1", "lfm2moe")).mode,
+        )
+        assertEquals(
+            DeepThinkControlMode.NONE,
+            DeepThinkSupport.capability(model("LFM2.5 2.6B", "local-catalog-lfm2.5-2.6b-q4-k-m-1", "lfm2")).mode,
+        )
     }
 
     @Test

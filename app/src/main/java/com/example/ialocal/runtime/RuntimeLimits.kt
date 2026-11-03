@@ -117,6 +117,11 @@ object RuntimeLimits {
         val requantizedBytes: Long = 0L,
         val largestRequantizedValues: Long = 0L,
         val recurrent: Boolean = false,
+        /** Layers with expert weights. */
+        val expertLayers: Int = 0,
+        /** Expert weights of the types the ARM kernels repack, and the Q6_K/Q8_0 part of them. */
+        val expertRepackableBytes: Long = 0L,
+        val expertRequantizedBytes: Long = 0L,
     ) {
         /** Anonymous memory of the repacked copy of [repackableBytes]. */
         val repackedCopyBytes: Long
@@ -165,6 +170,13 @@ object RuntimeLimits {
          * file pages released as they are copied ([repackRelease]), so the model is in RAM about once.
          */
         val mappedExperts: Boolean = false,
+        /**
+         * With [mappedExperts], how many expert layers also get the optimized copy (the first ones;
+         * the others stay mapped), within the share of the RAM the automatic level allows a copy that
+         * Android cannot drop. Their file pages are released as they are copied, so the RAM in use
+         * stays about the same; reading a message gains the most.
+         */
+        val repackedExpertLayers: Int = 0,
     )
 
     /**
@@ -272,12 +284,18 @@ object RuntimeLimits {
         // staging of the largest requantized tensor while it is repacked.
         val mappedDemand = residentWeightsBytes - weights.fixedRepackableBytes + weights.fixedRepackedCopyBytes +
             stagingBytes + finalKv + working
+        val headroom = if (performance == PerformanceLevel.AUTO) TUNING_HEADROOM_BYTES else 0L
         val mappedExperts = lowMemory && safeLevel == 0 && expertBytes > 0 && weights.known &&
-            weights.fixedRepackableBytes > 0 && when (performance) {
-                PerformanceLevel.AUTO -> mappedDemand + TUNING_HEADROOM_BYTES <= budget
-                PerformanceLevel.MAX -> mappedDemand <= budget
-                else -> false
-            }
+            weights.fixedRepackableBytes > 0 &&
+            (performance == PerformanceLevel.AUTO || performance == PerformanceLevel.MAX) &&
+            mappedDemand + headroom <= budget
+        val repackedExpertLayers = if (mappedExperts) {
+            repackedExpertLayers(expertBytes, weights, memory, performance, budget - headroom - mappedDemand)
+        } else {
+            0
+        }
+        // Every expert layer fits: that is the copy of every weight, the file released as it is copied.
+        val allRepacked = mappedExperts && repackedExpertLayers >= weights.expertLayers
         return MemoryPlan(
             budgetBytes = budget,
             lowMemory = lowMemory && !mappedExperts,
@@ -287,8 +305,51 @@ object RuntimeLimits {
             ubatch = ubatch,
             repackRelease = mappedExperts || (!lowMemory && !repackFitsTwice),
             longContextBytes = if (safeLevel > 0) 0L else boostedKv - kvBudget,
-            mappedExperts = mappedExperts,
+            mappedExperts = mappedExperts && !allRepacked,
+            repackedExpertLayers = if (allRepacked) 0 else repackedExpertLayers,
         )
+    }
+
+    /**
+     * The tensor-override pattern (IAOFFLINE_MAPPED_EXPERTS_PATTERN) of the expert weights that stay
+     * mapped from the file: those of [mappedLayers]. One that matches nothing when the list is empty.
+     */
+    fun mappedExpertsPattern(mappedLayers: List<Int>): String =
+        if (mappedLayers.isEmpty()) "^$" else "^blk\\.(${mappedLayers.joinToString("|")})\\.ffn_(up|down|gate|gate_up)_(ch|)exps"
+
+    /**
+     * Expert layers that also get the optimized copy when the experts are otherwise mapped: as many as
+     * keep the whole copy (with that of the weights read for every token) within
+     * [AUTO_PERFORMANCE_MAX_RAM_FRACTION] of the RAM on phones of [AUTO_PERFORMANCE_MIN_GB] and up, the
+     * limit the automatic level already sets for a copy Android cannot drop; at the maximum level, as
+     * many as fit. Each copied layer's file pages are released, so it only adds what the int8 copy of
+     * Q6_K/Q8_0 experts takes beyond them ([spareBytes] must cover that). Only when every expert is of
+     * a repackable type, so that the layers are alike.
+     */
+    private fun repackedExpertLayers(
+        expertBytes: Long,
+        weights: WeightProfile,
+        memory: MemorySnapshot,
+        performance: PerformanceLevel,
+        spareBytes: Long,
+    ): Int {
+        val layers = weights.expertLayers
+        if (layers <= 0 || weights.expertRepackableBytes < expertBytes) return 0
+        val layerBytes = expertBytes / layers
+        val layerCopy = layerBytes + ((REQUANTIZED_EXPANSION - 1.0) * weights.expertRequantizedBytes / layers).toLong()
+        if (layerBytes <= 0) return 0
+        val byShare = when (performance) {
+            PerformanceLevel.AUTO -> if (memory.advertisedGigabytes >= AUTO_PERFORMANCE_MIN_GB) {
+                ((AUTO_PERFORMANCE_MAX_RAM_FRACTION * memory.totalBytes - weights.fixedRepackedCopyBytes) / layerCopy).toLong()
+            } else {
+                0L
+            }
+            PerformanceLevel.MAX -> layers.toLong()
+            else -> 0L
+        }
+        val extra = layerCopy - layerBytes
+        val byBudget = if (extra <= 0) layers.toLong() else spareBytes / extra
+        return minOf(byShare, byBudget, layers.toLong()).coerceAtLeast(0L).toInt()
     }
 
     /**

@@ -85,6 +85,9 @@ object DeepThinkSupport {
             // Their templates reason by default; turning it off answers much faster on a phone.
             QWEN35_FAMILY.containsMatchIn(identity) || MINICPM5.containsMatchIn(identity) ->
                 switchable(ThinkingSwitch.THINK_PREFILL, defaultEnabled = true)
+            // LFM2.5 8B-A1B always opens a reasoning block; an empty one prefilled makes it answer at
+            // once, in about a quarter of the tokens on short questions (284 -> 64 in a test).
+            LFM25_8B.containsMatchIn(identity) -> switchable(ThinkingSwitch.THINK_PREFILL, defaultEnabled = true)
             GRANITE_42.containsMatchIn(identity) -> switchable(ThinkingSwitch.GRANITE_PREFILL, defaultEnabled = true)
             // Laguna's template opens (<think>) or closes (</think>) the reasoning from its flag.
             GEMMA_4.containsMatchIn(identity) || LAGUNA.containsMatchIn(identity) ->
@@ -147,6 +150,7 @@ object DeepThinkSupport {
     /** Qwen3.5, 3.6, 3.8 and models built on them (Ornith, FrogNano…), by name or architecture. */
     private val QWEN35_FAMILY = Regex("qwen3[.]\\d|\\bqwen35|ornith")
     private val MINICPM5 = Regex("minicpm[- ]?5")
+    private val LFM25_8B = Regex("lfm-?2[.]5[- _]?8b")
     private val GRANITE_42 = Regex("granite[- ]?4[.]2")
     private val GEMMA_4 = Regex("gemma[- ]?4")
     private val LAGUNA = Regex("laguna")

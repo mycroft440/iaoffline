@@ -184,6 +184,52 @@ class GgufInspectorTest {
     }
 
     @Test
+    fun listsTheLayersOfTheExperts() {
+        val header = ByteArrayOutputStream().apply {
+            write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+            u32(3)
+            u64(5)
+            u64(0)
+            tensor("blk.0.ffn_down.weight", offset = 0, type = 2) // dense layer, Q4_0
+            tensor("blk.3.ffn_gate_exps.weight", offset = 1024, type = 2) // Q4_0
+            tensor("blk.1.ffn_down_exps.weight", offset = 2048, type = 8) // Q8_0
+            tensor("blk.3.ffn_up_exps.weight", offset = 3072, type = 11) // Q3_K: no ARM repack
+            tensor("blk.10.ffn_up_exps.weight", offset = 4096, type = 2)
+        }.toByteArray()
+        val dataStart = (header.size + 31) / 32 * 32
+
+        val metadata = inspector.inspect(ByteArrayInputStream(header), totalBytes = dataStart + 5120L)
+
+        assertEquals(listOf(1, 3, 10), metadata.expertLayers)
+        assertEquals(4096L, metadata.expertBytes)
+        assertEquals(3072L, metadata.expertRepackableBytes)
+        assertEquals(1024L, metadata.expertRequantizedBytes)
+        assertEquals(1024L, metadata.fixedRepackableBytes)
+    }
+
+    /** Runs on the LFM2.5 8B-A1B Q4_0 GGUF of the catalog when IAOFFLINE_LFM25_MOE_FILE points to it. */
+    @Test
+    fun realLfm25MixtureOfExpertsReadsAFractionOfItsFileForEveryToken() {
+        val path = System.getenv("IAOFFLINE_LFM25_MOE_FILE")
+        Assume.assumeTrue("IAOFFLINE_LFM25_MOE_FILE not set", path != null)
+        val file = File(requireNotNull(path))
+
+        val metadata = inspector.inspect(file)
+
+        println(
+            "${file.name}: ${metadata.expertBytes} bytes of experts in ${metadata.expertLayers.size} layers, " +
+                "${metadata.fixedRepackableBytes} repackable outside them, ${metadata.requantizedBytes} Q6_K/Q8_0",
+        )
+        // 22 expert layers after 2 dense ones, all Q4_0; a tied Q6_K embedding and output.
+        assertEquals((2..23).toList(), metadata.expertLayers)
+        assertEquals(metadata.expertBytes, metadata.expertRepackableBytes)
+        assertEquals(0L, metadata.expertRequantizedBytes)
+        assertEquals(4.36, metadata.expertBytes / 1e9, 0.01)
+        assertTrue(metadata.fixedRepackableBytes < file.length() / 10)
+        assertTrue(metadata.recurrent)
+    }
+
+    @Test
     fun denseModelsHaveNoExperts() {
         val bytes = ByteArrayOutputStream().apply {
             write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))

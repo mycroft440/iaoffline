@@ -86,8 +86,9 @@ fun PerformanceScreen(
                     description = "Guarda na RAM uma cópia dos pesos no formato rápido dos processadores ARM. A mensagem " +
                         "é lida até 2x mais rápido em modelos Q4_0 e Q4_K_M; o Android não consegue liberar essa " +
                         "memória sem fechar a IA. Pouco ganho em arquivos Q3_K, IQ3 e Q2. Em modelos MoE (como o " +
-                        "LFM2.5 8B-A1B), quando a cópia inteira não cabe, só os pesos lidos a cada palavra ganham a " +
-                        "cópia e os especialistas ficam no arquivo: mais rápido, com a mesma RAM.",
+                        "LFM2.5 8B-A1B), quando a cópia inteira não cabe, ganham a cópia os pesos lidos a cada palavra " +
+                        "e, em celulares de 12 GB ou mais, parte dos especialistas; o resto fica no arquivo e as " +
+                        "páginas copiadas são liberadas, então a RAM em uso não aumenta.",
                     options = listOf(
                         PerformanceLevel.AUTO to "Automático (celulares a partir de 12 GB)",
                         PerformanceLevel.ECONOMY to "Economizar memória",

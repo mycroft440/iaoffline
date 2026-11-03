@@ -52,6 +52,12 @@ class GgufInspector {
         val expertUsedCount: Int? = null,
         /** The key of [expertUsedCount] as the file names it, for that override. */
         val expertUsedCountKey: String? = null,
+        /** Layers with expert weights ("blk.N.ffn_*_exps"), in order; empty for a dense model. */
+        val expertLayers: List<Int> = emptyList(),
+        /** The part of [expertBytes] of the types the ARM kernels repack. */
+        val expertRepackableBytes: Long = 0L,
+        /** The part of [expertRepackableBytes] in Q6_K or Q8_0, which KleidiAI stores as int8. */
+        val expertRequantizedBytes: Long = 0L,
     )
 
     fun inspect(file: File): Metadata =
@@ -140,6 +146,9 @@ class GgufInspector {
             expertCount = architecture?.let { expertCounts[it + EXPERT_COUNT_SUFFIX] },
             expertUsedCount = expertUsedKey?.let { expertCounts[it] },
             expertUsedCountKey = expertUsedKey,
+            expertLayers = tensorBytes.expertLayers,
+            expertRepackableBytes = tensorBytes.expertRepackable,
+            expertRequantizedBytes = tensorBytes.expertRequantized,
         )
     }
 
@@ -150,6 +159,9 @@ class GgufInspector {
         val fixedRepackable: Long = 0L,
         val requantized: Long = 0L,
         val largestRequantizedValues: Long = 0L,
+        val expertLayers: List<Int> = emptyList(),
+        val expertRepackable: Long = 0L,
+        val expertRequantized: Long = 0L,
     )
 
     /**
@@ -164,6 +176,7 @@ class GgufInspector {
         val values = LongArray(count)
         val onDemand = BooleanArray(count)
         val expert = BooleanArray(count)
+        val expertLayers = sortedSetOf<Int>()
         for (index in 0 until count) {
             val name = readString(input, 64 * 1024)
             val dimensions = readU32(input)
@@ -175,6 +188,7 @@ class GgufInspector {
             offsets[index] = readU64(input)
             onDemand[index] = name in ON_DEMAND_TENSORS
             expert[index] = EXPERT_TENSOR.containsMatchIn(name)
+            if (expert[index]) LAYER_PREFIX.find(name)?.groupValues?.get(1)?.toIntOrNull()?.let { expertLayers += it }
         }
         val dataStart = (input.count + alignment - 1) / alignment * alignment
         val dataEnd = totalBytes?.minus(dataStart)
@@ -192,6 +206,8 @@ class GgufInspector {
         var fixedRepackable = 0L
         var requantized = 0L
         var largestRequantized = 0L
+        var expertRepackable = 0L
+        var expertRequantized = 0L
         for (index in 0 until count) {
             val size = sizeOf(index)
             if (onDemand[index]) {
@@ -201,13 +217,17 @@ class GgufInspector {
             if (expert[index]) expertBytes += size
             if (types[index] !in REPACKABLE_TYPES) continue
             repackable += size
-            if (!expert[index]) fixedRepackable += size
+            if (!expert[index]) fixedRepackable += size else expertRepackable += size
             if (types[index] in REQUANTIZED_TYPES) {
                 requantized += size
+                if (expert[index]) expertRequantized += size
                 largestRequantized = maxOf(largestRequantized, values[index])
             }
         }
-        return TensorBytes(onDemandBytes, expertBytes, repackable, fixedRepackable, requantized, largestRequantized)
+        return TensorBytes(
+            onDemandBytes, expertBytes, repackable, fixedRepackable, requantized, largestRequantized,
+            expertLayers.toList(), expertRepackable, expertRequantized,
+        )
     }
 
     private fun readValue(input: InputStream, type: Int, materialize: Boolean): Any? = when (type) {
@@ -319,6 +339,8 @@ class GgufInspector {
         val ON_DEMAND_TENSORS = setOf("per_layer_token_embd.weight")
         /** Expert weights, named as llama.cpp's --cpu-moe matches them ("blk.3.ffn_down_exps.weight"). */
         val EXPERT_TENSOR = Regex("\\.ffn_(up|down|gate|gate_up)_(ch|)exps")
+        /** The layer of a tensor named "blk.N....". */
+        val LAYER_PREFIX = Regex("^blk\\.(\\d+)\\.")
         /**
          * ggml types with repacked ARM kernels in the pinned llama.cpp (ggml-cpu repack and KleidiAI):
          * Q4_0, Q8_0, Q4_K, Q5_K, Q6_K, IQ4_NL, MXFP4 and Q1_0.

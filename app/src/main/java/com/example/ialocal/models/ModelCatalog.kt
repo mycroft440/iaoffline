@@ -703,7 +703,7 @@ object ModelCatalog {
             recommendedRamBytes = 8_000_000_000L,
             totalParametersBillions = 8.0,
             activeParametersBillions = 1.0,
-            description = "LFM2.5 MoE com 8B totais e cerca de 1B ativo, criado para edge com baixa latência e boa eficiência por token. Versão Q4_0 oficial da Liquid AI, o formato mais rápido nos processadores ARM.",
+            description = "LFM2.5 MoE com 8B totais e cerca de 1B ativo, criado para edge com baixa latência e boa eficiência por token. Versão Q4_0 oficial da Liquid AI, o formato mais rápido nos processadores ARM. Raciocina antes de responder; com o DeepThink desligado responde direto, em cerca de um quarto dos tokens nas perguntas curtas.",
         ),
         CatalogModel(
             id = "lfm2.5-24b-a2b-qad-q4-0",
