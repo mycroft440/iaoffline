@@ -3571,6 +3571,266 @@ path.write_text(text)
 print("Applied IA Offline mapped-experts patch")
 PY
 
+# 25. Weights repacked by several threads while the model loads. ggml's CPU_REPACK buffer converted
+#     each tensor in one loop on one thread: with the experts of a mixture of experts in the copy
+#     (step 24 d), loading LFM2.5 8B-A1B took about 4 s more than without them on an x86 PC, nearly all
+#     of it in that loop. Every interleaved format groups 4, 8 or 16 consecutive rows and the copy has
+#     the size of the original, so a tensor of 8 MB and up is split into ranges of whole 16-row groups,
+#     each repacked by its own thread (up to 8) into the same place it would have taken; the result is
+#     the same, byte for byte.
+python3 - "${LLAMA_DIR}/ggml/src/ggml-cpu/repack.cpp" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp source shape in {path.name} (step 25): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+replace_once(
+    "#include <cstdio>  // for GGML_ASSERT\n",
+    "#include <cstdio>  // for GGML_ASSERT\n#include <algorithm>\n#include <atomic>\n#include <thread>\n#include <vector>\n",
+)
+replace_once(
+    """    auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
+    auto OK            = tensor_traits->repack(tensor, data, size);
+
+    GGML_ASSERT(OK == 0);
+""",
+    """    auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
+
+    // IA Offline (step 25): a large tensor is repacked by several threads, each a range of whole
+    // 16-row groups (every interleaved format groups 4, 8 or 16 rows; the copy has the original's size).
+    const int64_t nrows    = ggml_nrows(tensor);
+    const size_t  row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+    const int     n_threads = (int) std::min<unsigned>(8, std::max(1u, std::thread::hardware_concurrency()));
+    constexpr int64_t row_align = 16;
+    if (n_threads > 1 && size >= ((size_t) 8 << 20) && tensor->ne[1] % row_align == 0 && row_size * (size_t) nrows == size) {
+        const int64_t groups = nrows / row_align;
+        const int64_t per    = (groups + n_threads - 1) / n_threads * row_align;
+        std::atomic<int> failed{0};
+        std::vector<std::thread> workers;
+        for (int64_t start = 0; start < nrows; start += per) {
+            const int64_t rows = std::min(per, nrows - start);
+            workers.emplace_back([=, &failed] {
+                ggml_tensor part = *tensor;
+                part.data  = (char *) tensor->data + start * row_size;
+                part.ne[1] = rows;
+                part.ne[2] = 1;
+                part.ne[3] = 1;
+                part.nb[2] = part.nb[1] * rows;
+                part.nb[3] = part.nb[2];
+                if (tensor_traits->repack(&part, (const char *) data + start * row_size, rows * row_size) != 0) {
+                    failed++;
+                }
+            });
+        }
+        for (auto & worker : workers) {
+            worker.join();
+        }
+        GGML_ASSERT(failed.load() == 0);
+    } else {
+        auto OK = tensor_traits->repack(tensor, data, size);
+        GGML_ASSERT(OK == 0);
+    }
+""",
+)
+path.write_text(text)
+print("Applied IA Offline parallel repack patch")
+PY
+
+# 26. Transparent huge pages for the repacked copy of the weights (CPU_REPACK and, on ARM, KleidiAI
+#     buffers of 64 MB and up): each token reads hundreds of MB spread over the copy, and with 4 KB
+#     pages most of those reads also miss the TLB. MADV_HUGEPAGE asks the kernel for 2 MB pages when the
+#     copy is first written; Android's generic kernel (GKI) builds THP in this madvise-only mode. Where
+#     the kernel has no THP the call fails and nothing changes, and the memory used is the same.
+#     Measured on LFM2.5 8B-A1B with 18 of 22 expert layers copied (x86, THP in madvise mode): the answer
+#     2-7% faster (13.3 -> 14.1 tokens/s on average through the app's binding), about 2 s more to load
+#     (the kernel zeroes 2 MB pages). IAOFFLINE_THP=0 turns it off.
+python3 - "${LLAMA_DIR}/ggml/src/ggml-cpu/repack.cpp" "${LLAMA_DIR}/ggml/src/ggml-cpu/kleidiai/kleidiai.cpp" <<'PY'
+from pathlib import Path
+import sys
+
+HELPER = r'''// IA Offline (step 26): transparent huge pages for a large repacked copy of the weights.
+static void iaoffline_advise_huge_pages(ggml_backend_buffer_t buffer, size_t size) {
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    const char * env = getenv("IAOFFLINE_THP");
+    if ((env != nullptr && env[0] == '0') || size < ((size_t) 64 << 20)) {
+        return;
+    }
+    const uintptr_t huge  = (uintptr_t) 2 << 20;
+    const uintptr_t base  = (uintptr_t) ggml_backend_buffer_get_base(buffer);
+    const uintptr_t first = (base + huge - 1) & ~(huge - 1);
+    const uintptr_t last  = (base + size) & ~(huge - 1);
+    if (last > first) {
+        madvise((void *) first, last - first, MADV_HUGEPAGE);
+    }
+#else
+    (void) buffer;
+    (void) size;
+#endif
+}
+
+'''
+
+def patch(path: Path, include_anchor: str, alloc_name: str, init_name: str) -> None:
+    text = path.read_text()
+
+    def replace_once(old: str, new: str) -> None:
+        nonlocal text
+        count = text.count(old)
+        if count != 1:
+            raise SystemExit(f"Unexpected llama.cpp source shape in {path.name} (step 26): expected 1 match, got {count}")
+        text = text.replace(old, new, 1)
+
+    replace_once(include_anchor, include_anchor + "#include <cstdlib>\n#if defined(__linux__)\n#include <sys/mman.h>\n#endif\n")
+    replace_once(f"static ggml_backend_buffer_t {alloc_name}(", HELPER + f"static ggml_backend_buffer_t {alloc_name}(")
+    replace_once(
+        f"    buffer->buft              = buft;\n    buffer->iface.init_tensor = {init_name};\n",
+        f"    buffer->buft              = buft;\n    iaoffline_advise_huge_pages(buffer, size);\n    buffer->iface.init_tensor = {init_name};\n",
+    )
+    path.write_text(text)
+
+patch(Path(sys.argv[1]), "#include <cstdio>  // for GGML_ASSERT\n",
+      "ggml_backend_cpu_repack_buffer_type_alloc_buffer", "ggml_backend_cpu_repack_buffer_init_tensor")
+patch(Path(sys.argv[2]), "#include <cstdio>\n",
+      "ggml_backend_cpu_kleidiai_buffer_type_alloc_buffer", "ggml_backend_cpu_kleidiai_buffer_init_tensor")
+print("Applied IA Offline huge-pages patch")
+PY
+
+# 27. Sampling in the compute graph. After each token the CPU copied the whole vocabulary's logits
+#     (128K entries in LFM2.5, up to 262K in Gemma) into a candidate array and sorted out the top-k on
+#     one thread. llama.cpp can run the sampler chain in the graph instead (llama_set_sampler), with
+#     the threads that already compute the token: the top-k, top-p, min-p, temperature and the draw
+#     run there and only the chosen token comes back. A sampler without that support (DRY, XTC...)
+#     makes the rest of the chain run on the CPU over the candidates, as before.
+#     Measured on LFM2.5 8B-A1B (x86, 4 threads): sampling 0.55 -> 0.02 ms per token, decoding no
+#     slower. The sampler is detached before it is freed. IAOFFLINE_BACKEND_SAMPLING=0 turns it off.
+python3 - "${AI_CHAT_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp source shape in {path.name} (step 27): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+replace_once(
+    "    g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);\n",
+    "    g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);\n"
+    "    // IA Offline (step 27): the sampler chain runs in the compute graph, on the threads that compute\n"
+    "    // the token, instead of copying and sorting the whole vocabulary's logits on this thread.\n"
+    "    const char *iaoffline_backend_sampling = getenv(\"IAOFFLINE_BACKEND_SAMPLING\");\n"
+    "    if (iaoffline_backend_sampling == nullptr || iaoffline_backend_sampling[0] != '0') {\n"
+    "        const bool offloaded = llama_set_sampler(context, 0, common_sampler_get(g_sampler));\n"
+    "        LOGi(\"%s: sampling in the compute graph: %s\", __func__, offloaded ? \"yes\" : \"no\");\n"
+    "    }\n",
+)
+# One output per sequence, as the binding reads: the repetition penalties, first in the chain, run in
+# the graph only then (with more, they and so the whole chain stay on the CPU).
+replace_once(
+    "    ctx_params.n_outputs_max = 16;\n",
+    "    ctx_params.n_outputs_max = 16;\n"
+    "    // One output per sequence (step 27): lets the whole sampler chain run in the compute graph.\n"
+    "    ctx_params.n_outputs_max_per_seq = 1;\n",
+)
+# The context keeps a pointer to the chain: detach it before the sampler is freed.
+replace_once(
+    "    iaoffline_reset_prefetch();\n"
+    "    common_sampler_free(g_sampler);\n"
+    "    g_sampler = nullptr;\n"
+    "    g_chat_templates.reset();\n",
+    "    iaoffline_reset_prefetch();\n"
+    "    llama_set_sampler(g_context, 0, nullptr);\n"
+    "    common_sampler_free(g_sampler);\n"
+    "    g_sampler = nullptr;\n"
+    "    g_chat_templates.reset();\n",
+)
+replace_once(
+    "    iaoffline_close_model_file();\n"
+    "    common_sampler_free(g_sampler);\n",
+    "    iaoffline_close_model_file();\n"
+    "    if (g_context != nullptr) llama_set_sampler(g_context, 0, nullptr);\n"
+    "    common_sampler_free(g_sampler);\n",
+)
+path.write_text(text)
+print("Applied IA Offline backend-sampling patch")
+PY
+
+# 28. KleidiAI's int8 copy of Q6_K and Q8_0 weights converted by several threads. On ARM the KleidiAI
+#     buffer keeps those types as int8 per channel: each row is dequantized, its largest value found and
+#     the row quantized again, one row after the other on one thread. In LFM2.5 8B-A1B that is the Q6_K
+#     output (128K rows of 2048 values) at every load. The rows are independent, so they are split into
+#     ranges converted by up to 8 threads, each with its own row buffer; the result is the same.
+python3 - "${LLAMA_DIR}/ggml/src/ggml-cpu/kleidiai/kleidiai.cpp" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def replace_once(old: str, new: str) -> None:
+    global text
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"Unexpected llama.cpp source shape in {path.name} (step 28): expected 1 match, got {count}")
+    text = text.replace(old, new, 1)
+
+replace_once("#include <vector>\n", "#include <vector>\n#include <thread>\n")
+replace_once(
+    "                row_f32.resize(k);\n"
+    "            }\n"
+    "\n"
+    "            for (size_t row = 0; row < n; ++row) {\n"
+    "                const uint8_t * row_data = static_cast<const uint8_t *>(data) + row * row_stride;\n",
+    "                row_f32.resize(k);\n"
+    "            }\n"
+    "\n"
+    "            // IA Offline (step 28): ranges of rows converted by several threads, each with its own buffer.\n"
+    "            auto iaoffline_convert_rows = [&](size_t row_begin, size_t row_end) {\n"
+    "            std::vector<float> row_f32(tensor->type == GGML_TYPE_Q6_K ? k : 0);\n"
+    "            for (size_t row = row_begin; row < row_end; ++row) {\n"
+    "                const uint8_t * row_data = static_cast<const uint8_t *>(data) + row * row_stride;\n",
+)
+replace_once(
+    "            }\n"
+    "        }\n"
+    "\n"
+    "        if (want_f32 && slot_total > 0) {\n",
+    "            }\n"
+    "            };\n"
+    "            const size_t iaoffline_threads = n * k >= ((size_t) 4 << 20)\n"
+    "                ? std::min<size_t>(8, std::max(1u, std::thread::hardware_concurrency())) : 1;\n"
+    "            if (iaoffline_threads > 1) {\n"
+    "                const size_t per = (n + iaoffline_threads - 1) / iaoffline_threads;\n"
+    "                std::vector<std::thread> workers;\n"
+    "                for (size_t begin = 0; begin < n; begin += per) {\n"
+    "                    workers.emplace_back(iaoffline_convert_rows, begin, std::min(n, begin + per));\n"
+    "                }\n"
+    "                for (auto & worker : workers) {\n"
+    "                    worker.join();\n"
+    "                }\n"
+    "            } else {\n"
+    "                iaoffline_convert_rows(0, n);\n"
+    "            }\n"
+    "        }\n"
+    "\n"
+    "        if (want_f32 && slot_total > 0) {\n",
+)
+path.write_text(text)
+print("Applied IA Offline parallel KleidiAI int8 conversion patch")
+PY
+
 pushd "${LLAMA_DIR}/examples/llama.android" >/dev/null
 chmod +x ./gradlew
 ./gradlew :lib:assembleRelease --no-daemon
