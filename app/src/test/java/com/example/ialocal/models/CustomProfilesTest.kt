@@ -14,6 +14,7 @@ class CustomProfilesTest {
     fun builtInProfilesKeepTheIdsTheSelectionWasSavedWith() {
         assertEquals(listOf("NONE", "PROGRAMMER", "UNCENSORED"), AiProfile.BUILT_IN.map { it.id })
         assertEquals(BuiltInProfile.PROGRAMMER, AiProfile.DEFAULT.builtIn)
+        assertEquals("Direto e franco", AiProfile.of(BuiltInProfile.UNCENSORED).displayName)
     }
 
     @Test
@@ -41,6 +42,8 @@ class CustomProfilesTest {
     @Test
     fun rejectsTheNamesOfTheBuiltInProfilesAndTheirOldNames() {
         assertNotNull(CustomProfiles.validate("programador", "", "Algo", existing))
+        assertNotNull(CustomProfiles.validate("direto e franco", "", "Algo", existing))
+        // The name this pre-profile had before: agents still called by it are renamed.
         assertNotNull(CustomProfiles.validate("Sem Censura", "", "Algo", existing))
         assertNotNull(CustomProfiles.validate("sem perfil", "", "Algo", existing))
         assertNotNull(CustomProfiles.validate("Engenheiro de Software", "", "Algo", existing))

@@ -81,6 +81,7 @@ import com.example.ialocal.ui.settings.CompilersScreen
 import com.example.ialocal.ui.settings.ExternalApiScreen
 import com.example.ialocal.ui.settings.ExternalApiViewModel
 import com.example.ialocal.ui.settings.PerformanceScreen
+import com.example.ialocal.ui.settings.PrivacyPolicyScreen
 import com.example.ialocal.ui.settings.SettingsScreen
 import com.example.ialocal.ui.settings.SettingsViewModel
 import com.example.ialocal.ui.settings.StorageScanScreen
@@ -675,6 +676,7 @@ private fun LocalAiApp(
                 onOpenCompilers = { navController.navigate("compilers") },
                 onOpenWikipedia = { navController.navigate("wikipedia") },
                 onOpenPerformance = { navController.navigate("performance") },
+                onOpenPrivacyPolicy = { navController.navigate("privacy-policy") },
                 adsEnabled = adsManager.adsReady,
                 onBack = { navController.popBackStack() },
             )
@@ -746,6 +748,9 @@ private fun LocalAiApp(
                 settings = container.performanceSettings,
                 onBack = { navController.popBackStack() },
             )
+        }
+        composable("privacy-policy") {
+            PrivacyPolicyScreen(onBack = { navController.popBackStack() })
         }
         composable("wikipedia") {
             PreloadRewardedSectionEntry(adsManager)

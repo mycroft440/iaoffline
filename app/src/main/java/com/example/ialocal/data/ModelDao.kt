@@ -81,21 +81,21 @@ interface ModelDao {
     @Query("UPDATE conversations SET agentId = :replacementId WHERE agentId IN (SELECT id FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds))")
     suspend fun replaceLegacyConversationAgents(modelId: String, keepIds: List<String>, replacementId: String)
 
-    @Query("UPDATE conversations SET agentId = :replacementId WHERE agentId IN (SELECT id FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds) AND name IN (:currentName, :oldName))")
-    suspend fun preserveUncensoredConversations(
+    @Query("UPDATE conversations SET agentId = :replacementId WHERE agentId IN (SELECT id FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds) AND name IN (:names))")
+    suspend fun preserveDirectConversations(
         modelId: String,
         keepIds: List<String>,
         replacementId: String,
-        currentName: String,
-        oldName: String,
+        names: List<String>,
     )
 
     @Query("DELETE FROM agents WHERE modelId = :modelId AND id NOT IN (:keepIds)")
     suspend fun deleteLegacyAgents(modelId: String, keepIds: List<String>)
 
     @Transaction
-    suspend fun keepOnlyProfiles(modelId: String, keepIds: List<String>, programmerId: String, uncensoredId: String, oldUncensoredName: String) {
-        preserveUncensoredConversations(modelId, keepIds, uncensoredId, "Sem censura", oldUncensoredName)
+    suspend fun keepOnlyProfiles(modelId: String, keepIds: List<String>, programmerId: String, directId: String, directNames: List<String>) {
+        // Conversations of a duplicate "Direto e franco" agent, under any name it had, stay in that profile.
+        preserveDirectConversations(modelId, keepIds, directId, directNames)
         replaceLegacyConversationAgents(modelId, keepIds, programmerId)
         deleteLegacyAgents(modelId, keepIds)
     }

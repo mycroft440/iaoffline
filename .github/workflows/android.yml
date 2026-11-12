@@ -249,6 +249,48 @@ jobs:
           test -s "$GITHUB_WORKSPACE/app/release.keystore"
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
+      # The release shows Google's test ads until the AdMob IDs are configured. That build earns
+      # nothing and must not go to Google Play, so say which ads this release carries.
+      - name: Report release ad IDs
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
+          ADMOB_INTERSTITIAL_AD_UNIT_ID: ${{ secrets.ADMOB_INTERSTITIAL_AD_UNIT_ID }}
+          ADMOB_REWARDED_AD_UNIT_ID: ${{ secrets.ADMOB_REWARDED_AD_UNIT_ID }}
+          ADMOB_NATIVE_AD_UNIT_ID: ${{ secrets.ADMOB_NATIVE_AD_UNIT_ID }}
+          ADMOB_APP_OPEN_AD_UNIT_ID: ${{ secrets.ADMOB_APP_OPEN_AD_UNIT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ADMOB_APP_ID}" ]]; then
+            echo "::warning::Release com anuncios de TESTE: configure os secrets ADMOB_* antes de enviar o AAB ao Google Play."
+            {
+              echo "### Release com anúncios de TESTE"
+              echo
+              echo "Os secrets ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID não estão configurados."
+              echo "Este APK/AAB não gera receita: não o envie ao Google Play."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          off=()
+          [[ -z "${ADMOB_INTERSTITIAL_AD_UNIT_ID}" ]] && off+=("intersticial (ADMOB_INTERSTITIAL_AD_UNIT_ID)")
+          [[ -z "${ADMOB_REWARDED_AD_UNIT_ID}" ]] && off+=("recompensado (ADMOB_REWARDED_AD_UNIT_ID)")
+          [[ -z "${ADMOB_NATIVE_AD_UNIT_ID}" ]] && off+=("nativo (ADMOB_NATIVE_AD_UNIT_ID)")
+          [[ -z "${ADMOB_APP_OPEN_AD_UNIT_ID}" ]] && off+=("abertura do app (ADMOB_APP_OPEN_AD_UNIT_ID)")
+          {
+            echo "### Release com anúncios REAIS"
+            echo
+            if (( ${#off[@]} > 0 )); then
+              echo "Formatos desligados por falta do secret:"
+              printf -- '- %s\n' "${off[@]}"
+            else
+              echo "Todos os formatos estão configurados."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if (( ${#off[@]} > 0 )); then
+            echo "::warning::Formatos de anuncio desligados nesta release: ${off[*]}"
+          fi
+
       - name: Build signed release APK + AAB
         if: steps.signing.outputs.ready == 'true'
         env:

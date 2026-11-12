@@ -66,7 +66,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.ialocal"
+        // Google Play refuses "com.example" packages. Only the id of the installed app changed; the
+        // code stays in the com.example.ialocal namespace, which neither users nor the store see.
+        applicationId = "com.mycroft440.iaoffline"
         // The official llama.cpp Android binding currently targets Android 13+.
         minSdk = 33
         targetSdk = 36

@@ -397,7 +397,8 @@ class ModelRepository(
                     when (profile.builtIn) {
                         BuiltInProfile.PROGRAMMER -> agent.name.equals(LEGACY_ENGINEER_NAME, true) ||
                             (agent.name.endsWith(" · Agente") && agent.systemPrompt == DEFAULT_SYSTEM_PROMPT)
-                        BuiltInProfile.UNCENSORED -> agent.name.equals(LEGACY_UNCENSORED_NAME, true)
+                        BuiltInProfile.UNCENSORED -> agent.name.equals(PREVIOUS_DIRECT_NAME, true) ||
+                            agent.name.equals(LEGACY_UNCENSORED_NAME, true)
                         BuiltInProfile.NONE, null -> false
                     }
                 }
@@ -436,7 +437,11 @@ class ModelRepository(
                 keepIds,
                 agentOf(AiProfile.of(BuiltInProfile.PROGRAMMER)),
                 agentOf(AiProfile.of(BuiltInProfile.UNCENSORED)),
-                LEGACY_UNCENSORED_NAME,
+                listOf(
+                    AiProfile.of(BuiltInProfile.UNCENSORED).displayName,
+                    PREVIOUS_DIRECT_NAME,
+                    LEGACY_UNCENSORED_NAME,
+                ),
             )
             val editor = agentUsagePreferences.edit()
             removed.forEach { editor.remove("count_${it.id}") }
@@ -635,12 +640,14 @@ class ModelRepository(
             "Você é um agente de auto empenho, focado em transformar objetivos em execução. " +
                 "Divida tarefas complexas em etapas concretas, mantenha o foco, verifique o próprio trabalho e proponha o próximo passo útil sem enrolação."
 
-        const val UNCENSORED_NAME = "Sem censura"
-        const val UNCENSORED_PROMPT =
+        const val DIRECT_NAME = "Direto e franco"
+        const val DIRECT_PROMPT =
             "Responda de forma direta, franca e sem moralizações desnecessárias. Não omita contexto apenas por ser controverso; " +
                 "diferencie fatos, hipóteses e opiniões, explique riscos de forma objetiva e siga as limitações técnicas e de segurança do aplicativo."
 
         internal const val LEGACY_ENGINEER_NAME = "Engenheiro de Software"
+        /** The name [DIRECT_NAME] had before; an agent still called by it is renamed. */
+        internal const val PREVIOUS_DIRECT_NAME = "Sem censura"
         internal const val LEGACY_UNCENSORED_NAME = "I.A sem sensura (jailbreak)"
         private const val PROFILE_PREFS = "selected_builtin_profile"
         private const val PROFILE_KEY = "profile"

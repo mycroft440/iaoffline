@@ -65,9 +65,9 @@ private val NEXUS_AGENT_TEMPLATES = listOf(
         ModelRepository.SELF_DRIVEN_PROMPT,
     ),
     NexusAgentTemplate(
-        ModelRepository.UNCENSORED_NAME,
-        "Respostas diretas, francas e com menos filtros de estilo.",
-        ModelRepository.UNCENSORED_PROMPT,
+        ModelRepository.DIRECT_NAME,
+        "Respostas diretas e francas, sem rodeios.",
+        ModelRepository.DIRECT_PROMPT,
     ),
     NexusAgentTemplate(
         "Assistente Geral",

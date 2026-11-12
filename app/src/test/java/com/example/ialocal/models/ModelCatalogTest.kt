@@ -147,30 +147,32 @@ class ModelCatalogTest {
         assertTrue(maple.sha256.matches(Regex("^[0-9a-f]{64}$")))
     }
 
+    /**
+     * Google Play's AI-generated content policy and AdMob's content policies: the store build does
+     * not offer models published as uncensored (trained or merged to drop the original refusals).
+     */
     @Test
-    fun dolphinTrinityNanoIsAPinnedSmallMoe() {
-        val model = ModelCatalog.requireById("dolphin-x1-trinity-nano-q4-k-m")
-        assertTrue(model.isMoe)
-        assertFalse(model.isExperimental)
-        assertEquals(ModelProvider.ARCEE, model.provider)
-        assertTrue(model.totalParametersBillions <= 14.0)
-        assertTrue(model.downloadUrl.startsWith("https://huggingface.co/mradermacher/Dolphin-X1-Trinity-Nano-i1-GGUF/"))
-        assertTrue(model.sha256.matches(Regex("^[0-9a-f]{64}$")))
+    fun catalogOffersNoModelPublishedAsUncensored() {
+        val marker = Regex("uncensored|sem censura|abliterat|dolphin|jailbreak", RegexOption.IGNORE_CASE)
+        ModelCatalog.entries.forEach { model ->
+            listOf(model.id, model.displayName, model.repository, model.fileName, model.description).forEach { text ->
+                assertFalse("${model.id}: $text", marker.containsMatchIn(text))
+            }
+        }
     }
 
     @Test
-    fun sevenAdditionalMoeModelsArePinnedAndUnder14B() {
+    fun sixAdditionalMoeModelsArePinnedAndUnder14B() {
         val ids = setOf(
             "lfm2-8b-a1b-q4-k-m",
             "olmoe-1b-7b-0125-instruct-q4-k-m",
             "mellum2-12b-a2.5b-instruct-q4-k-m",
-            "qwen2.5-moe-2x1.5b-community-q4-k-m",
             "granite-guardian-3.2-3b-a800m-q4-k-m",
             "gpt-oss-6.6b-pruned-q5-k-m",
             "gpt-oss-10.2b-pruned-science-q5-k-m",
         )
         val added = ModelCatalog.entries.filter { it.id in ids }
-        assertEquals(7, added.size)
+        assertEquals(6, added.size)
         assertEquals(ids, added.map { it.id }.toSet())
         added.forEach { model ->
             assertTrue(model.isMoe)

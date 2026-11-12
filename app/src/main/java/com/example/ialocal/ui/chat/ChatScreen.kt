@@ -630,9 +630,9 @@ private val AGENT_TEMPLATES = listOf(
         ModelRepository.SELF_DRIVEN_PROMPT,
     ),
     AgentTemplate(
-        ModelRepository.UNCENSORED_NAME,
-        "Respostas diretas, francas e com menos filtros de estilo.",
-        ModelRepository.UNCENSORED_PROMPT,
+        ModelRepository.DIRECT_NAME,
+        "Respostas diretas e francas, sem rodeios.",
+        ModelRepository.DIRECT_PROMPT,
     ),
     AgentTemplate(
         "Assistente Geral",

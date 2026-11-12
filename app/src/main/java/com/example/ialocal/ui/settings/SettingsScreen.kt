@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.automirrored.filled.MenuBook
@@ -58,6 +59,7 @@ fun SettingsScreen(
     onOpenCompilers: () -> Unit,
     onOpenWikipedia: () -> Unit,
     onOpenPerformance: () -> Unit,
+    onOpenPrivacyPolicy: () -> Unit,
     adsEnabled: Boolean,
     onBack: () -> Unit,
 ) {
@@ -151,6 +153,15 @@ fun SettingsScreen(
                     title = "Baixar Wikipedia Offline",
                     summary = wikipediaSummary,
                     onClick = onOpenWikipedia,
+                )
+            }
+
+            item {
+                SettingsEntry(
+                    icon = Icons.Default.Shield,
+                    title = "Política de privacidade",
+                    summary = "Como o app trata seus dados e o que os anúncios coletam",
+                    onClick = onOpenPrivacyPolicy,
                 )
             }
 

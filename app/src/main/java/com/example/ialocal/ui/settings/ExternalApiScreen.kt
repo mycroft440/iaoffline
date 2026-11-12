@@ -91,6 +91,7 @@ import com.example.ialocal.ui.chat.CodeCanvasCard
 import com.example.ialocal.ui.chat.CodeCanvasDialog
 import com.example.ialocal.ui.chat.CodeCanvases
 import com.example.ialocal.ui.chat.InlineCodeBlock
+import com.example.ialocal.ui.chat.ReportAnswerAction
 import com.example.ialocal.ui.chat.splitAnswer
 import android.speech.tts.TextToSpeech
 import java.util.Locale
@@ -430,6 +431,14 @@ fun ExternalApiScreen(
                                             Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
                                             Text(" Refazer")
                                         }
+                                    }
+                                    if (message.content.isNotBlank()) {
+                                        ReportAnswerAction(
+                                            answer = message.content,
+                                            modelLabel = currentChatModel,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.align(Alignment.CenterVertically),
+                                        )
                                     }
                                 } else {
                                     TextButton(

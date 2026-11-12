@@ -567,7 +567,7 @@ private fun ModelCard(
                     }
                 )
             }
-            Text("Perfis Programador e Sem censura: escolha em Configurações.", style = MaterialTheme.typography.bodySmall)
+            Text("Perfis (Programador, Direto e franco e os seus): escolha em Configurações.", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = onDelete) { Icon(Icons.Default.Delete, null); Text(" Excluir modelo") }
         }
     }

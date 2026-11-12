@@ -1060,7 +1060,14 @@ private fun ExactAssistantMessage(
         AssistantAvatar(parsed.provider ?: fallbackProvider, Modifier.padding(top = 1.dp))
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistantModelHeading(replyModelLabel)
+            // As tall as the report flag from the start, so the answer does not move when it shows up.
+            Row(modifier = Modifier.heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { AssistantModelHeading(replyModelLabel) }
+                // Beside the model's name: the line of Copiar and Regenerar has no room left for it.
+                if (!sending && parsed.answer.isNotBlank()) {
+                    ReportAnswerAction(answer = parsed.answer, modelLabel = replyModelLabel, tint = PMuted)
+                }
+            }
             if (parsed.reasoning != null) {
                 val accent = Color(0xFFFBBF24)
                 val elapsed = if (thinking) rememberElapsedMs(reasoningStartedAt ?: item.message.createdAt) else null

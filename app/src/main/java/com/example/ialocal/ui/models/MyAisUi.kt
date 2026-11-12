@@ -232,8 +232,13 @@ fun MyAisScreen(
                     }
                 }
 
-                item(key = "my-ais-ad-bottom") {
-                    InlineAdBanner(state = bottomBanner)
+                // A second banner only when the list is long enough to stand between the two: with
+                // nothing or a single AI on the screen, both ads would show at once around less
+                // content than ads, which AdMob's placement policy does not allow.
+                if (orderedModels.size + downloads.size >= 2) {
+                    item(key = "my-ais-ad-bottom") {
+                        InlineAdBanner(state = bottomBanner)
+                    }
                 }
                 item { Spacer(Modifier.height(20.dp)) }
             }

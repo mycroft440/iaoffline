@@ -54,7 +54,11 @@ object CustomProfiles {
      * names the app still renames to them.
      */
     private val RESERVED_NAMES = AiProfile.BUILT_IN.map { it.displayName } +
-        listOf(ModelRepository.LEGACY_ENGINEER_NAME, ModelRepository.LEGACY_UNCENSORED_NAME)
+        listOf(
+            ModelRepository.LEGACY_ENGINEER_NAME,
+            ModelRepository.PREVIOUS_DIRECT_NAME,
+            ModelRepository.LEGACY_UNCENSORED_NAME,
+        )
 
     fun create(name: String, description: String, systemPrompt: String): AiProfile = AiProfile(
         id = ID_PREFIX + UUID.randomUUID().toString(),

@@ -3,7 +3,7 @@ set -euo pipefail
 
 APK="${1:?Informe o caminho do APK}"
 EXPECTED_PAGE_SIZE="${2:?Informe o tamanho esperado da pagina de memoria}"
-PACKAGE_NAME="com.example.ialocal"
+PACKAGE_NAME="com.mycroft440.iaoffline"
 test -f "$APK"
 : "${RUNNER_TEMP:?RUNNER_TEMP deve apontar para o diretorio temporario do CI}"
 

@@ -1120,23 +1120,6 @@ object ModelCatalog {
             description = "MoE experimental da Arcee AI com 6B totais e 1B ativo. Prévia ainda sujeita a instabilidade; requer suporte à arquitetura AFMoE no llama.cpp do app. Em Q4_0, o formato mais rápido nos processadores ARM.",
         ),
         CatalogModel(
-            // AFMoE (Trinity Nano), which the pinned llama.cpp runs since b7061. The author's own GGUF
-            // repository has no Q4_K_M or Q4_0; mradermacher's static Q4_K_M is the closest in size.
-            id = "dolphin-x1-trinity-nano-q4-k-m",
-            displayName = "Dolphin X1 Trinity Nano 6B-A1B (comunidade)",
-            provider = ModelProvider.ARCEE,
-            // Q4_0: the format the ARM kernels run fastest (repacked, KleidiAI).
-            repository = "mradermacher/Dolphin-X1-Trinity-Nano-i1-GGUF",
-            fileName = "Dolphin-X1-Trinity-Nano.i1-Q4_0.gguf",
-            quantization = "Q4_0",
-            approximateSizeBytes = 3_538_904_256L,
-            sha256 = "c400f7c4ddce8d6b0425d8c5c94b08dd3cd1242fdc0e7d768a8aa01629214407",
-            recommendedRamBytes = 7_000_000_000L,
-            totalParametersBillions = 6.0,
-            activeParametersBillions = 1.0,
-            description = "Ajuste da comunidade (Dolphin, da dphn) sobre o Trinity Nano da Arcee AI: 6B no total e cerca de 1B ativo por palavra, muito rápido no celular. Treinado para seguir o prompt de sistema sem as recusas do modelo original (sem censura). Herda os 11 idiomas da família Trinity Nano, entre eles o português, e também a instabilidade da prévia. Em Q4_0, o formato mais rápido nos processadores ARM.",
-        ),
-        CatalogModel(
             id = "phi-mini-moe-7.6b-q4-k-m",
             displayName = "Phi-mini MoE 7.6B-A2.4B",
             provider = ModelProvider.MICROSOFT,
@@ -1256,21 +1239,6 @@ object ModelCatalog {
             totalParametersBillions = 12.0,
             activeParametersBillions = 2.5,
             description = "MoE Instruct da JetBrains, otimizado para instruções e programação, com 12B totais e 2,5B ativos. Diferente da versão Mellum2.1 Thinking já presente. Em Q4_0, o formato mais rápido nos processadores ARM.",
-        ),
-        CatalogModel(
-            id = "qwen2.5-moe-2x1.5b-community-q4-k-m",
-            displayName = "Qwen2.5 MoE 2x1.5B (comunidade)",
-            provider = ModelProvider.ALIBABA,
-            // Q4_0: the format the ARM kernels run fastest (repacked, KleidiAI).
-            repository = "mradermacher/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-i1-GGUF",
-            fileName = "Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B.i1-Q4_0.gguf",
-            quantization = "Q4_0",
-            approximateSizeBytes = 2_374_972_672L,
-            sha256 = "15aabe65610cb7bf2bd3e62082a720aabf303c084c0c7d3c204ab58d913fb38e",
-            recommendedRamBytes = 5_000_000_000L,
-            totalParametersBillions = 4.0,
-            activeParametersBillions = 1.5,
-            description = "MoE comunitário experimental com aproximadamente 4B totais e especialistas de 1,5B. Combinação não oficial baseada em Qwen2.5; qualidade e compatibilidade com o runtime Android ainda não validadas. Em Q4_0, o formato mais rápido nos processadores ARM.",
         ),
         CatalogModel(
             id = "granite-guardian-3.2-3b-a800m-q4-k-m",
