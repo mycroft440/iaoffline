@@ -249,8 +249,8 @@ jobs:
           test -s "$GITHUB_WORKSPACE/app/release.keystore"
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-      # The release shows Google's test ads until the AdMob IDs are configured. That build earns
-      # nothing and must not go to Google Play, so say which ads this release carries.
+      # The release shows Google's test ads when no AdMob IDs are configured (gradle.properties or
+      # secrets). That build earns nothing and must not go to Google Play, so say which ads it carries.
       - name: Report release ad IDs
         if: steps.signing.outputs.ready == 'true'
         env:
@@ -262,26 +262,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${ADMOB_APP_ID}" ]]; then
-            echo "::warning::Release com anuncios de TESTE: configure os secrets ADMOB_* antes de enviar o AAB ao Google Play."
+          # The same choice app/build.gradle.kts makes: the secret when set, else gradle.properties.
+          pick() {
+            local value="${!1:-}"
+            value="${value//[[:space:]]/}"
+            if [[ -z "$value" ]]; then
+              value=$(sed -n "s/^$2=//p" gradle.properties | tail -n 1 | tr -d '[:space:]')
+            fi
+            printf '%s' "$value"
+          }
+          app_id=$(pick ADMOB_APP_ID admob.appId)
+          if [[ -z "$app_id" ]]; then
+            echo "::warning::Release com anuncios de TESTE: configure os IDs do AdMob (gradle.properties ou secrets ADMOB_*) antes de enviar o AAB ao Google Play."
             {
               echo "### Release com anúncios de TESTE"
               echo
-              echo "Os secrets ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID não estão configurados."
+              echo "Nenhum ID de app do AdMob em gradle.properties (admob.appId) nem no secret ADMOB_APP_ID."
               echo "Este APK/AAB não gera receita: não o envie ao Google Play."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           off=()
-          [[ -z "${ADMOB_INTERSTITIAL_AD_UNIT_ID}" ]] && off+=("intersticial (ADMOB_INTERSTITIAL_AD_UNIT_ID)")
-          [[ -z "${ADMOB_REWARDED_AD_UNIT_ID}" ]] && off+=("recompensado (ADMOB_REWARDED_AD_UNIT_ID)")
-          [[ -z "${ADMOB_NATIVE_AD_UNIT_ID}" ]] && off+=("nativo (ADMOB_NATIVE_AD_UNIT_ID)")
-          [[ -z "${ADMOB_APP_OPEN_AD_UNIT_ID}" ]] && off+=("abertura do app (ADMOB_APP_OPEN_AD_UNIT_ID)")
+          [[ -z "$(pick ADMOB_INTERSTITIAL_AD_UNIT_ID admob.interstitialAdUnitId)" ]] && off+=("intersticial (admob.interstitialAdUnitId)")
+          [[ -z "$(pick ADMOB_REWARDED_AD_UNIT_ID admob.rewardedAdUnitId)" ]] && off+=("recompensado (admob.rewardedAdUnitId)")
+          [[ -z "$(pick ADMOB_NATIVE_AD_UNIT_ID admob.nativeAdUnitId)" ]] && off+=("nativo (admob.nativeAdUnitId)")
+          [[ -z "$(pick ADMOB_APP_OPEN_AD_UNIT_ID admob.appOpenAdUnitId)" ]] && off+=("abertura do app (admob.appOpenAdUnitId)")
           {
             echo "### Release com anúncios REAIS"
             echo
+            echo "App AdMob: ${app_id}"
+            echo
             if (( ${#off[@]} > 0 )); then
-              echo "Formatos desligados por falta do secret:"
+              echo "Formatos desligados por falta do ID:"
               printf -- '- %s\n' "${off[@]}"
             else
               echo "Todos os formatos estão configurados."

@@ -205,35 +205,37 @@ A biblioteca privada e os downloads parciais são excluídos do backup e da tran
 
 **Banners.** Há um banner no fim da tela inicial, dois no catálogo **Baixar I.As offline** (antes e depois da lista) e até dois em **Minhas I.As** (um antes da lista e, quando há pelo menos dois itens entre modelos e downloads, outro depois: com a lista vazia ou com um item só, os dois apareceriam juntos em volta de menos conteúdo do que anúncio). O **Histórico de conversas** e as **Configurações** têm um banner fixo embaixo; no **Canvas de código** o banner fica no fim do conteúdo, para nunca ficar colado ao teclado. No chat, um banner aparece dentro da resposta da IA a cada 2, depois 4, depois 3 mensagens do usuário, repetindo o ciclo (mensagens 2, 6, 9, 11, 15, 18…); ele fica antes do primeiro bloco de código ou depois do primeiro parágrafo. Sem conexão, o banner não ocupa espaço e o app tenta carregá-lo de novo quando a rede volta. O banner só é montado quando a tela termina de abrir, e os do catálogo e de **Minhas I.As** são mantidos durante a visita: rolar para longe e voltar mostra o mesmo anúncio, sem criar outro WebView (o que travava a lista e a fazia pular quando o anúncio novo chegava). O build `debug` usa exclusivamente os IDs de teste do Google.
 
-**IDs de teste (configuração atual).** Enquanto `ADMOB_APP_ID` não estiver configurado, a release também usa os IDs de teste do Google, então todos os anúncios já funcionam e mostram o selo "Test Ad". Anúncios de teste não geram receita e não pedem o formulário de consentimento. Os IDs usados:
+**IDs reais (configuração atual).** A release usa os blocos do app **I.A Off-line** na conta AdMob, gravados em `gradle.properties`. Esses IDs não são segredo: vão dentro de todo APK publicado.
+
+| Uso | Chave em `gradle.properties` | ID |
+| --- | --- | --- |
+| Aplicativo | `admob.appId` | `ca-app-pub-7090310776523046~5771541625` |
+| Banner adaptável | `admob.bannerAdUnitId` | `ca-app-pub-7090310776523046/6322653072` |
+| Intersticial (IA Free) | `admob.interstitialAdUnitId` | `ca-app-pub-7090310776523046/7719495227` |
+| Premiado (I.As extras, Wikipédia, compiladores e perfis) | `admob.rewardedAdUnitId` | `ca-app-pub-7090310776523046/6705670141` |
+| Nativo avançado (cards do catálogo) | `admob.nativeAdUnitId` | `ca-app-pub-7090310776523046/5308954301` |
+| Abertura do app | `admob.appOpenAdUnitId` | `ca-app-pub-7090310776523046/2766425130` |
+
+O ID do app e o do banner vão juntos; cada um dos outros liga o formato correspondente (sem ele, a release não mostra aquele formato). O build confere o formato de cada ID e para com erro se algum estiver errado. Uma variável de ambiente `ADMOB_*` com o mesmo papel (por exemplo `ADMOB_APP_ID` ou `ADMOB_NATIVE_AD_UNIT_ID`), ou um secret do GitHub com esse nome, substitui o valor do arquivo. Sem nenhum ID de app, a release volta aos IDs de teste do Google.
+
+**IDs de teste.** O build `debug` (o APK de teste) usa sempre os IDs de teste do Google: os anúncios mostram o selo "Test Ad", não geram receita, não pedem o formulário de consentimento e podem ser tocados à vontade.
 
 | Uso | ID de teste do Google |
 | --- | --- |
 | Aplicativo | `ca-app-pub-3940256099942544~3347511713` |
 | Banner adaptável | `ca-app-pub-3940256099942544/9214589741` |
-| Intersticial (Wikipédia, vídeo e imagem) | `ca-app-pub-3940256099942544/1033173712` |
-| Recompensado (I.As, Wikipédia, compiladores e perfis) | `ca-app-pub-3940256099942544/5224354917` |
+| Intersticial | `ca-app-pub-3940256099942544/1033173712` |
+| Premiado | `ca-app-pub-3940256099942544/5224354917` |
 | Nativo | `ca-app-pub-3940256099942544/2247696110` |
 | Abertura do app | `ca-app-pub-3940256099942544/9257395921` |
 
-Para trocar pelos anúncios reais (que geram receita) em um build `release`, configure os valores abaixo no ambiente de build. Os dois primeiros vão juntos e desligam os IDs de teste; cada um dos outros liga o formato correspondente (sem ele, a release real não mostra aquele formato):
-
-```bash
-export ADMOB_APP_ID='ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY'
-export ADMOB_BANNER_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'
-export ADMOB_INTERSTITIAL_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ'   # IA Free
-export ADMOB_REWARDED_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/RRRRRRRRRR'     # I.As extras, Wikipédia, compiladores e perfis
-export ADMOB_NATIVE_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN'         # cards do catálogo
-export ADMOB_APP_OPEN_AD_UNIT_ID='ca-app-pub-XXXXXXXXXXXXXXXX/AAAAAAAAAA'       # abertura do app
-```
-
-Use os IDs da sua conta AdMob (no AdMob, crie blocos dos tipos **Recompensado**, **Intersticial**, **Nativo avançado** e **Abertura de app**). No GitHub Actions, cadastre os mesmos valores como secrets com os mesmos nomes; o workflow os passa apenas ao build da release. Configure também a mensagem de privacidade em **Privacy & messaging** no AdMob: a release consulta o consentimento antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Teste cada formato e o fluxo de consentimento em um aparelho antes de publicar o APK.
+**Consentimento.** A release consulta o consentimento (UMP) antes de carregar anúncios e mostra a opção de gerenciá-lo em **Configurações** quando exigida. Sem uma mensagem de privacidade **publicada** em **Privacidade e mensagens** no AdMob para este app, essa consulta falha e a release não carrega anúncio nenhum. Teste cada formato e o fluxo de consentimento num aparelho cadastrado como dispositivo de teste antes de publicar.
 
 ### Publicar no Google Play com anúncios reais
 
 **ID do pacote.** O app instalado é `com.mycroft440.iaoffline` (`applicationId`). O Google Play recusa pacotes `com.example`, e o AdMob só libera a veiculação completa para um app listado na loja. O código continua no namespace `com.example.ialocal`, que não aparece para o usuário nem para a loja. Quem tem instalado um APK antigo (`com.example.ialocal`) recebe o novo como **outro app**: as IAs voltam por **Minhas I.As → Buscar** (elas ficam em `IAs Offline`), mas as conversas e as Wikipédias baixadas não migram; desinstale o antigo depois. O ID não pode mais mudar depois do primeiro envio ao Play.
 
-**O que o build faz sozinho.** A release usa os IDs reais quando os secrets `ADMOB_*` existem e os de teste quando não existem; o passo **Report release ad IDs** do workflow escreve no resumo da execução qual é o caso e quais formatos ficaram desligados. Um AAB com anúncios de teste não deve ir para o Play.
+**O que o build faz sozinho.** A release usa os IDs reais de `gradle.properties` (ou os secrets `ADMOB_*`, que têm prioridade) e os de teste quando não há nenhum; o passo **Report release ad IDs** do workflow escreve no resumo da execução qual é o caso e quais formatos ficaram desligados. Um AAB com anúncios de teste não deve ir para o Play.
 
 **Ordem dos passos.**
 
@@ -249,7 +251,7 @@ Use os IDs da sua conta AdMob (no AdMob, crie blocos dos tipos **Recompensado**,
 4. **Conta do AdMob** em admob.google.com, com a mesma Conta Google. País, fuso horário e moeda não podem ser trocados depois. O nome do perfil de pagamentos deve ser igual ao do documento e ao da conta bancária.
 5. **App e blocos de anúncios no AdMob**: Apps → Adicionar app → Android. Antes da publicação, responda que o app ainda não está na loja; depois de publicado, vincule-o à loja nas configurações do app. Crie um bloco de cada formato: **Banner**, **Intersticial**, **Premiado**, **Nativo avançado** e **Abertura do app**. O ID do app tem `~`; os dos blocos têm `/`.
 6. **Privacidade e mensagens** (no AdMob): crie e **publique** a mensagem de consentimento das regulamentações europeias para este app. Sem mensagem publicada, a consulta de consentimento falha e a release não carrega anúncio nenhum (`AdsManager` só pede anúncios quando `canRequestAds()` é verdadeiro).
-7. **Secrets no GitHub** (Settings → Secrets and variables → Actions): `ADMOB_APP_ID`, `ADMOB_BANNER_AD_UNIT_ID`, `ADMOB_INTERSTITIAL_AD_UNIT_ID`, `ADMOB_REWARDED_AD_UNIT_ID`, `ADMOB_NATIVE_AD_UNIT_ID` e `ADMOB_APP_OPEN_AD_UNIT_ID`. A execução seguinte deve mostrar "Release com anúncios REAIS".
+7. **IDs no projeto**: o ID do app e os 5 blocos ficam em `gradle.properties` (já preenchidos com os do app I.A Off-line). Para trocar por outros sem mexer no arquivo, cadastre secrets com os nomes `ADMOB_*` (Settings → Secrets and variables → Actions). A execução seguinte deve mostrar "Release com anúncios REAIS" e o ID do app.
 8. **Dispositivos de teste**: antes de abrir a release com IDs reais no próprio celular, cadastre o ID de publicidade dele em AdMob → Configurações → Dispositivos de teste. Clicar nos próprios anúncios reais é tráfego inválido e suspende a conta. O APK de teste (`debug`) usa sempre os IDs de teste e não tem esse risco.
 9. **app-ads.txt**: publique na raiz de um site seu o arquivo com a linha que o AdMob mostra (`google.com, pub-XXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0`) e informe o mesmo site como "Site" do desenvolvedor na ficha do Play. Com GitHub Pages, a raiz é a do repositório `USUARIO.github.io`; uma página de projeto (`USUARIO.github.io/iaoffline/`) não serve. Depois use "Verificar app" no AdMob.
 10. **Pagamentos**: ao atingir o limite de verificação (US$ 10) o AdMob pede a verificação de identidade e envia um PIN pelo correio para o endereço do perfil; o pagamento sai quando o saldo passa do limite de pagamento (US$ 100), com forma de pagamento e informações fiscais preenchidas.

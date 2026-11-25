@@ -9,41 +9,50 @@ val ciVersionName = providers.environmentVariable("IA_VERSION_NAME").orNull
 
 val testAdMobAppId = "ca-app-pub-3940256099942544~3347511713"
 val testBannerAdUnitId = "ca-app-pub-3940256099942544/9214589741"
-val productionAdMobAppId = providers.environmentVariable("ADMOB_APP_ID").orNull?.trim().orEmpty()
-val productionBannerAdUnitId = providers.environmentVariable("ADMOB_BANNER_AD_UNIT_ID").orNull?.trim().orEmpty()
-// Until the production IDs are configured, the release uses Google's test IDs so the ads can be tried.
+
+/**
+ * A production AdMob ID: the [variable] from the environment when set (a CI secret overrides),
+ * otherwise the [property] of gradle.properties. These IDs are not secret: every APK carries them.
+ */
+fun adMobId(variable: String, property: String): String =
+    providers.environmentVariable(variable).orNull?.trim()?.takeIf { it.isNotEmpty() }
+        ?: providers.gradleProperty(property).orNull?.trim().orEmpty()
+
+val productionAdMobAppId = adMobId("ADMOB_APP_ID", "admob.appId")
+val productionBannerAdUnitId = adMobId("ADMOB_BANNER_AD_UNIT_ID", "admob.bannerAdUnitId")
+// Without production IDs, the release uses Google's test IDs so the ads can still be tried.
 val useTestAds = productionAdMobAppId.isEmpty()
 require(productionAdMobAppId.isEmpty() == productionBannerAdUnitId.isEmpty()) {
-    "Configure ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID juntos."
+    "Configure o ID do app (ADMOB_APP_ID ou admob.appId) e o do banner (ADMOB_BANNER_AD_UNIT_ID ou admob.bannerAdUnitId) juntos."
 }
 if (productionAdMobAppId.isNotEmpty()) {
     require(Regex("ca-app-pub-\\d{16}~\\d{10}").matches(productionAdMobAppId)) {
-        "ADMOB_APP_ID não é um ID de aplicativo AdMob válido."
+        "O ID de aplicativo AdMob (ADMOB_APP_ID ou admob.appId) não é válido."
     }
     require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionBannerAdUnitId)) {
-        "ADMOB_BANNER_AD_UNIT_ID não é um ID de banner AdMob válido."
+        "O ID do banner AdMob (ADMOB_BANNER_AD_UNIT_ID ou admob.bannerAdUnitId) não é válido."
     }
 }
 
-/** Formats beyond the banner. A production release shows each only when its variable is set. */
+/** Formats beyond the banner. A production release shows each only when its ID is set. */
 data class OptionalAdUnit(val buildConfigField: String, val productionId: String, val testId: String)
 
-fun optionalAdUnit(buildConfigField: String, variable: String, testId: String): OptionalAdUnit {
-    val productionId = providers.environmentVariable(variable).orNull?.trim().orEmpty()
+fun optionalAdUnit(buildConfigField: String, variable: String, property: String, testId: String): OptionalAdUnit {
+    val productionId = adMobId(variable, property)
     if (productionId.isNotEmpty()) {
-        require(productionAdMobAppId.isNotEmpty()) { "$variable exige ADMOB_APP_ID e ADMOB_BANNER_AD_UNIT_ID." }
+        require(productionAdMobAppId.isNotEmpty()) { "$variable ($property) exige o ID do app e o do banner." }
         require(Regex("ca-app-pub-\\d{16}/\\d{10}").matches(productionId)) {
-            "$variable não é um ID de bloco de anúncios AdMob válido."
+            "$variable ($property) não é um ID de bloco de anúncios AdMob válido."
         }
     }
     return OptionalAdUnit(buildConfigField, productionId, testId)
 }
 
 val optionalAdUnits = listOf(
-    optionalAdUnit("INTERSTITIAL_AD_UNIT_ID", "ADMOB_INTERSTITIAL_AD_UNIT_ID", "ca-app-pub-3940256099942544/1033173712"),
-    optionalAdUnit("REWARDED_AD_UNIT_ID", "ADMOB_REWARDED_AD_UNIT_ID", "ca-app-pub-3940256099942544/5224354917"),
-    optionalAdUnit("NATIVE_AD_UNIT_ID", "ADMOB_NATIVE_AD_UNIT_ID", "ca-app-pub-3940256099942544/2247696110"),
-    optionalAdUnit("APP_OPEN_AD_UNIT_ID", "ADMOB_APP_OPEN_AD_UNIT_ID", "ca-app-pub-3940256099942544/9257395921"),
+    optionalAdUnit("INTERSTITIAL_AD_UNIT_ID", "ADMOB_INTERSTITIAL_AD_UNIT_ID", "admob.interstitialAdUnitId", "ca-app-pub-3940256099942544/1033173712"),
+    optionalAdUnit("REWARDED_AD_UNIT_ID", "ADMOB_REWARDED_AD_UNIT_ID", "admob.rewardedAdUnitId", "ca-app-pub-3940256099942544/5224354917"),
+    optionalAdUnit("NATIVE_AD_UNIT_ID", "ADMOB_NATIVE_AD_UNIT_ID", "admob.nativeAdUnitId", "ca-app-pub-3940256099942544/2247696110"),
+    optionalAdUnit("APP_OPEN_AD_UNIT_ID", "ADMOB_APP_OPEN_AD_UNIT_ID", "admob.appOpenAdUnitId", "ca-app-pub-3940256099942544/9257395921"),
 )
 
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
